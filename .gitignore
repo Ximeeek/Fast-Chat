@@ -2,11 +2,18 @@
 node_modules/
 target/
 
-# Environment files
+# Environment and secret files
 .env
-.env.local
-.env.*.local
+.env.*
+.env*.local
 !.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+
 
 # Build and distribution outputs
 dist/

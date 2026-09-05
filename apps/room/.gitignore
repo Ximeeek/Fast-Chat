@@ -12,11 +12,17 @@ node_modules
 .DS_Store
 Thumbs.db
 
-# Env
+# Env and secrets
 .env
 .env.*
 !.env.example
 !.env.test
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
 
 # Vite
 vite.config.js.timestamp-*
