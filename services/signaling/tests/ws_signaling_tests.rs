@@ -448,3 +448,118 @@ async fn test_ws_rekey_and_password_protection_flow() {
         _ => panic!("Expected JoinOk for Charlie with correct password"),
     }
 }
+
+#[tokio::test]
+async fn test_ws_lifecycle_closing_and_closed_broadcast_flow() {
+    let config = Config {
+        initial_room_duration_secs: 10,
+        closing_grace_period_secs: 2,
+        extendable_threshold_secs: 2,
+        ..Default::default()
+    };
+    let (addr, state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let (room_code_str, start_ts) = match resp_a {
+        ServerMessage::RoomCreated { code, expires_at, .. } => (code, expires_at - 10),
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // 2. Bob joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code_str.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let _join_b = ws_b.next().await.unwrap().unwrap();
+    let _peer_joined_a = ws_a.next().await.unwrap().unwrap();
+
+    // 3. Drive ticker past expiration -> triggers Closing transition
+    let actions = state.room_manager.tick_lifecycle(start_ts + 11);
+    assert!(!actions.is_empty());
+
+    // Both Alice and Bob receive ROOM_CLOSING
+    let a_closing_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_closing: ServerMessage = serde_json::from_str(&a_closing_raw).unwrap();
+    match a_closing {
+        ServerMessage::RoomClosing { room_code, closing_deadline, .. } => {
+            assert_eq!(room_code, room_code_str);
+            assert!(closing_deadline > 0);
+        }
+        _ => panic!("Expected RoomClosing for Alice, got {a_closing:?}"),
+    }
+
+    let b_closing_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_closing: ServerMessage = serde_json::from_str(&b_closing_raw).unwrap();
+    match b_closing {
+        ServerMessage::RoomClosing { room_code, .. } => {
+            assert_eq!(room_code, room_code_str);
+        }
+        _ => panic!("Expected RoomClosing for Bob, got {b_closing:?}"),
+    }
+
+    // 4. Drive ticker past grace period -> triggers Destroyed & ROOM_CLOSED broadcast
+    let destroy_actions = state.room_manager.tick_lifecycle(start_ts + 25);
+    assert!(!destroy_actions.is_empty());
+
+    // Both Alice and Bob receive ROOM_CLOSED
+    let a_closed_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_closed: ServerMessage = serde_json::from_str(&a_closed_raw).unwrap();
+    match a_closed {
+        ServerMessage::RoomClosed { room_code, reason } => {
+            assert_eq!(room_code, room_code_str);
+            assert_eq!(reason, "lifetime_or_grace_period_expired");
+        }
+        _ => panic!("Expected RoomClosed for Alice, got {a_closed:?}"),
+    }
+
+    let b_closed_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_closed: ServerMessage = serde_json::from_str(&b_closed_raw).unwrap();
+    match b_closed {
+        ServerMessage::RoomClosed { room_code, reason } => {
+            assert_eq!(room_code, room_code_str);
+            assert_eq!(reason, "lifetime_or_grace_period_expired");
+        }
+        _ => panic!("Expected RoomClosed for Bob, got {b_closed:?}"),
+    }
+
+    // Socket closure after ROOM_CLOSED
+    let next_a = ws_a.next().await;
+    assert!(next_a.is_none() || matches!(next_a.unwrap(), Ok(Message::Close(_))));
+
+    // 5. Client trying to join destroyed room receives ROOM_NOT_FOUND
+    let (mut ws_d, _) = connect_async(&ws_url).await.unwrap();
+    let join_d = ClientMessage::JoinRoom {
+        code: room_code_str,
+        peer_id: Some("dave".to_string()),
+        password: None,
+    };
+    ws_d.send(Message::Text(serde_json::to_string(&join_d).unwrap().into()))
+        .await
+        .unwrap();
+
+    let d_err_raw = ws_d.next().await.unwrap().unwrap().into_text().unwrap();
+    let d_err: ServerMessage = serde_json::from_str(&d_err_raw).unwrap();
+    match d_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "ROOM_NOT_FOUND"),
+        _ => panic!("Expected Error(ROOM_NOT_FOUND) for destroyed room"),
+    }
+}

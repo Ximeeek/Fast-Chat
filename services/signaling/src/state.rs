@@ -14,7 +14,8 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config) -> Self {
         let sessions = PeerSessionRegistry::new();
-        let room_manager = Arc::new(RoomManager::new(config.clone()));
+        let broadcaster = Arc::new(crate::room::broadcast::WebSocketBroadcaster::new(sessions.clone()));
+        let room_manager = Arc::new(RoomManager::with_broadcaster(config.clone(), broadcaster));
         Self {
             room_manager,
             sessions,
