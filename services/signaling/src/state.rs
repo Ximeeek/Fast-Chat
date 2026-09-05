@@ -1,0 +1,20 @@
+use crate::config::Config;
+use crate::room::manager::RoomManager;
+use std::sync::Arc;
+
+/// Shared application state injected into Axum route handlers.
+#[derive(Clone, Debug)]
+pub struct AppState {
+    pub room_manager: Arc<RoomManager>,
+    pub config: Config,
+}
+
+impl AppState {
+    pub fn new(config: Config) -> Self {
+        let room_manager = Arc::new(RoomManager::new(config.clone()));
+        Self {
+            room_manager,
+            config,
+        }
+    }
+}
