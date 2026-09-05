@@ -1,3 +1,7 @@
+pub mod config;
+pub mod room;
+
 fn main() {
-    println!("Hello, world!");
+    println!("FastChat Signaling Server Core");
 }
+
