@@ -1,8 +1,10 @@
 pub mod connection;
+pub mod join;
 pub mod key;
 pub mod room_creation;
 
 pub use connection::ConnectionLimiter;
+pub use join::{JoinCheckError, JoinLimiter};
 pub use key::{derive_rate_key, ClientIp, PepperManager, RateKey};
 pub use room_creation::RoomCreationLimiter;
 
@@ -16,6 +18,7 @@ pub struct RateLimiterService {
     pub pepper: Arc<PepperManager>,
     pub room_creation: Arc<RoomCreationLimiter>,
     pub connection: Arc<ConnectionLimiter>,
+    pub join: Arc<JoinLimiter>,
 }
 
 impl RateLimiterService {
@@ -29,6 +32,12 @@ impl RateLimiterService {
                 config.rate_limit_ws_connections_per_min,
                 config.rate_limit_ws_base_backoff_secs,
                 config.rate_limit_ws_max_backoff_secs,
+            )),
+            join: Arc::new(JoinLimiter::new(
+                config.rate_limit_joins_per_min,
+                config.rate_limit_failed_joins_threshold,
+                config.rate_limit_failed_joins_window_secs,
+                config.rate_limit_join_lockout_secs,
             )),
         }
     }

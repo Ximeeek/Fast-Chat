@@ -225,9 +225,32 @@ async fn handle_client_message(
                 return;
             }
 
+            match state.limiter.join.check_join_permitted(rate_key) {
+                Ok(()) => {}
+                Err(crate::limiter::JoinCheckError::LockedOut { retry_after_secs }) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "JOIN_LOCKED_OUT",
+                        format!(
+                            "Too many failed join attempts. Temporary lockout in effect. Please try again in {retry_after_secs} seconds."
+                        ),
+                    ));
+                    return;
+                }
+                Err(crate::limiter::JoinCheckError::RateLimited { retry_after_secs }) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "JOIN_RATE_LIMITED",
+                        format!(
+                            "Join attempt rate limit exceeded. Please wait {retry_after_secs} seconds before retrying."
+                        ),
+                    ));
+                    return;
+                }
+            }
+
             let code = match RoomCode::new(code_str.trim()) {
                 Ok(c) => c,
                 Err(_) => {
+                    state.limiter.join.record_failure(rate_key);
                     let _ = tx.send(ServerMessage::error(
                         "INVALID_ROOM_CODE",
                         "Invalid room code format (expected 0000-0000-0000)",
@@ -239,6 +262,7 @@ async fn handle_client_message(
             let room_snapshot = match state.room_manager.get_room_state(&code) {
                 Some(r) => r,
                 None => {
+                    state.limiter.join.record_failure(rate_key);
                     let _ = tx.send(ServerMessage::error("ROOM_NOT_FOUND", "Room does not exist"));
                     return;
                 }
@@ -248,6 +272,7 @@ async fn handle_client_message(
                 room_snapshot.state,
                 RoomLifecycleState::Closing | RoomLifecycleState::Destroyed
             ) {
+                state.limiter.join.record_failure(rate_key);
                 let _ = tx.send(ServerMessage::error(
                     "ROOM_TERMINATED",
                     "Room has closed or expired",
@@ -272,6 +297,7 @@ async fn handle_client_message(
 
             match join_res {
                 Ok(()) => {
+                    state.limiter.join.record_success(rate_key);
                     let salt_hex = format_hex(&room_snapshot.crypto_salt);
                     state
                         .sessions
@@ -302,6 +328,7 @@ async fn handle_client_message(
                     );
                 }
                 Err(RoomError::InvalidPassword) => {
+                    state.limiter.join.record_failure(rate_key);
                     let _ = tx.send(ServerMessage::error(
                         "INVALID_PASSWORD",
                         "Invalid or missing password for this room",
