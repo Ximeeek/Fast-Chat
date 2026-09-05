@@ -296,53 +296,54 @@
 	<meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<main class="min-h-screen bg-gray-100 text-gray-900 p-6 flex flex-col items-center">
+<main class="min-h-screen bg-[#0a0a0a] text-zinc-100 p-3 sm:p-6 flex flex-col items-center font-mono">
 	{#if !isValidCode}
-		<div class="w-full max-w-lg bg-white p-8 rounded-lg shadow border border-red-200 text-center">
-			<div class="text-red-500 text-5xl mb-4">?</div>
-			<h1 class="text-2xl font-bold mb-2">Invalid Room Code</h1>
-			<p class="text-gray-600 mb-6">
-				The room code <code class="bg-gray-100 px-2 py-1 rounded text-red-600 font-mono">{roomCode}</code>
-				does not conform to the required <code class="font-mono">0000-0000-0000</code> format.
+		<div class="w-full max-w-lg bg-[#121212] p-8 border border-red-800 text-center">
+			<div class="text-red-500 text-4xl mb-3">✕</div>
+			<h1 class="text-xl font-bold uppercase tracking-tight mb-2">Invalid Room Code</h1>
+			<p class="text-xs text-zinc-400 mb-6">
+				The room identifier <code class="bg-black px-2 py-1 text-red-400 border border-[#262626]">{roomCode}</code>
+				does not conform to the required <code class="text-zinc-200">0000-0000-0000</code> format.
 			</p>
 			<a
 				href="/create"
-				class="inline-block py-2.5 px-6 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded transition-colors"
+				class="inline-block py-2.5 px-6 bg-[#ccff00] hover:bg-[#b8e600] text-black font-bold uppercase text-xs transition-micro"
 			>
 				Return to Room Creation
 			</a>
 		</div>
 	{:else if $roomStore.lifecycle === 'closed'}
-		<div class="w-full max-w-lg bg-white p-8 rounded-lg shadow border border-gray-300 text-center">
-			<div class="text-gray-400 text-5xl mb-4">??</div>
-			<h1 class="text-2xl font-bold mb-2">Room Closed</h1>
-			<p class="text-gray-600 mb-4">
-				{$roomStore.closureReason || 'This room has been closed or expired.'}
+		<div class="w-full max-w-lg bg-[#121212] p-8 border border-[#262626] text-center">
+			<div class="text-zinc-500 text-4xl mb-3">⚰</div>
+			<h1 class="text-xl font-bold uppercase tracking-tight mb-2">Room Session Terminated</h1>
+			<p class="text-xs text-zinc-400 mb-6">
+				{$roomStore.closureReason || 'This room has reached expiration or was closed by participants.'}
 			</p>
 			<button
 				onclick={leaveRoom}
-				class="py-2.5 px-6 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded transition-colors"
+				class="py-2.5 px-6 bg-[#ccff00] hover:bg-[#b8e600] text-black font-bold uppercase text-xs transition-micro cursor-pointer"
 			>
 				Create a New Room
 			</button>
 		</div>
 	{:else if !$isRoomActive && joinError && (joinError.includes('INVALID_PASSWORD') || joinError.includes('password'))}
-		<div class="w-full max-w-md bg-white p-8 rounded-lg shadow border border-gray-200">
-			<h1 class="text-xl font-bold mb-2 text-center">Password Required</h1>
-			<p class="text-sm text-gray-500 mb-6 text-center">
-				Room <span class="font-mono font-bold text-gray-800">{roomCode}</span> is protected by a password.
+		<div class="w-full max-w-md bg-[#121212] p-6 sm:p-8 border border-[#262626]">
+			<div class="text-[10px] uppercase tracking-widest text-[#ccff00] font-bold mb-1 text-center">SECURITY GATEWAY</div>
+			<h1 class="text-xl font-bold uppercase tracking-tight mb-2 text-center">Password Required</h1>
+			<p class="text-xs text-zinc-400 mb-6 text-center">
+				Room <span class="text-zinc-200 font-bold">{roomCode}</span> is protected by an encryption key.
 			</p>
 
 			{#if joinError}
-				<div role="alert" class="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded">
+				<div role="alert" class="mb-4 p-3 bg-red-950/40 border border-red-800 text-red-400 text-xs">
 					{joinError}
 				</div>
 			{/if}
 
 			<form onsubmit={handleJoinSubmit} class="space-y-4">
 				<div>
-					<label for="join-password" class="block text-xs font-semibold uppercase tracking-wider text-gray-600 mb-1">
-						Enter Password
+					<label for="join-password" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">
+						Enter Room Password
 					</label>
 					<input
 						id="join-password"
@@ -350,14 +351,14 @@
 						bind:value={password}
 						required
 						placeholder="Room password"
-						class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+						class="w-full px-3 py-2.5 bg-black border border-[#262626] text-zinc-100 text-sm focus:outline-none focus:border-[#ccff00]"
 					/>
 				</div>
 
 				<button
 					type="submit"
 					disabled={isJoining}
-					class="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded transition-colors disabled:opacity-50 text-sm"
+					class="w-full min-h-[44px] py-2.5 px-4 bg-[#ccff00] hover:bg-[#b8e600] text-black font-bold uppercase text-xs transition-micro disabled:opacity-50 cursor-pointer"
 				>
 					{#if isJoining}
 						Verifying Password...
@@ -368,50 +369,54 @@
 			</form>
 		</div>
 	{:else if !$isRoomActive}
-		<div class="w-full max-w-md bg-white p-8 rounded-lg shadow border border-gray-200 text-center">
+		<div class="w-full max-w-md bg-[#121212] p-8 border border-[#262626] text-center">
 			{#if joinError}
-				<div class="text-red-500 text-4xl mb-3">?</div>
-				<h2 class="text-lg font-bold mb-2">Unable to Join Room</h2>
-				<p class="text-sm text-red-600 mb-6">{joinError}</p>
-				<button
-					onclick={() => performJoin(password)}
-					class="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded mr-2"
-				>
-					Retry
-				</button>
-				<a
-					href="/create"
-					class="py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-800 text-sm font-medium rounded inline-block"
-				>
-					Return Home
-				</a>
+				<div class="text-red-500 text-3xl mb-3">✕</div>
+				<h2 class="text-lg font-bold uppercase tracking-tight mb-2">Unable to Join Session</h2>
+				<p class="text-xs text-red-400 mb-6">{joinError}</p>
+				<div class="flex items-center justify-center gap-2">
+					<button
+						onclick={() => performJoin(password)}
+						class="min-h-[40px] py-2 px-4 bg-[#ccff00] hover:bg-[#b8e600] text-black text-xs font-bold uppercase transition-micro cursor-pointer"
+					>
+						Retry Connection
+					</button>
+					<a
+						href="/create"
+						class="min-h-[40px] py-2 px-4 bg-black hover:bg-[#1a1a1a] text-zinc-300 border border-[#262626] text-xs uppercase flex items-center transition-micro"
+					>
+						Return Home
+					</a>
+				</div>
 			{:else}
-				<div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent mb-4"></div>
-				<h2 class="text-lg font-bold">Connecting to Room...</h2>
-				<p class="text-xs text-gray-500 font-mono mt-1">{roomCode}</p>
+				<div class="inline-block w-8 h-8 border-2 border-[#ccff00] border-t-transparent animate-spin mb-4"></div>
+				<h2 class="text-lg font-bold uppercase tracking-tight">Connecting to Mesh...</h2>
+				<p class="text-xs text-zinc-500 font-mono mt-1">{roomCode}</p>
 			{/if}
 		</div>
 	{:else}
-		<div class="w-full max-w-2xl bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
+		<div class="w-full max-w-4xl bg-[#0a0a0a] border border-[#262626] overflow-hidden">
 			<!-- Header -->
-			<header class="p-6 border-b border-gray-200 flex flex-wrap items-center justify-between gap-4">
+			<header class="p-4 sm:p-6 border-b border-[#262626] bg-[#121212] flex flex-wrap items-center justify-between gap-4">
 				<div>
 					<div class="flex items-center space-x-3">
-						<h1 class="text-xl font-bold font-mono tracking-wide">{roomCode}</h1>
+						<h1 class="text-xl font-bold font-mono tracking-wider text-white">{roomCode}</h1>
 						<button
 							onclick={copyRoomCode}
-							class="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded border border-gray-300 transition-colors"
+							class="px-2.5 py-1 text-[11px] bg-black hover:bg-[#1c1c1c] text-zinc-300 border border-[#262626] uppercase font-semibold transition-micro cursor-pointer"
 						>
 							{copySuccess ? 'Copied!' : 'Copy Code'}
 						</button>
 					</div>
-					<div class="flex items-center space-x-2 mt-1">
-						<span class="inline-block w-2.5 h-2.5 rounded-full {$roomStore.connectionState === 'connected' ? 'bg-green-500' : 'bg-yellow-500'}"></span>
-						<span class="text-xs text-gray-500 uppercase tracking-wider font-semibold">
+					<div class="flex items-center space-x-2 mt-2">
+						<span class="inline-block w-2 h-2 {$roomStore.connectionState === 'connected' ? 'bg-[#ccff00]' : 'bg-yellow-400'}"></span>
+						<span class="text-[10px] text-zinc-400 uppercase tracking-widest font-semibold">
 							{$roomStore.connectionState}
 						</span>
 						{#if $roomStore.isOwner}
-							<span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-800 rounded font-medium">Room Owner</span>
+							<span class="text-[10px] px-2 py-0.5 bg-black text-[#ccff00] border border-[#262626] font-bold uppercase">
+								ROOM OWNER
+							</span>
 						{/if}
 					</div>
 				</div>
@@ -419,8 +424,8 @@
 				<div class="flex items-center space-x-4">
 					{#if remainingSeconds !== null}
 						<div class="text-right">
-							<div class="text-xs text-gray-500 uppercase font-semibold">Expires In</div>
-							<div class="text-lg font-mono font-bold {remainingSeconds < 120 ? 'text-red-600' : 'text-gray-800'}">
+							<div class="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">EXPIRES IN</div>
+							<div class="text-lg font-mono font-bold tabular-nums {remainingSeconds <= 120 ? 'text-[#ccff00]' : 'text-zinc-100'}">
 								{formatSeconds(remainingSeconds)}
 							</div>
 						</div>
@@ -428,7 +433,7 @@
 
 					<button
 						onclick={leaveRoom}
-						class="py-2 px-3 text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-medium rounded transition-colors"
+						class="min-h-[36px] py-1.5 px-3 text-xs bg-black hover:bg-red-950/40 text-red-400 border border-[#262626] hover:border-red-800 uppercase font-semibold transition-micro cursor-pointer"
 					>
 						Leave Room
 					</button>
@@ -437,82 +442,87 @@
 
 			<!-- Room Closing Alert -->
 			{#if $roomStore.lifecycle === 'closing'}
-				<div role="alert" class="p-4 bg-yellow-50 border-b border-yellow-200 text-yellow-800 text-sm flex items-center justify-between">
-					<span>
-						<strong>Room Expiring:</strong> This room has entered its closing grace period.
-					</span>
+				<div role="alert" class="p-4 bg-red-950/30 border-b border-red-800 text-red-300 text-xs flex flex-wrap items-center justify-between gap-2">
+					<div class="flex items-center space-x-2">
+						<span class="text-red-400 font-bold">⚠ LAST CHANCE:</span>
+						<span>Room entering termination window.</span>
+					</div>
 					{#if closingCountdown !== null}
-						<span class="font-mono font-bold text-red-600">
-							Closing in: {closingCountdown}s
+						<span class="font-mono font-bold text-[#ccff00] text-sm tabular-nums">
+							CLOSING IN: {closingCountdown}s
 						</span>
 					{/if}
 				</div>
 			{/if}
 
 			<!-- Room Content Section -->
-			<div class="p-6 space-y-6">
+			<div class="p-4 sm:p-6 space-y-6">
 				<!-- Participants -->
 				<div>
-					<h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500 mb-3">
-						Participants ({$peerCount + 1})
+					<h2 class="text-[11px] font-bold uppercase tracking-wider text-zinc-400 mb-2.5">
+						PARTICIPANTS ({$peerCount + 1})
 					</h2>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-						<div class="p-3 bg-blue-50 border border-blue-100 rounded text-sm flex items-center justify-between">
-							<span class="font-mono text-xs text-blue-900 font-medium">
+						<div class="p-3 bg-[#121212] border border-[#262626] text-xs flex items-center justify-between">
+							<span class="font-mono text-zinc-200">
 								{$roomStore.peerId} (You)
 							</span>
 							{#if $roomStore.isOwner}
-								<span class="text-xs bg-blue-200 text-blue-800 px-1.5 py-0.5 rounded">Owner</span>
+								<span class="text-[10px] bg-black text-[#ccff00] border border-[#262626] px-1.5 py-0.5 uppercase font-bold">
+									Owner
+								</span>
 							{/if}
 						</div>
 						{#each $roomStore.peers as peer (peer)}
-							<div class="p-3 bg-gray-50 border border-gray-200 rounded text-sm flex items-center justify-between">
-								<span class="font-mono text-xs text-gray-800">{peer}</span>
-								<span class="text-xs text-green-600 font-medium">Connected</span>
+							<div class="p-3 bg-[#121212] border border-[#262626] text-xs flex items-center justify-between">
+								<span class="font-mono text-zinc-300">{peer}</span>
+								<span class="text-[10px] text-[#ccff00] uppercase font-bold">Connected</span>
 							</div>
 						{/each}
 					</div>
 				</div>
 
 				<!-- End-to-End Encrypted Chat -->
-				<section class="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
-					<div class="p-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
+				<section class="border border-[#262626] bg-[#121212] overflow-hidden">
+					<div class="p-3 bg-black border-b border-[#262626] flex flex-wrap items-center justify-between gap-2">
 						<div class="flex items-center space-x-2">
-							<h2 class="text-xs font-semibold uppercase tracking-wider text-gray-700">Encrypted Chat</h2>
-							<span class="text-xs px-2 py-0.5 bg-green-100 text-green-800 rounded-full font-medium">AES-256-GCM</span>
+							<span class="text-xs font-bold uppercase tracking-wider text-zinc-200">ENCRYPTED CHAT</span>
+							<span class="text-[10px] px-2 py-0.5 bg-[#121212] text-[#ccff00] border border-[#262626] font-medium uppercase">
+								AES-256-GCM
+							</span>
 						</div>
 						<div class="flex items-center space-x-3">
-							<div class="text-xs text-gray-500">
-								Posting as: <strong class="font-mono text-gray-800">{$chatStore.username || '...'}</strong>
+							<div class="text-[11px] text-zinc-400">
+								POSTING AS: <strong class="font-mono text-zinc-200">{$chatStore.username || '...'}</strong>
 							</div>
 							<button
 								type="button"
 								onclick={handleDownloadChatLog}
-								class="px-2.5 py-1 text-xs bg-white hover:bg-gray-100 text-gray-700 rounded border border-gray-300 font-medium transition-colors"
+								class="px-2.5 py-1 text-[11px] bg-black hover:bg-[#1c1c1c] text-zinc-300 border border-[#262626] hover:border-zinc-500 uppercase font-semibold transition-micro cursor-pointer"
 								title="Download decrypted chat log as .txt"
 							>
-								Download chat log
+								Download Log
 							</button>
 						</div>
 					</div>
 
 					<!-- Message List -->
-					<div class="p-4 h-64 overflow-y-auto space-y-3 bg-gray-50/50">
+					<div class="p-4 h-72 overflow-y-auto space-y-3 bg-black/50">
 						{#if $chatStore.messages.length === 0}
-							<div class="h-full flex items-center justify-center text-xs text-gray-400 italic">
-								No messages yet. Send a message to chat across WebRTC peers.
+							<div class="h-full flex items-center justify-center text-xs text-zinc-600 uppercase tracking-wider">
+								NO MESSAGES IN SESSION // P2P CHAT IS LIVE
 							</div>
 						{:else}
 							{#each $chatStore.messages as msg (msg.id)}
 								<div class="flex flex-col {msg.isSelf ? 'items-end' : 'items-start'}">
-									<div class="flex items-center space-x-1 mb-1 text-[11px] text-gray-500">
-										<span class="font-mono font-medium {msg.isSelf ? 'text-blue-700' : 'text-gray-700'}">
+									<div class="flex items-center space-x-1.5 mb-1 text-[10px] text-zinc-500">
+										<span class="font-mono font-bold {msg.isSelf ? 'text-[#ccff00]' : 'text-zinc-400'}">
 											{msg.isSelf ? `${msg.sender} (You)` : msg.sender}
 										</span>
 										<span>•</span>
-										<span>{formatMessageTime(msg.timestamp)}</span>
+										<span class="tabular-nums">{formatMessageTime(msg.timestamp)}</span>
 									</div>
-									<div class="max-w-[80%] rounded px-3 py-2 text-sm break-words shadow-sm {msg.isSelf ? 'bg-blue-600 text-white' : 'bg-white text-gray-800 border border-gray-200'}">
+									<div class="max-w-[85%] sm:max-w-[75%] p-3 text-xs leading-relaxed break-words {msg.isSelf ? 'bg-[#18181b] text-zinc-100 border border-[#3f3f46]' : 'bg-[#121212] text-zinc-200 border border-[#262626]'}">
 										{msg.content}
 									</div>
 								</div>
@@ -521,18 +531,18 @@
 					</div>
 
 					<!-- Chat Input Form -->
-					<form onsubmit={handleSendMessage} class="p-3 border-t border-gray-200 bg-white flex items-center space-x-2">
+					<form onsubmit={handleSendMessage} class="p-3 border-t border-[#262626] bg-black flex items-center space-x-2">
 						<input
 							type="text"
 							bind:value={messageInput}
 							placeholder="Type an encrypted message..."
-							class="flex-1 px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+							class="flex-1 px-3 py-2.5 bg-[#121212] border border-[#262626] text-zinc-100 text-xs focus:outline-none focus:border-[#ccff00]"
 							maxlength="4000"
 						/>
 						<button
 							type="submit"
 							disabled={!messageInput.trim() || isSending}
-							class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors"
+							class="min-h-[38px] px-5 py-2 bg-[#ccff00] hover:bg-[#b8e600] disabled:opacity-40 text-black text-xs font-bold uppercase tracking-wider transition-micro cursor-pointer disabled:cursor-not-allowed"
 						>
 							Send
 						</button>
@@ -543,26 +553,6 @@
 				{#if fileSender && fileReceiver}
 					<FileTransfer {fileSender} {fileReceiver} username={$chatStore.username || 'anonymous'} />
 				{/if}
-
-				<!-- Signaling Activity Feed (WebRTC readiness verification) -->
-				<div>
-					<h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500 mb-2">
-						Signaling Activity
-					</h2>
-					<div class="bg-gray-900 text-gray-100 p-4 rounded text-xs font-mono max-h-48 overflow-y-auto space-y-1">
-						{#if signalingEvents.length === 0}
-							<div class="text-gray-500">Awaiting signaling events...</div>
-						{:else}
-							{#each signalingEvents as event, i (i)}
-								<div class="flex items-start space-x-2">
-									<span class="text-gray-500">[{event.time}]</span>
-									<span class="text-blue-400 font-bold">{event.type}:</span>
-									<span class="text-gray-300">{event.details}</span>
-								</div>
-							{/each}
-						{/if}
-					</div>
-				</div>
 			</div>
 		</div>
 	{/if}

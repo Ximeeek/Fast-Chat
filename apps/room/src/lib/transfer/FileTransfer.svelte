@@ -100,19 +100,21 @@
 	}
 </script>
 
-<section class="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm space-y-4 p-4">
+<section class="border border-[#262626] bg-[#121212] space-y-4 p-4 font-mono text-zinc-100">
 	<!-- Header -->
-	<div class="flex flex-wrap items-center justify-between pb-3 border-b border-gray-200 gap-2">
+	<div class="flex flex-wrap items-center justify-between pb-3 border-b border-[#262626] gap-2">
 		<div class="flex items-center space-x-2">
-			<h2 class="text-xs font-semibold uppercase tracking-wider text-gray-700">File Transfer</h2>
-			<span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full font-medium">P2P Encrypted</span>
+			<span class="text-xs font-bold uppercase tracking-wider text-zinc-200">FILE TRANSFER</span>
+			<span class="text-[10px] px-2 py-0.5 bg-black text-zinc-400 border border-[#262626] uppercase font-medium">
+				P2P ENCRYPTED
+			</span>
 			{#if fsSupported}
-				<span class="text-xs px-2 py-0.5 bg-green-100 text-green-800 rounded-full font-medium" title="Streaming directly to disk without RAM buffer">
-					Direct Disk Streaming
+				<span class="text-[10px] px-2 py-0.5 bg-black text-[#ccff00] border border-[#262626] uppercase font-medium" title="Streaming directly to disk without RAM buffer">
+					DISK STREAMING
 				</span>
 			{:else}
-				<span class="text-xs px-2 py-0.5 bg-amber-100 text-amber-800 rounded-full font-medium" title="In-memory aggregation fallback active">
-					RAM Blob Fallback
+				<span class="text-[10px] px-2 py-0.5 bg-black text-amber-400 border border-[#262626] uppercase font-medium" title="In-memory aggregation fallback active">
+					RAM BLOB FALLBACK
 				</span>
 			{/if}
 		</div>
@@ -122,14 +124,14 @@
 				type="button"
 				onclick={handleDownloadAll}
 				disabled={isZipping}
-				class="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-xs font-medium rounded transition-colors"
+				class="min-h-[36px] px-3 py-1 bg-[#ccff00] hover:bg-[#b8e600] active:scale-[0.99] disabled:opacity-50 text-black text-xs font-bold uppercase tracking-wider transition-micro cursor-pointer disabled:cursor-not-allowed"
 			>
 				{#if isZipping}
-					Creating ZIP...
+					ARCHIVING ZIP...
 				{:else if $completedFiles.length === 1}
-					Download file
+					DOWNLOAD FILE
 				{:else}
-					Download files ({$completedFiles.length}) as .zip
+					DOWNLOAD ALL ({$completedFiles.length}) [.ZIP]
 				{/if}
 			</button>
 		{/if}
@@ -144,29 +146,29 @@
 				multiple
 				disabled={isUploadActive}
 				onchange={handleFileSelect}
-				class="text-xs text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+				class="text-xs text-zinc-400 file:mr-3 file:py-2 file:px-3 file:border file:border-[#262626] file:bg-black file:text-zinc-200 hover:file:border-[#ccff00] file:text-xs file:font-mono file:cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
 			/>
 			{#if selectedFiles.length > 0}
 				<button
 					type="button"
 					onclick={handleSendFiles}
 					disabled={isUploadActive}
-					class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+					class="min-h-[36px] px-4 py-1.5 bg-black hover:bg-[#1a1a1a] text-[#ccff00] border border-[#ccff00] disabled:opacity-50 disabled:cursor-not-allowed text-xs font-bold uppercase tracking-wider transition-micro cursor-pointer"
 				>
 					Send {selectedFiles.length} {selectedFiles.length === 1 ? 'file' : 'files'}
 				</button>
 			{/if}
 
 			{#if isUploadActive}
-				<span class="text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200 font-medium flex items-center gap-1.5">
-					<span class="inline-block w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
-					Upload in progress...
+				<span class="text-xs text-[#ccff00] bg-black px-2.5 py-1.5 border border-[#262626] font-medium flex items-center gap-2">
+					<span class="inline-block w-2 h-2 bg-[#ccff00] animate-pulse"></span>
+					STREAMING TO MESH...
 				</span>
 			{/if}
 		</div>
 
 		{#if sendError}
-			<div role="alert" class="p-2 text-xs bg-red-50 border border-red-200 text-red-700 rounded">
+			<div role="alert" class="p-2.5 text-xs bg-red-950/40 border border-red-800 text-red-400">
 				{sendError}
 			</div>
 		{/if}
@@ -174,12 +176,12 @@
 
 	<!-- Global High RAM Warning Banner -->
 	{#if $hasLargeFileRamWarning}
-		<div role="alert" class="p-3 bg-amber-50 border border-amber-300 text-amber-900 rounded text-xs space-y-1">
-			<div class="font-bold flex items-center space-x-1">
-				<span>⚠️</span>
+		<div role="alert" class="p-3 bg-amber-950/30 border border-amber-800 text-amber-300 text-xs space-y-1">
+			<div class="font-bold flex items-center space-x-1.5 uppercase tracking-wider">
+				<span>⚠</span>
 				<span>High RAM Usage Warning (>500MB)</span>
 			</div>
-			<p class="text-[11px] text-amber-800 leading-relaxed">
+			<p class="text-[11px] text-amber-400 leading-relaxed">
 				Your browser does not support the File System Access API. Receiving files over 500MB requires assembling chunks in memory, which may cause high RAM usage.
 			</p>
 		</div>
@@ -188,25 +190,25 @@
 	<!-- Outgoing Transfers (Per-Recipient Mesh Progress) -->
 	{#if $activeUploads.length > 0}
 		<div class="space-y-3 pt-2">
-			<h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500">
-				Outgoing Transfers
+			<h3 class="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+				OUTGOING TRANSFERS
 			</h3>
 
 			{#each $activeUploads as transfer (transfer.transferId)}
-				<div class="p-3 bg-gray-50 border border-gray-200 rounded space-y-2 text-xs">
+				<div class="p-3 bg-black border border-[#262626] space-y-2 text-xs">
 					<div class="flex items-center justify-between font-medium">
-						<span class="truncate max-w-[70%]" title={transfer.fileName}>{transfer.fileName}</span>
-						<span class="text-gray-500 font-mono">{formatFileSize(transfer.fileSize)}</span>
+						<span class="truncate max-w-[70%] text-zinc-200" title={transfer.fileName}>{transfer.fileName}</span>
+						<span class="text-zinc-500 font-mono">{formatFileSize(transfer.fileSize)}</span>
 					</div>
 
 					<!-- Per-Recipient Progress Bars -->
 					<div class="space-y-2 pt-1">
 						{#each Array.from(transfer.recipients.entries()) as [peerId, prog] (peerId)}
-							<div class="space-y-1 bg-white p-2 rounded border border-gray-100">
-								<div class="flex items-center justify-between text-[11px] text-gray-600">
-									<span class="font-mono">Peer: {peerId.slice(0, 8)}...</span>
+							<div class="space-y-1.5 bg-[#121212] p-2 border border-[#1f1f23]">
+								<div class="flex items-center justify-between text-[11px] text-zinc-400">
+									<span class="font-mono">PEER // {peerId.slice(0, 8)}...</span>
 									<div class="flex items-center space-x-2">
-										<span class="capitalize font-medium {prog.status === 'completed' ? 'text-green-600' : prog.status === 'failed' ? 'text-red-600' : 'text-blue-600'}">
+										<span class="uppercase font-bold {prog.status === 'completed' ? 'text-[#ccff00]' : prog.status === 'failed' ? 'text-red-400' : 'text-zinc-300'}">
 											{prog.status}
 										</span>
 										<span class="font-mono">{prog.percentage}%</span>
@@ -214,7 +216,7 @@
 											<button
 												type="button"
 												onclick={() => handleCancelOutgoing(transfer.transferId, peerId)}
-												class="text-red-500 hover:text-red-700 ml-1"
+												class="text-red-400 hover:text-red-300 ml-1 cursor-pointer"
 												title="Cancel transfer to this peer"
 											>
 												✕
@@ -222,9 +224,9 @@
 										{/if}
 									</div>
 								</div>
-								<div class="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+								<div class="w-full bg-black border border-[#262626] h-1.5 overflow-hidden">
 									<div
-										class="h-1.5 rounded-full transition-all duration-200 {prog.status === 'completed' ? 'bg-green-500' : 'bg-blue-600'}"
+										class="h-full transition-all duration-200 {prog.status === 'completed' ? 'bg-[#ccff00]' : 'bg-zinc-300'}"
 										style="width: {prog.percentage}%"
 									></div>
 								</div>
@@ -239,37 +241,37 @@
 	<!-- Incoming Transfers -->
 	{#if $activeDownloads.length > 0}
 		<div class="space-y-3 pt-2">
-			<h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500">
-				Incoming Transfers
+			<h3 class="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+				INCOMING TRANSFERS
 			</h3>
 
 			{#each $activeDownloads as transfer (transfer.transferId)}
-				<div class="p-3 bg-blue-50/50 border border-blue-200 rounded space-y-2 text-xs">
+				<div class="p-3 bg-black border border-[#262626] space-y-2 text-xs">
 					<div class="flex items-center justify-between font-medium">
-						<span class="truncate max-w-[70%]" title={transfer.fileName}>{transfer.fileName}</span>
-						<span class="text-gray-500 font-mono">{formatFileSize(transfer.fileSize)}</span>
+						<span class="truncate max-w-[70%] text-zinc-200" title={transfer.fileName}>{transfer.fileName}</span>
+						<span class="text-zinc-500 font-mono">{formatFileSize(transfer.fileSize)}</span>
 					</div>
 
-					<div class="text-[11px] text-gray-600 flex items-center justify-between">
-						<span>From: <strong class="font-mono text-gray-800">{transfer.sender}</strong></span>
-						<span class="capitalize font-semibold text-blue-700">{transfer.status}</span>
+					<div class="text-[11px] text-zinc-400 flex items-center justify-between">
+						<span>FROM: <strong class="font-mono text-zinc-200">{transfer.sender}</strong></span>
+						<span class="uppercase font-bold text-[#ccff00]">{transfer.status}</span>
 					</div>
 
 					<!-- Offered State Acceptance Options -->
 					{#if transfer.status === 'offered'}
 						{#if transfer.ramLimitExceeded}
-							<div role="alert" class="p-2.5 bg-red-50 border border-red-300 text-red-900 rounded text-[11px] space-y-1">
-								<div class="font-bold flex items-center space-x-1 text-red-800">
+							<div role="alert" class="p-2.5 bg-red-950/40 border border-red-800 text-red-400 text-[11px] space-y-1">
+								<div class="font-bold flex items-center space-x-1.5 text-red-300 uppercase">
 									<span>🛑</span>
-									<span>File is too large to accept in this browser</span>
+									<span>File exceeds browser memory limits</span>
 								</div>
-								<p class="text-[11px] text-red-700 leading-relaxed">
+								<p class="text-[11px] text-red-400 leading-relaxed">
 									File size ({formatFileSize(transfer.fileSize)}) exceeds the {formatFileSize(RAM_HARD_LIMIT_BYTES)} in-memory assembly limit for browsers without File System Access API support. Transfer cannot be accepted.
 								</p>
 							</div>
 						{:else if transfer.ramWarning}
-							<div class="p-2 bg-amber-100 border border-amber-300 text-amber-900 rounded text-[11px]">
-								⚠️ File is over 500MB ({formatFileSize(transfer.fileSize)}). This browser does not support disk streaming; file will consume RAM.
+							<div class="p-2 bg-amber-950/30 border border-amber-800 text-amber-300 text-[11px]">
+								⚠ File is over 500MB ({formatFileSize(transfer.fileSize)}). This browser does not support disk streaming; file will consume RAM.
 							</div>
 						{/if}
 
@@ -278,7 +280,7 @@
 								<button
 									type="button"
 									onclick={() => handleAcceptFileSystem(transfer.transferId)}
-									class="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white font-medium rounded text-xs transition-colors"
+									class="min-h-[36px] px-3 py-1.5 bg-[#ccff00] hover:bg-[#b8e600] text-black font-bold uppercase text-xs transition-micro cursor-pointer"
 								>
 									Save to Disk (Stream)
 								</button>
@@ -287,7 +289,7 @@
 								<button
 									type="button"
 									onclick={() => handleAcceptBlob(transfer.transferId)}
-									class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded text-xs transition-colors"
+									class="min-h-[36px] px-3 py-1.5 bg-black hover:bg-[#1a1a1a] text-zinc-200 border border-[#262626] hover:border-zinc-400 font-bold uppercase text-xs transition-micro cursor-pointer"
 								>
 									{fsSupported ? 'Download to RAM' : 'Accept & Download'}
 								</button>
@@ -295,7 +297,7 @@
 							<button
 								type="button"
 								onclick={() => handleAbortIncoming(transfer.transferId)}
-								class="px-2.5 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs transition-colors"
+								class="min-h-[36px] px-2.5 py-1.5 bg-black hover:bg-[#1a1a1a] text-zinc-400 border border-[#262626] text-xs uppercase transition-micro cursor-pointer"
 							>
 								{transfer.ramLimitExceeded ? 'Dismiss' : 'Decline'}
 							</button>
@@ -303,13 +305,13 @@
 					{:else if transfer.status === 'receiving'}
 						<!-- Receiving Progress Bar -->
 						<div class="space-y-1 pt-1">
-							<div class="flex justify-between text-[11px] text-gray-600 font-mono">
+							<div class="flex justify-between text-[11px] text-zinc-400 font-mono">
 								<span>{formatFileSize(transfer.bytesReceived)} / {formatFileSize(transfer.fileSize)}</span>
 								<span>{Math.round((transfer.bytesReceived / (transfer.fileSize || 1)) * 100)}%</span>
 							</div>
-							<div class="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+							<div class="w-full bg-black border border-[#262626] h-1.5 overflow-hidden">
 								<div
-									class="bg-blue-600 h-1.5 rounded-full transition-all duration-200"
+									class="bg-[#ccff00] h-full transition-all duration-200"
 									style="width: {Math.round((transfer.bytesReceived / (transfer.fileSize || 1)) * 100)}%"
 								></div>
 							</div>
@@ -322,20 +324,20 @@
 
 	<!-- Completed Files List -->
 	{#if $completedFiles.length > 0}
-		<div class="space-y-2 pt-2 border-t border-gray-100">
-			<h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500">
-				Completed Files ({$completedFiles.length})
+		<div class="space-y-2 pt-2 border-t border-[#262626]">
+			<h3 class="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+				COMPLETED FILES ({$completedFiles.length})
 			</h3>
 			<ul class="space-y-1.5 text-xs">
 				{#each $completedFiles as file (file.transferId)}
-					<li class="p-2 bg-gray-50 rounded border border-gray-200 flex items-center justify-between">
+					<li class="p-2.5 bg-black border border-[#262626] flex items-center justify-between">
 						<div class="flex items-center space-x-2 truncate">
-							<span class="text-green-600">✓</span>
-							<span class="font-medium truncate" title={file.fileName}>{file.fileName}</span>
-							<span class="text-gray-400 text-[11px] font-mono">({formatFileSize(file.fileSize)})</span>
+							<span class="text-[#ccff00] font-bold">✓</span>
+							<span class="font-medium truncate text-zinc-200" title={file.fileName}>{file.fileName}</span>
+							<span class="text-zinc-500 text-[11px] font-mono">({formatFileSize(file.fileSize)})</span>
 							{#if file.storageMode === 'filesystem'}
-								<span class="text-[10px] text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-200">
-									Saved to Disk
+								<span class="text-[10px] text-[#ccff00] bg-black px-1.5 py-0.5 border border-[#262626] uppercase">
+									SAVED TO DISK
 								</span>
 							{/if}
 						</div>
@@ -344,9 +346,9 @@
 							<a
 								href={file.downloadUrl || (file.blob ? URL.createObjectURL(file.blob) : '#')}
 								download={file.fileName}
-								class="px-2 py-1 bg-white hover:bg-gray-100 text-blue-600 rounded border border-gray-300 font-medium text-xs transition-colors shrink-0"
+								class="px-2.5 py-1 bg-black hover:bg-[#1a1a1a] text-[#ccff00] border border-[#262626] hover:border-[#ccff00] font-bold uppercase text-[11px] transition-micro shrink-0"
 							>
-								Download
+								DOWNLOAD
 							</a>
 						{/if}
 					</li>
