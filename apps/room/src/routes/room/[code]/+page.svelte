@@ -5,6 +5,8 @@
 	import { signalingClient } from '$lib/signaling/client';
 	import { webRtcManager } from '$lib/webrtc';
 	import { roomStore, isRoomActive, peerCount } from '$lib/stores/room';
+	import { chatStore } from '$lib/stores/chat';
+	import { serializeChatMessage, deserializeChatMessage } from '$lib/chat';
 	import { validateRoomCode } from '$lib/utils/roomCode';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
@@ -17,6 +19,9 @@
 	let copySuccess = $state(false);
 	let signalingEvents = $state<{ time: string; type: string; details: string }[]>([]);
 	let unsubMessage: (() => void) | null = null;
+	let messageInput = $state('');
+	let isSending = $state(false);
+	let unsubWebRtcMessage: (() => void) | null = null;
 
 	// Expiration countdown
 	let now = $state(Math.floor(Date.now() / 1000));
@@ -40,6 +45,11 @@
 		return `${mins}:${secs.toString().padStart(2, '0')}`;
 	}
 
+	function formatMessageTime(ms: number): string {
+		const d = new Date(ms);
+		return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+	}
+
 	async function performJoin(roomPassword?: string) {
 		if (!isValidCode) return;
 		isJoining = true;
@@ -61,6 +71,45 @@
 		performJoin(password);
 	}
 
+	async function handleSendMessage(e?: SubmitEvent) {
+		e?.preventDefault();
+		const trimmed = messageInput.trim();
+		if (!trimmed || isSending) return;
+
+		isSending = true;
+		const id = typeof crypto !== 'undefined' && crypto.randomUUID
+			? crypto.randomUUID()
+			: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+		const sender = $chatStore.username || 'anonymous';
+		const timestamp = Date.now();
+
+		// Optimistically append local message
+		chatStore.addMessage({
+			id,
+			sender,
+			content: trimmed,
+			timestamp,
+			isSelf: true
+		});
+
+		messageInput = '';
+
+		try {
+			const payload = serializeChatMessage({
+				type: 'chat',
+				id,
+				sender,
+				content: trimmed,
+				timestamp
+			});
+			await webRtcManager.broadcast(payload);
+		} catch (err) {
+			console.error('Failed to broadcast chat message:', err);
+		} finally {
+			isSending = false;
+		}
+	}
+
 	async function copyRoomCode() {
 		try {
 			await navigator.clipboard.writeText(roomCode);
@@ -77,14 +126,30 @@
 		webRtcManager.disconnectAll();
 		signalingClient.disconnect();
 		roomStore.reset();
+		chatStore.reset();
 		goto('/create');
 	}
 
 	onMount(() => {
+		chatStore.initUsername();
 		webRtcManager.init();
 		timerInterval = setInterval(() => {
 			now = Math.floor(Date.now() / 1000);
 		}, 1000);
+
+		unsubWebRtcMessage = webRtcManager.onMessage((peerId, payload) => {
+			const wireMsg = deserializeChatMessage(payload);
+			if (wireMsg) {
+				chatStore.addMessage({
+					id: wireMsg.id,
+					sender: wireMsg.sender,
+					content: wireMsg.content,
+					timestamp: wireMsg.timestamp,
+					isSelf: false,
+					senderPeerId: peerId
+				});
+			}
+		});
 
 		if (!isValidCode) {
 			return;
@@ -153,6 +218,10 @@
 
 	onDestroy(() => {
 		webRtcManager.disconnectAll();
+		chatStore.reset();
+		if (unsubWebRtcMessage) {
+			unsubWebRtcMessage();
+		}
 		if (timerInterval) {
 			clearInterval(timerInterval);
 		}
@@ -344,6 +413,61 @@
 						{/each}
 					</div>
 				</div>
+
+				<!-- End-to-End Encrypted Chat -->
+				<section class="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
+					<div class="p-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
+						<div class="flex items-center space-x-2">
+							<h2 class="text-xs font-semibold uppercase tracking-wider text-gray-700">Encrypted Chat</h2>
+							<span class="text-xs px-2 py-0.5 bg-green-100 text-green-800 rounded-full font-medium">AES-256-GCM</span>
+						</div>
+						<div class="text-xs text-gray-500">
+							Posting as: <strong class="font-mono text-gray-800">{$chatStore.username || '...'}</strong>
+						</div>
+					</div>
+
+					<!-- Message List -->
+					<div class="p-4 h-64 overflow-y-auto space-y-3 bg-gray-50/50">
+						{#if $chatStore.messages.length === 0}
+							<div class="h-full flex items-center justify-center text-xs text-gray-400 italic">
+								No messages yet. Send a message to chat across WebRTC peers.
+							</div>
+						{:else}
+							{#each $chatStore.messages as msg (msg.id)}
+								<div class="flex flex-col {msg.isSelf ? 'items-end' : 'items-start'}">
+									<div class="flex items-center space-x-1 mb-1 text-[11px] text-gray-500">
+										<span class="font-mono font-medium {msg.isSelf ? 'text-blue-700' : 'text-gray-700'}">
+											{msg.isSelf ? `${msg.sender} (You)` : msg.sender}
+										</span>
+										<span>•</span>
+										<span>{formatMessageTime(msg.timestamp)}</span>
+									</div>
+									<div class="max-w-[80%] rounded px-3 py-2 text-sm break-words shadow-sm {msg.isSelf ? 'bg-blue-600 text-white' : 'bg-white text-gray-800 border border-gray-200'}">
+										{msg.content}
+									</div>
+								</div>
+							{/each}
+						{/if}
+					</div>
+
+					<!-- Chat Input Form -->
+					<form onsubmit={handleSendMessage} class="p-3 border-t border-gray-200 bg-white flex items-center space-x-2">
+						<input
+							type="text"
+							bind:value={messageInput}
+							placeholder="Type an encrypted message..."
+							class="flex-1 px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+							maxlength="4000"
+						/>
+						<button
+							type="submit"
+							disabled={!messageInput.trim() || isSending}
+							class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors"
+						>
+							Send
+						</button>
+					</form>
+				</section>
 
 				<!-- Signaling Activity Feed (WebRTC readiness verification) -->
 				<div>

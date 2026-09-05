@@ -4,5 +4,6 @@ export * from './stores/room';
 export * from './signaling/client';
 export * from './crypto';
 export * from './stores/webrtc';
+export * from './stores/chat';
 export * from './webrtc';
 export * from './chat';
