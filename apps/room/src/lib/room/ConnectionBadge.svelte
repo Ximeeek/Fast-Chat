@@ -8,12 +8,14 @@
 
 	const statusText = $derived.by(() => {
 		if (totalPeers === 0) return 'P2P WAITING';
+		if (openChannels === 0) return 'P2P CONNECTING';
 		if (isRelayed) return 'RELAYED (TURN)';
 		return 'DIRECT P2P';
 	});
 
 	const statusTitle = $derived.by(() => {
 		if (totalPeers === 0) return 'No WebRTC peers connected yet';
+		if (openChannels === 0) return 'Establishing WebRTC peer connections...';
 		if (isRelayed) return `Traversing TURN relay (${openChannels} data channels open)`;
 		return `Direct encrypted peer-to-peer connection (${openChannels} data channels open)`;
 	});
@@ -26,16 +28,20 @@
 	<span
 		class="inline-block w-2 h-2 {totalPeers === 0
 			? 'bg-zinc-600'
-			: isRelayed
+			: openChannels === 0
 				? 'bg-amber-400 animate-pulse'
-				: 'bg-[#ccff00]'}"
+				: isRelayed
+					? 'bg-amber-400'
+					: 'bg-[#ccff00]'}"
 	></span>
 	<span
 		class={totalPeers === 0
 			? 'text-zinc-500'
-			: isRelayed
+			: openChannels === 0
 				? 'text-amber-400'
-				: 'text-zinc-300'}
+				: isRelayed
+					? 'text-amber-400'
+					: 'text-zinc-300'}
 	>
 		{statusText}
 	</span>

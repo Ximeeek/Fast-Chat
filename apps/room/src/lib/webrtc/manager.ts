@@ -46,8 +46,10 @@ export class WebRtcManager {
 		if (this.isInitialized) return;
 		this.isInitialized = true;
 
-		// Ensure ICE server configurations are resolved from the Phase 5 backend
-		await this.ensureIceServers();
+		// Kick off background ICE server resolution asynchronously without blocking signaling listeners
+		this.ensureIceServers().catch((err) => {
+			console.warn('[WebRtcManager] Background ICE server resolution error:', err);
+		});
 
 		// Auto-derive initial K0 room key when room code and salt become available in roomStore
 		const unsubRoom = roomStore.subscribe(async (state) => {
@@ -61,11 +63,13 @@ export class WebRtcManager {
 				} catch {
 					// Pending or intermediate state
 				}
+			} else if (!state.code) {
+				this.setEncryptionKey(null);
 			}
 		});
 		this.signalingCleanups.push(unsubRoom);
 
-		// Subscribe to signaling events
+		// Subscribe to signaling events synchronously to avoid dropping early JOIN_OK or PEER_JOINED frames
 		this.signalingCleanups.push(
 			this.signaling.on('ROOM_CREATED', (msg) => {
 				this.localPeerId = msg.peer_id || msg.peerId || null;
@@ -217,7 +221,7 @@ export class WebRtcManager {
 		const sendPromises: Promise<void>[] = [];
 		for (const session of this.sessions.values()) {
 			const info = session.getSessionInfo();
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.debug('[WebRtcManager:Broadcast:PeerCheck]', {
 					peerId: info.peerId,
 					dataChannelState: info.dataChannelState,
@@ -228,7 +232,26 @@ export class WebRtcManager {
 			if (info.dataChannelState === 'open') {
 				sendPromises.push(
 					session.send(data).catch((err) => {
-						if (import.meta.env.DEV) {
+						if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
+							console.error('[WebRtcManager:Broadcast:SendFailure]', {
+								peerId: info.peerId,
+								error:
+									err instanceof Error
+										? { name: err.name, message: err.message, stack: err.stack }
+										: String(err),
+								timestamp: Date.now()
+							});
+						}
+						console.warn(`[WebRtcManager] Broadcast error to peer ${info.peerId}:`, err);
+					})
+				);
+			} else if (info.dataChannelState === 'connecting') {
+				sendPromises.push(
+					(async () => {
+						await session.waitForDataChannelOpen(10000);
+						await session.send(data);
+					})().catch((err) => {
+						if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 							console.error('[WebRtcManager:Broadcast:SendFailure]', {
 								peerId: info.peerId,
 								error:
@@ -278,6 +301,8 @@ export class WebRtcManager {
 			session.close();
 		}
 		this.sessions.clear();
+		this.setEncryptionKey(null);
+		this.localPeerId = null;
 		webrtcPeers.reset();
 	}
 

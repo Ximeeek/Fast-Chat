@@ -196,7 +196,7 @@ export class PeerConnectionSession {
 	 */
 	public async send(plaintext: Uint8Array | ArrayBuffer | string): Promise<void> {
 		if (this.isClosed) {
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.error('[WebRTC:Send:ClosedConnection]', {
 					peerId: this.remotePeerId,
 					readyState: this.dataChannel?.readyState ?? 'closed',
@@ -207,7 +207,7 @@ export class PeerConnectionSession {
 		}
 
 		if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.error('[WebRTC:Send:ChannelNotOpen]', {
 					peerId: this.remotePeerId,
 					readyState: this.dataChannel?.readyState ?? 'null',
@@ -218,7 +218,7 @@ export class PeerConnectionSession {
 		}
 
 		if (!this.activeKey) {
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.error('[WebRTC:Send:KeyMissing]', {
 					peerId: this.remotePeerId,
 					timestamp: Date.now()
@@ -230,7 +230,7 @@ export class PeerConnectionSession {
 		let encryptedPacket: Uint8Array;
 		try {
 			encryptedPacket = await encryptChunk(this.activeKey, plaintext);
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.debug('[Chat:Sender:Encrypt:Success]', {
 					peerId: this.remotePeerId,
 					encryptedBytes: encryptedPacket.byteLength,
@@ -238,7 +238,7 @@ export class PeerConnectionSession {
 				});
 			}
 		} catch (err) {
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.error('[Chat:Sender:Encrypt:Failure]', {
 					peerId: this.remotePeerId,
 					error:
@@ -259,7 +259,7 @@ export class PeerConnectionSession {
 		const currentReadyState = this.dataChannel.readyState;
 		try {
 			this.dataChannel.send(payload);
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.debug('[Chat:Sender:DataChannel:Send:Success]', {
 					peerId: this.remotePeerId,
 					readyState: currentReadyState,
@@ -268,7 +268,7 @@ export class PeerConnectionSession {
 				});
 			}
 		} catch (err) {
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.error('[Chat:Sender:DataChannel:Send:Failure]', {
 					peerId: this.remotePeerId,
 					readyState: currentReadyState,
@@ -428,6 +428,31 @@ export class PeerConnectionSession {
 	}
 
 	/**
+	 * Pauses execution until the RTCDataChannel transitions to 'open',
+	 * avoiding message loss during connection handshakes.
+	 */
+	public async waitForDataChannelOpen(timeoutMs: number = 10000): Promise<void> {
+		if (this.dataChannel && this.dataChannel.readyState === 'open') {
+			return;
+		}
+		if (this.isClosed) {
+			throw new Error(`Cannot wait for DataChannel to peer ${this.remotePeerId}: connection closed`);
+		}
+
+		const startTime = Date.now();
+		while (Date.now() - startTime < timeoutMs) {
+			if (this.dataChannel && this.dataChannel.readyState === 'open') {
+				return;
+			}
+			if (this.isClosed || (this.dataChannel && this.dataChannel.readyState === 'closed')) {
+				throw new Error(`DataChannel to peer ${this.remotePeerId} is closed`);
+			}
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		throw new Error(`Timed out waiting for DataChannel to peer ${this.remotePeerId} to open`);
+	}
+
+	/**
 	 * Exposes raw RTCDataChannel instance if instantiated.
 	 */
 	public getRawDataChannel(): RTCDataChannel | null {
@@ -491,7 +516,7 @@ export class PeerConnectionSession {
 		};
 
 		channel.onmessage = async (event: MessageEvent) => {
-			if (import.meta.env.DEV) {
+			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				const receivedBytes =
 					event.data instanceof ArrayBuffer
 						? event.data.byteLength
@@ -528,7 +553,7 @@ export class PeerConnectionSession {
 			}
 
 			if (!this.activeKey) {
-				if (import.meta.env.DEV) {
+				if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 					console.error('[Chat:Receiver:Decrypt:KeyMissing]', {
 						peerId: this.remotePeerId,
 						timestamp: Date.now()
@@ -540,7 +565,7 @@ export class PeerConnectionSession {
 			let plaintext: Uint8Array;
 			try {
 				plaintext = await decryptChunk(this.activeKey, buffer);
-				if (import.meta.env.DEV) {
+				if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 					console.debug('[Chat:Receiver:Decrypt:Success]', {
 						peerId: this.remotePeerId,
 						decryptedBytes: plaintext.byteLength,
@@ -548,7 +573,7 @@ export class PeerConnectionSession {
 					});
 				}
 			} catch (err) {
-				if (import.meta.env.DEV) {
+				if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 					console.error('[Chat:Receiver:Decrypt:Failure]', {
 						peerId: this.remotePeerId,
 						error:

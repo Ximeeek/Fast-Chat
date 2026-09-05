@@ -95,6 +95,9 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 			const page1 = await ctx1.newPage();
 			const page2 = await ctx2.newPage();
 
+			page1.on('console', (msg) => console.log('[BROWSER 1]', msg.type(), msg.text()));
+			page2.on('console', (msg) => console.log('[BROWSER 2]', msg.type(), msg.text()));
+
 			// 1. Page 1 creates a new room via /create
 			await page1.goto(`${APP_URL}/create`);
 			await page1.waitForSelector('button:has-text("Create New Room")', { timeout: 10000 });
@@ -126,11 +129,12 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 				timeout: 15000
 			});
 
-			// 3. Verify Symptom 2 is resolved: WebRTC peer connection establishes between Page 1 and Page 2
-			// Wait for data channel to be open (title contains "(1 data channels open)")
+			// 3. Verify WebRTC peer connection establishes between Page 1 and Page 2
 			await Promise.all([
 				page1.waitForSelector('div[title*="(1 data channels open)"]', { timeout: 15000 }),
-				page2.waitForSelector('div[title*="(1 data channels open)"]', { timeout: 15000 })
+				page2.waitForSelector('div[title*="(1 data channels open)"]', { timeout: 15000 }),
+				page1.waitForSelector('text=Connected', { timeout: 15000 }),
+				page2.waitForSelector('text=Connected', { timeout: 15000 })
 			]);
 
 			// 4. Test bidirectional E2E encrypted chat over WebRTC DataChannel

@@ -5,6 +5,7 @@
 	import { signalingClient } from '$lib/signaling/client';
 	import { webRtcManager } from '$lib/webrtc';
 	import { roomStore, isRoomActive, peerCount } from '$lib/stores/room';
+	import { webrtcPeers } from '$lib/stores/webrtc';
 	import { chatStore } from '$lib/stores/chat';
 	import { serializeChatMessage, deserializeChatMessage, formatChatLog, downloadChatLog } from '$lib/chat';
 	import { FileSender, FileReceiver, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
@@ -583,7 +584,11 @@
 						{#each $roomStore.peers as peer (peer)}
 							<div class="p-3 bg-[#121212] border border-[#262626] text-xs flex items-center justify-between">
 								<span class="font-mono text-zinc-300">{peer}</span>
-								<span class="text-[10px] text-[#ccff00] uppercase font-bold">Connected</span>
+								{#if $webrtcPeers[peer]?.dataChannelState === 'open'}
+									<span class="text-[10px] text-[#ccff00] uppercase font-bold">Connected</span>
+								{:else}
+									<span class="text-[10px] text-amber-400 uppercase font-bold animate-pulse">Connecting...</span>
+								{/if}
 							</div>
 						{/each}
 					</div>
