@@ -21,9 +21,24 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
     client_ip: crate::limiter::ClientIp,
     State(state): State<AppState>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
+    if let Err(retry_after) = state.limiter.connection.check_and_record(&rate_key) {
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            [
+                (axum::http::header::RETRY_AFTER, retry_after.to_string()),
+                (axum::http::header::CONTENT_TYPE, "application/json".to_string()),
+            ],
+            format!(
+                r#"{{"error":"RATE_LIMIT_EXCEEDED","message":"WebSocket connection rate limit exceeded. Exponential backoff active. Retry after {} seconds."}}"#,
+                retry_after
+            ),
+        )
+            .into_response();
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, state, rate_key))
+        .into_response()
 }
 
 /// Generates an 8-byte (16-char hex) random peer ID if not provided by client.
