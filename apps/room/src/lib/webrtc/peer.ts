@@ -280,6 +280,101 @@ export class PeerConnectionSession {
 	}
 
 	/**
+	 * Default low-watermark threshold in bytes for triggering bufferedamountlow events (64KB).
+	 */
+	public static readonly DEFAULT_BUFFERED_AMOUNT_LOW_THRESHOLD = 64 * 1024;
+
+	/**
+	 * Default high-watermark threshold in bytes before pausing outbound chunk transmission (256KB).
+	 */
+	public static readonly DEFAULT_BUFFER_HIGH_WATERMARK = 256 * 1024;
+
+	/**
+	 * Sets the bufferedAmountLowThreshold in bytes on the active RTCDataChannel.
+	 */
+	public setBufferedAmountLowThreshold(threshold: number): void {
+		if (this.dataChannel) {
+			try {
+				this.dataChannel.bufferedAmountLowThreshold = threshold;
+			} catch {
+				// Ignore if unsupported in environment
+			}
+		}
+	}
+
+	/**
+	 * Returns current queued bufferedAmount on the RTCDataChannel, or 0 if not open.
+	 */
+	public getBufferedAmount(): number {
+		return this.dataChannel ? this.dataChannel.bufferedAmount || 0 : 0;
+	}
+
+	/**
+	 * Pauses execution until the RTCDataChannel's bufferedAmount drops to or below
+	 * the specified threshold, applying WebRTC backpressure.
+	 */
+	public async waitForBufferedAmountLow(
+		threshold: number = PeerConnectionSession.DEFAULT_BUFFER_HIGH_WATERMARK,
+		timeoutMs: number = 30000
+	): Promise<void> {
+		if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+			return;
+		}
+
+		if ((this.dataChannel.bufferedAmount || 0) <= threshold) {
+			return;
+		}
+
+		return new Promise<void>((resolve, reject) => {
+			if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+				resolve();
+				return;
+			}
+
+			const channel = this.dataChannel;
+			let timer: any = null;
+
+			const onLow = () => {
+				cleanup();
+				resolve();
+			};
+
+			const onCloseOrError = () => {
+				cleanup();
+				reject(new Error(`RTCDataChannel closed or errored with peer ${this.remotePeerId} during buffer drain`));
+			};
+
+			const cleanup = () => {
+				if (timer) clearTimeout(timer);
+				if (typeof channel.removeEventListener === 'function') {
+					channel.removeEventListener('bufferedamountlow', onLow);
+					channel.removeEventListener('close', onCloseOrError);
+					channel.removeEventListener('error', onCloseOrError);
+				} else {
+					(channel as any).onbufferedamountlow = null;
+				}
+			};
+
+			timer = setTimeout(() => {
+				cleanup();
+				resolve();
+			}, timeoutMs);
+
+			if (typeof channel.addEventListener === 'function') {
+				channel.addEventListener('bufferedamountlow', onLow);
+				channel.addEventListener('close', onCloseOrError);
+				channel.addEventListener('error', onCloseOrError);
+			} else {
+				const prev = (channel as any).onbufferedamountlow;
+				(channel as any).onbufferedamountlow = (ev: any) => {
+					prev?.(ev);
+					onLow();
+				};
+			}
+		});
+	}
+
+	/**
 	 * Exposes raw RTCDataChannel instance if instantiated.
 	 */
 	public getRawDataChannel(): RTCDataChannel | null {
@@ -331,6 +426,12 @@ export class PeerConnectionSession {
 	private setupDataChannel(channel: RTCDataChannel): void {
 		this.dataChannel = channel;
 		this.dataChannel.binaryType = 'arraybuffer';
+		try {
+			this.dataChannel.bufferedAmountLowThreshold =
+				PeerConnectionSession.DEFAULT_BUFFERED_AMOUNT_LOW_THRESHOLD;
+		} catch {
+			// Ignore if unsupported in environment or mock
+		}
 		this.updateDataChannelState(channel.readyState as DataChannelState);
 
 		channel.onopen = () => {
