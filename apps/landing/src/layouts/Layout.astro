@@ -1,11 +1,14 @@
 ---
 import '../styles/global.css';
+import SeoHead from '../components/SeoHead.astro';
 
 interface Props {
 	title?: string;
+	description?: string;
+	canonicalUrl?: string;
 }
 
-const { title = 'FastChat Room - Ephemeral P2P Chat & Quick File Transfer' } = Astro.props;
+const { title, description, canonicalUrl } = Astro.props;
 ---
 
 <!doctype html>
@@ -13,7 +16,7 @@ const { title = 'FastChat Room - Ephemeral P2P Chat & Quick File Transfer' } = A
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>{title}</title>
+		<SeoHead title={title} description={description} canonicalUrl={canonicalUrl} />
 	</head>
 	<body class="min-h-screen bg-[#0a0a0a] text-zinc-100 flex flex-col antialiased selection:bg-[#ccff00] selection:text-black">
 		<slot />

@@ -1,0 +1,86 @@
+---
+// Comprehensive SEO Head component with Meta, OpenGraph, and JSON-LD schema.org SoftwareApplication
+interface Props {
+	title?: string;
+	description?: string;
+	canonicalUrl?: string;
+}
+
+const {
+	title = 'FastChat Room - Ephemeral P2P Chat & Quick File Transfer | No Signup Chat',
+	description = 'FastChat Room provides instant no signup chat with end-to-end encrypted p2p chat and quick file transfer between computers. Launch a temporary chat room no account needed with zero server logging and ephemeral lifecycle.',
+	canonicalUrl = 'https://fastchat.room/'
+} = Astro.props;
+
+const siteUrl = 'https://fastchat.room';
+const ogImageUrl = `${siteUrl}/og-image.svg`;
+const keywords = [
+	'fast chat room',
+	'no signup chat',
+	'encrypted p2p chat',
+	'quick file transfer between computers',
+	'temporary chat room no account',
+	'ephemeral chat',
+	'anonymous chat',
+	'webrtc datachannel',
+	'zero log chat',
+	'ram only chat'
+].join(', ');
+
+const jsonLd = {
+	'@context': 'https://schema.org',
+	'@type': 'SoftwareApplication',
+	name: 'FastChat Room',
+	alternateName: 'Fast Chat Room',
+	applicationCategory: 'CommunicationApplication',
+	operatingSystem: 'Any (Web Browser with WebRTC support)',
+	url: canonicalUrl,
+	description: 'FastChat Room is an anonymous, ephemeral chat room application with zero signup, client-side AES-256-GCM encryption, direct WebRTC DataChannel messaging, and quick file transfer between computers.',
+	offers: {
+		'@type': 'Offer',
+		price: '0',
+		priceCurrency: 'USD'
+	},
+	featureList: [
+		'Fast chat room with sub-second instant setup',
+		'No signup chat requiring zero credentials, emails, or passwords',
+		'Encrypted p2p chat with direct WebRTC DataChannels and AES-256-GCM',
+		'Quick file transfer between computers at wire speed without cloud storage',
+		'Temporary chat room no account with automated server-synchronized expiration',
+		'Ephemeral chat ensuring memory-only signaling and zero persistent logs'
+	],
+	softwareRequirements: 'WebRTC DataChannel and Web Crypto API support',
+	browserRequirements: 'Requires JavaScript-enabled browser with WebRTC (Chrome, Firefox, Safari, Edge)'
+};
+---
+
+<!-- Primary Meta Tags -->
+<title>{title}</title>
+<meta name="title" content={title} />
+<meta name="description" content={description} />
+<meta name="keywords" content={keywords} />
+<meta name="robots" content="index, follow" />
+<link rel="canonical" href={canonicalUrl} />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<meta name="theme-color" content="#0a0a0a" />
+<meta name="color-scheme" content="dark" />
+
+<!-- OpenGraph / Facebook -->
+<meta property="og:type" content="website" />
+<meta property="og:url" content={canonicalUrl} />
+<meta property="og:site_name" content="FastChat Room" />
+<meta property="og:title" content={title} />
+<meta property="og:description" content={description} />
+<meta property="og:image" content={ogImageUrl} />
+<meta property="og:image:alt" content="FastChat Room - Ephemeral P2P Chat and Quick File Transfer" />
+<meta property="og:locale" content="en_US" />
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:url" content={canonicalUrl} />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={ogImageUrl} />
+
+<!-- Structured Data: Schema.org SoftwareApplication -->
+<script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />

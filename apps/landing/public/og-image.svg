@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0a0a0a"/>
+  <!-- Decorative border grid -->
+  <rect x="40" y="40" width="1120" height="550" fill="none" stroke="#262626" stroke-width="2"/>
+  <!-- Neon corner accent -->
+  <rect x="40" y="40" width="16" height="16" fill="#ccff00"/>
+  <rect x="1144" y="40" width="16" height="16" fill="#ccff00"/>
+  <rect x="40" y="574" width="16" height="16" fill="#ccff00"/>
+  <rect x="1144" y="574" width="16" height="16" fill="#ccff00"/>
+  
+  <!-- Text content -->
+  <text x="90" y="140" fill="#ccff00" font-family="monospace" font-size="20" letter-spacing="4">SYSTEM // WEBRTC DATACHANNEL MESH</text>
+  <text x="90" y="240" fill="#ffffff" font-family="monospace" font-size="68" font-weight="900">FASTCHAT // ROOM</text>
+  <text x="90" y="320" fill="#cccccc" font-family="monospace" font-size="34" font-weight="bold">NO SIGNUP CHAT // ENCRYPTED P2P CHAT</text>
+  <text x="90" y="400" fill="#888888" font-family="monospace" font-size="24">Quick file transfer between computers. Ephemeral memory-only sessions.</text>
+  
+  <!-- Status badge -->
+  <rect x="90" y="470" width="460" height="54" fill="#121212" stroke="#3f3f46" stroke-width="1"/>
+  <circle cx="120" cy="497" r="6" fill="#ccff00"/>
+  <text x="142" y="504" fill="#ffffff" font-family="monospace" font-size="18" font-weight="bold">RAM ONLY &amp; ZERO TRACKING</text>
+</svg>
