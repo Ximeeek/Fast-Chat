@@ -28,6 +28,7 @@ export class WebRtcManager {
 	private signalingCleanups: (() => void)[] = [];
 	private rekeyCleanups: (() => void)[] = [];
 	private rtcFactory?: (config?: RTCConfiguration) => RTCPeerConnection;
+	private disconnectGracePeriodMs?: number;
 	private isInitialized = false;
 	private localPeerId: string | null = null;
 	private sessionPromises: Map<string, Promise<PeerConnectionSession>> = new Map();
@@ -37,6 +38,7 @@ export class WebRtcManager {
 		this.activeKey = options.activeKey || null;
 		this.iceServers = options.iceServers || [];
 		this.rtcFactory = options.rtcPeerConnectionFactory;
+		this.disconnectGracePeriodMs = options.disconnectGracePeriodMs;
 	}
 
 	/**
@@ -359,6 +361,7 @@ export class WebRtcManager {
 					iceServers: this.iceServers,
 					activeKey: this.activeKey,
 					rtcPeerConnectionFactory: this.rtcFactory,
+					disconnectGracePeriodMs: this.disconnectGracePeriodMs,
 					onIceCandidate: (candidate) => {
 						if (this.signaling.isConnected()) {
 							this.signaling.sendIceCandidates(remotePeerId, candidate);

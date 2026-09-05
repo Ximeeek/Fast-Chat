@@ -65,3 +65,28 @@ export const hasRelayedPeers = derived(webrtcPeers, ($peers) => {
 export const openDataChannelsCount = derived(webrtcPeers, ($peers) => {
 	return Object.values($peers).filter((info) => info.dataChannelState === 'open').length;
 });
+
+/**
+ * Derived store indicating whether any peer connection has entered the failed state.
+ */
+export const hasFailedPeers = derived(webrtcPeers, ($peers) => {
+	return Object.values($peers).some((info) => info.connectionState === 'failed');
+});
+
+/**
+ * Derived store indicating whether all registered peers have failed.
+ */
+export const allPeersFailed = derived(webrtcPeers, ($peers) => {
+	const peers = Object.values($peers);
+	return peers.length > 0 && peers.every((info) => info.connectionState === 'failed');
+});
+
+/**
+ * Derived store returning list of peer IDs currently in failed state.
+ */
+export const failedPeerIds = derived(webrtcPeers, ($peers) => {
+	return Object.entries($peers)
+		.filter(([_, info]) => info.connectionState === 'failed')
+		.map(([peerId]) => peerId);
+});
+

@@ -10,7 +10,9 @@ import {
 	webrtcPeers,
 	peerConnectionTypes,
 	openDataChannelsCount,
-	hasRelayedPeers
+	hasRelayedPeers,
+	hasFailedPeers,
+	allPeersFailed
 } from '../src/lib/stores/webrtc.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
 import { deriveRekeyedKey, RekeyManager } from '../src/lib/crypto/rekey.ts';
@@ -93,8 +95,15 @@ class MockRTCPeerConnection {
 	public remoteIceCandidates: RTCIceCandidateInit[] = [];
 	public isClosed = false;
 
+	public lastOfferOptions?: RTCOfferOptions;
+	public restartIceCalled = false;
+
 	constructor(configuration: RTCConfiguration = {}) {
 		this.configuration = configuration;
+	}
+
+	public restartIce(): void {
+		this.restartIceCalled = true;
 	}
 
 	public createDataChannel(label: string, options?: RTCDataChannelInit): RTCDataChannel {
@@ -103,7 +112,8 @@ class MockRTCPeerConnection {
 		return channel as unknown as RTCDataChannel;
 	}
 
-	public async createOffer(): Promise<RTCSessionDescriptionInit> {
+	public async createOffer(options?: RTCOfferOptions): Promise<RTCSessionDescriptionInit> {
+		this.lastOfferOptions = options;
 		return {
 			type: 'offer',
 			sdp: 'v=0\r\no=- 12345 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=application 9 DTLS/SCTP 5000\r\n'
@@ -115,6 +125,16 @@ class MockRTCPeerConnection {
 			type: 'answer',
 			sdp: 'v=0\r\no=- 67890 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=application 9 DTLS/SCTP 5000\r\n'
 		};
+	}
+
+	public simulateConnectionState(state: RTCPeerConnectionState): void {
+		this.connectionState = state;
+		this.onconnectionstatechange?.();
+	}
+
+	public simulateIceConnectionState(state: RTCIceConnectionState): void {
+		this.iceConnectionState = state;
+		this.oniceconnectionstatechange?.();
 	}
 
 	public async setLocalDescription(desc?: RTCSessionDescriptionInit): Promise<void> {
@@ -788,4 +808,171 @@ describe('WebRTC Mesh & Secure DataChannel Subsystem (Phase 8)', () => {
 			manager.destroy();
 		});
 	});
+
+	describe('7. WebRTC ICE Failure Handling, Disconnect Buffering & ICE Restart', () => {
+		test('RTCPeerConnection connectionState failed immediately propagates to session and store', async () => {
+			let pcInstance: MockRTCPeerConnection | null = null;
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					pcInstance = new MockRTCPeerConnection(cfg);
+					return pcInstance as unknown as RTCPeerConnection;
+				}
+			});
+
+			const session = await manager.getOrCreateSession('peer-fail-1', true);
+			assert.equal(session.getSessionInfo().connectionState, 'connecting');
+
+			pcInstance!.simulateConnectionState('failed');
+
+			assert.equal(session.getSessionInfo().connectionState, 'failed');
+			let hasFailed = false;
+			const unsub = hasFailedPeers.subscribe((v) => {
+				hasFailed = v;
+			});
+			unsub();
+			assert.equal(hasFailed, true);
+
+			manager.destroy();
+		});
+
+		test('RTCIceConnectionState failed immediately propagates to session and store', async () => {
+			let pcInstance: MockRTCPeerConnection | null = null;
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					pcInstance = new MockRTCPeerConnection(cfg);
+					return pcInstance as unknown as RTCPeerConnection;
+				}
+			});
+
+			const session = await manager.getOrCreateSession('peer-fail-2', true);
+			pcInstance!.simulateIceConnectionState('failed');
+
+			assert.equal(session.getSessionInfo().connectionState, 'failed');
+			manager.destroy();
+		});
+
+		test('transient disconnected state buffers before failing and recovers if connected returns within grace period', async () => {
+			let pcInstance: MockRTCPeerConnection | null = null;
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				disconnectGracePeriodMs: 60,
+				rtcPeerConnectionFactory: (cfg) => {
+					pcInstance = new MockRTCPeerConnection(cfg);
+					return pcInstance as unknown as RTCPeerConnection;
+				}
+			});
+
+			const session = await manager.getOrCreateSession('peer-transient', true);
+			pcInstance!.simulateConnectionState('connected');
+			assert.equal(session.getSessionInfo().connectionState, 'connected');
+
+			// Transient network disconnect
+			pcInstance!.simulateConnectionState('disconnected');
+			assert.equal(session.getSessionInfo().connectionState, 'disconnected');
+
+			// Recover within grace period
+			await new Promise((r) => setTimeout(r, 20));
+			pcInstance!.simulateConnectionState('connected');
+
+			// Wait past original grace period timeout
+			await new Promise((r) => setTimeout(r, 60));
+
+			assert.equal(session.getSessionInfo().connectionState, 'connected');
+			let hasFailed = false;
+			const unsub = hasFailedPeers.subscribe((v) => {
+				hasFailed = v;
+			});
+			unsub();
+			assert.equal(hasFailed, false);
+
+			manager.destroy();
+		});
+
+		test('persistent disconnected state transitions to failed after grace period expires', async () => {
+			let pcInstance: MockRTCPeerConnection | null = null;
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				disconnectGracePeriodMs: 50,
+				rtcPeerConnectionFactory: (cfg) => {
+					pcInstance = new MockRTCPeerConnection(cfg);
+					return pcInstance as unknown as RTCPeerConnection;
+				}
+			});
+
+			const session = await manager.getOrCreateSession('peer-persistent-disc', true);
+			pcInstance!.simulateConnectionState('connected');
+			assert.equal(session.getSessionInfo().connectionState, 'connected');
+
+			// Network drop
+			pcInstance!.simulateConnectionState('disconnected');
+			assert.equal(session.getSessionInfo().connectionState, 'disconnected');
+
+			// Wait for grace period timeout to fire
+			await new Promise((r) => setTimeout(r, 70));
+
+			assert.equal(session.getSessionInfo().connectionState, 'failed');
+			let hasFailed = false;
+			const unsub = hasFailedPeers.subscribe((v) => {
+				hasFailed = v;
+			});
+			unsub();
+			assert.equal(hasFailed, true);
+
+			manager.destroy();
+		});
+
+		test('UI failure state and store helpers accurately report allPeersFailed and failedPeerIds', async () => {
+			let pcA: MockRTCPeerConnection | null = null;
+			let pcB: MockRTCPeerConnection | null = null;
+
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					const pc = new MockRTCPeerConnection(cfg);
+					if (!pcA) pcA = pc;
+					else pcB = pc;
+					return pc as unknown as RTCPeerConnection;
+				}
+			});
+
+			await manager.getOrCreateSession('peer-a', true);
+			await manager.getOrCreateSession('peer-b', true);
+
+			pcA!.simulateConnectionState('failed');
+			pcB!.simulateConnectionState('connected');
+
+			// One failed, one connected
+			let failedList: string[] = [];
+			const unsubList = (await import('../src/lib/stores/webrtc.ts')).failedPeerIds.subscribe((list) => {
+				failedList = list;
+			});
+			unsubList();
+			assert.deepEqual(failedList, ['peer-a']);
+
+			let allFailed = true;
+			const unsubAll = allPeersFailed.subscribe((v) => {
+				allFailed = v;
+			});
+			unsubAll();
+			assert.equal(allFailed, false);
+
+			// Now both fail
+			pcB!.simulateConnectionState('failed');
+			const unsubAll2 = allPeersFailed.subscribe((v) => {
+				allFailed = v;
+			});
+			unsubAll2();
+			assert.equal(allFailed, true);
+
+			manager.destroy();
+		});
+	});
 });
+

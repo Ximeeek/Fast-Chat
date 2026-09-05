@@ -34,15 +34,21 @@ export class PeerConnectionSession {
 	private bufferedIceCandidates: RTCIceCandidateInit[] = [];
 	private hasCreatedOffer = false;
 	private isClosed = false;
+	private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	private disconnectGracePeriodMs = 6000;
+	private retryCount = 0;
+	private hasFailedAfterRetry = false;
 
 	constructor(options: PeerConnectionSessionOptions) {
 		this.options = options;
 		this.localPeerId = options.localPeerId;
 		this.remotePeerId = options.remotePeerId;
+		this.disconnectGracePeriodMs = options.disconnectGracePeriodMs ?? 6000;
 		this.isInitiator = options.isInitiator !== undefined
 			? options.isInitiator
 			: this.localPeerId.localeCompare(this.remotePeerId) < 0;
 		this.activeKey = options.activeKey || null;
+
 
 		// Deterministic politeness tie-breaker: impolite peer initiates, polite peer responds
 		this.isPolite = !this.isInitiator;
@@ -293,7 +299,9 @@ export class PeerConnectionSession {
 			iceConnectionState: this.pc.iceConnectionState,
 			connectionType: this.connectionType,
 			dataChannelState: this.dataChannelState,
-			isInitiator: this.isInitiator
+			isInitiator: this.isInitiator,
+			retryCount: this.retryCount,
+			hasFailedAfterRetry: this.hasFailedAfterRetry
 		};
 	}
 
@@ -303,6 +311,7 @@ export class PeerConnectionSession {
 	public close(): void {
 		if (this.isClosed) return;
 		this.isClosed = true;
+		this.clearDisconnectTimer();
 
 		this.bufferedIceCandidates = [];
 
@@ -479,11 +488,11 @@ export class PeerConnectionSession {
 		};
 
 		this.pc.oniceconnectionstatechange = () => {
-			this.handleIceStateChange();
+			this.handleStateChange();
 		};
 
 		this.pc.onconnectionstatechange = () => {
-			this.handleConnectionStateChange();
+			this.handleStateChange();
 		};
 
 		this.pc.ondatachannel = (event: RTCDataChannelEvent) => {
@@ -610,31 +619,87 @@ export class PeerConnectionSession {
 		}
 	}
 
-	private handleIceStateChange(): void {
-		const state = this.pc.iceConnectionState;
-		if (state === 'connected' || state === 'completed') {
-			this.updateConnectionState('connected');
-			this.inspectConnectionType();
-		} else if (state === 'failed') {
-			this.updateConnectionState('failed');
-		} else if (state === 'disconnected') {
-			this.updateConnectionState('disconnected');
-		} else if (state === 'closed') {
-			this.updateConnectionState('closed');
+	private clearDisconnectTimer(): void {
+		if (this.disconnectTimer) {
+			clearTimeout(this.disconnectTimer);
+			this.disconnectTimer = null;
 		}
 	}
 
-	private handleConnectionStateChange(): void {
-		const state = this.pc.connectionState;
-		if (state === 'connected') {
+	private handleStateChange(): void {
+		if (this.isClosed) return;
+
+		const connState = this.pc.connectionState;
+		const iceState = this.pc.iceConnectionState;
+
+		// 1. Closed connection lifecycle
+		if (connState === 'closed' || iceState === 'closed') {
+			this.clearDisconnectTimer();
+			this.updateConnectionState('closed');
+			return;
+		}
+
+		// 2. Definitive failure
+		if (connState === 'failed' || iceState === 'failed') {
+			this.clearDisconnectTimer();
+			if (this.retryCount > 0) {
+				this.hasFailedAfterRetry = true;
+			}
+			this.updateConnectionState('failed');
+			return;
+		}
+
+		// 3. Established connection or completed ICE checks
+		if (
+			connState === 'connected' ||
+			iceState === 'connected' ||
+			iceState === 'completed'
+		) {
+			this.clearDisconnectTimer();
+			this.retryCount = 0;
+			this.hasFailedAfterRetry = false;
 			this.updateConnectionState('connected');
 			this.inspectConnectionType();
-		} else if (state === 'failed') {
-			this.updateConnectionState('failed');
-		} else if (state === 'disconnected') {
+			return;
+		}
+
+		// 4. Transient disconnect: buffer before declaring failure
+		if (connState === 'disconnected' || iceState === 'disconnected') {
+			if (this.connectionState === 'failed') {
+				return;
+			}
+
 			this.updateConnectionState('disconnected');
-		} else if (state === 'closed') {
-			this.updateConnectionState('closed');
+
+			if (!this.disconnectTimer) {
+				this.disconnectTimer = setTimeout(() => {
+					this.disconnectTimer = null;
+					if (this.isClosed) return;
+
+					const activeConn = this.pc.connectionState;
+					const activeIce = this.pc.iceConnectionState;
+					const isConnected =
+						activeConn === 'connected' ||
+						activeIce === 'connected' ||
+						activeIce === 'completed';
+
+					if (!isConnected) {
+						if (this.retryCount > 0) {
+							this.hasFailedAfterRetry = true;
+						}
+						this.updateConnectionState('failed');
+					}
+				}, this.disconnectGracePeriodMs);
+			}
+			return;
+		}
+
+		// 5. In-flight or initial negotiation
+		if (connState === 'connecting' || iceState === 'checking' || iceState === 'new') {
+			if (this.connectionState !== 'connecting' && this.connectionState !== 'disconnected') {
+				this.clearDisconnectTimer();
+				this.updateConnectionState('connecting');
+			}
 		}
 	}
 

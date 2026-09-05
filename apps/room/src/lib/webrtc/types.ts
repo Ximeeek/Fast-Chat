@@ -33,6 +33,8 @@ export interface PeerSessionInfo {
 	connectionType: ConnectionType;
 	dataChannelState: DataChannelState;
 	isInitiator: boolean;
+	retryCount?: number;
+	hasFailedAfterRetry?: boolean;
 }
 
 /**
@@ -62,6 +64,7 @@ export interface PeerConnectionSessionOptions {
 	onMessage?: (payload: Uint8Array) => void;
 	onError?: (error: Error) => void;
 	rtcPeerConnectionFactory?: (config?: RTCConfiguration) => RTCPeerConnection;
+	disconnectGracePeriodMs?: number;
 }
 
 /**
@@ -71,4 +74,6 @@ export interface WebRtcManagerOptions {
 	activeKey?: CryptoKey | null;
 	iceServers?: IceServerConfig[];
 	rtcPeerConnectionFactory?: (config?: RTCConfiguration) => RTCPeerConnection;
+	disconnectGracePeriodMs?: number;
 }
+
