@@ -15,4 +15,5 @@ This repository is organized as a monorepo containing three independent subproje
 **Status: In Development**  
 - Phase 1 (Monorepo scaffolding and repository initialization): Completed.
 - Phase 2 (Signaling server core — Rust, axum, DashMap room lifecycle state machine): Completed.
+- Phase 3 (Signaling WebSocket protocol — framing, transparent SDP/ICE relay, REKEY, and room lifecycle integration): Completed.
 

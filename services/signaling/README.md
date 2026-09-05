@@ -25,6 +25,48 @@ Subproject for the WebRTC signaling service of **FastChat Room**.
 5. **Zero Footprint**:
    - No disk I/O, no database credentials, no file logs of rooms.
 
+## WebSocket Protocol (Phase 3)
+
+The signaling service exposes a WebSocket endpoint at `/ws` using JSON messaging (`SCREAMING_SNAKE_CASE` message tags):
+
+### Client to Server Messages
+
+1. **`CREATE_ROOM`**:
+   - Creates a new ephemeral room and registers the sender as owner.
+   - Payload: `{ "peer_id"?: string, "has_password"?: boolean, "password"?: string }`.
+2. **`JOIN_ROOM`**:
+   - Joins an existing room with code and optional password.
+   - Payload: `{ "code": "0000-0000-0000", "peer_id"?: string, "password"?: string }`.
+3. **`SDP_OFFER`**:
+   - Relayed verbatim 1:1 to target peer.
+   - Payload: `{ "target_peer_id": string, "sdp": object }`.
+4. **`SDP_ANSWER`**:
+   - Relayed verbatim 1:1 to target peer.
+   - Payload: `{ "target_peer_id": string, "sdp": object }`.
+5. **`ICE_CANDIDATES`** (or `ICE_CANDIDATE`):
+   - Relayed verbatim 1:1 to target peer.
+   - Payload: `{ "target_peer_id": string, "candidates"?: array, "candidate"?: object }`.
+6. **`REKEY`**:
+   - Owner-only rekey event configuring room password protection and salt.
+   - Payload: `{ "password": string, "salt"?: string }`.
+7. **`PING`**:
+   - Application-level heartbeat ping.
+
+### Server to Client Messages
+
+1. **`ROOM_CREATED`**: `{ "code": string, "peer_id": string, "salt": string, "expires_at": number, "expiresAt": number }`.
+2. **`JOIN_OK`**: `{ "status": "OK", "code": string, "peer_id": string, "is_owner": boolean, "salt": string, "expiresAt": number, "peers": string[] }`.
+3. **`PEER_JOINED`**: Broadcast to existing room participants: `{ "peer_id": string }`.
+4. **`PEER_LEFT`**: Broadcast upon peer disconnect: `{ "peer_id": string }`.
+5. **`SDP_OFFER`**: Forwarded to target with verified sender: `{ "sender_peer_id": string, "sdp": object }`.
+6. **`SDP_ANSWER`**: Forwarded to target with verified sender: `{ "sender_peer_id": string, "sdp": object }`.
+7. **`ICE_CANDIDATES`**: Forwarded to target with verified sender: `{ "sender_peer_id": string, "candidates"?: array, "candidate"?: object }`.
+8. **`REKEY`**: Broadcast to all room participants: `{ "room_code": string, "salt": string }` (zero key or secret material).
+9. **`ROOM_CLOSING`**: Broadcast when grace period begins: `{ "room_code": string, "closing_deadline": number, "expires_at": number }`.
+10. **`ROOM_CLOSED`**: Broadcast upon room destruction: `{ "room_code": string, "reason": string }`.
+11. **`PONG`**: Application heartbeat response.
+12. **`ERROR`**: Structured error notification: `{ "code": string, "message": string }`.
+
 ## Running & Testing
 
 ```bash
