@@ -1,0 +1,26 @@
+services:
+  signaling:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fastchat-signaling:latest
+    container_name: fastchat-signaling
+    restart: unless-stopped
+    ports:
+      # Expose only to localhost when reverse proxy (Caddy / Nginx / cloudflared) is used.
+      # Change to "3000:3000" if exposing directly to host network interface.
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - .env
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

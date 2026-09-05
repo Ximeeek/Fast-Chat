@@ -123,5 +123,157 @@ All configuration is driven by environment variables with sensible defaults:
 | `FASTCHAT_MAX_TOTAL_ROOMS` | `1000` | Global server ceiling for concurrent active rooms |
 | `FASTCHAT_MAX_TOTAL_CONNECTIONS` | `4000` | Global server ceiling for concurrent WebSocket connections |
 | `FASTCHAT_LIMITER_PRUNE_INTERVAL_SECS` | `60` | Background interval in seconds for pruning stale in-memory rate records |
+| `CLOUDFLARE_TURN_API_TOKEN` | *None* | Cloudflare Realtime TURN API Token (Bearer auth). When omitted, STUN-only mode is active |
+| `CLOUDFLARE_TURN_KEY_ID` | *None* | Cloudflare Realtime TURN Key ID. Required when API token is configured |
+| `FASTCHAT_TURN_MAX_MONTHLY_BYTES` | `966367641600` | Safety ceiling for monthly TURN bandwidth (default: 900 GiB, reserving 10% headroom) |
+| `FASTCHAT_TURN_CREDENTIAL_TTL_SECS` | `86400` | Expiration TTL for generated ephemeral TURN credentials (default: 24 hours) |
+| `FASTCHAT_TURN_API_BASE_URL` | `https://rtc.live.cloudflare.com` | Base endpoint URL for Cloudflare Realtime TURN API |
 | `PORT` | `3000` | Server HTTP/WebSocket port |
 | `HOST` | `0.0.0.0` | Server bind host address |
+
+---
+
+## Production Deployment (Oracle Cloud Always Free VM)
+
+This runbook describes deploying the `fastchat-signaling` container on an **Oracle Cloud Infrastructure (OCI) Always Free** virtual machine (e.g., Ampere A1 ARM64 with 4 OCPUs and 24 GB RAM, or VM.Standard.E2.1.Micro x86_64).
+
+### 1. VM Provisioning & Firewall Rules
+
+#### A. OCI Virtual Cloud Network (VCN) Ingress Rule
+In the Oracle Cloud Console:
+1. Navigate to **Networking > Virtual Cloud Networks > [Your VCN] > Security Lists > Default Security List**.
+2. Add an **Ingress Rule**:
+   - **Source Type:** CIDR
+   - **Source CIDR:** `0.0.0.0/0`
+   - **IP Protocol:** TCP
+   - **Destination Port Range:** `80, 443, 3000` (or `80, 443` if using a reverse proxy / Cloudflare Tunnel)
+
+#### B. OS Firewall (Ubuntu / Debian on OCI)
+OCI Ubuntu images include persistent iptables rules that reject incoming traffic by default, even if `ufw` is active. Run:
+```bash
+# Allow TCP traffic on port 3000 (signaling) and 80/443 (reverse proxy)
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 3000 -j ACCEPT
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+
+# Persist iptables rules across reboots
+sudo apt-get install -y iptables-persistent
+sudo netfilter-persistent save
+```
+
+### 2. Host Environment & Directory Setup
+
+Install Docker and Docker Compose on the VM:
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo usermod -aG docker $USER
+```
+
+Create an isolated application directory:
+```bash
+sudo mkdir -p /opt/fastchat-signaling
+sudo chown -R $USER:$USER /opt/fastchat-signaling
+cd /opt/fastchat-signaling
+```
+
+### 3. Secret Provisioning (.env)
+
+> **STRICT SECURITY REQUIREMENT:** Never commit `.env` or production tokens to git. Secrets must be created directly on the target host with locked permissions.
+
+Create `/opt/fastchat-signaling/.env`:
+```bash
+cat << 'EOF' > /opt/fastchat-signaling/.env
+# FastChat Signaling Production Secrets
+PORT=3000
+HOST=0.0.0.0
+RUST_LOG=info
+
+# Cloudflare Realtime TURN API Credentials (from Cloudflare Dashboard)
+CLOUDFLARE_TURN_API_TOKEN=your_production_turn_api_token_here
+CLOUDFLARE_TURN_KEY_ID=your_production_turn_key_id_here
+
+# Resource & Rate Ceilings
+FASTCHAT_MAX_PARTICIPANTS_PER_ROOM=4
+FASTCHAT_MAX_TOTAL_ROOMS=1000
+FASTCHAT_MAX_TOTAL_CONNECTIONS=4000
+FASTCHAT_TURN_MAX_MONTHLY_BYTES=966367641600
+EOF
+
+# Lock down read/write permissions to owner only
+chmod 600 /opt/fastchat-signaling/.env
+```
+
+### 4. Container Build & Orchestration
+
+Deploy using `docker compose` or direct `docker run`:
+
+#### Option A: Docker Compose (Recommended)
+Place `Dockerfile` and `docker-compose.yml` in `/opt/fastchat-signaling` and launch:
+```bash
+cd /opt/fastchat-signaling
+docker compose up -d --build
+docker compose logs -f signaling
+```
+
+#### Option B: Standalone Docker Run
+```bash
+# Build the multi-stage image
+docker build -t fastchat-signaling:latest .
+
+# Run with least-privilege security restrictions
+docker run -d \
+    --name fastchat-signaling \
+    --restart unless-stopped \
+    -p 127.0.0.1:3000:3000 \
+    --env-file /opt/fastchat-signaling/.env \
+    --security-opt no-new-privileges:true \
+    --cap-drop ALL \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+    fastchat-signaling:latest
+```
+
+Verify service health:
+```bash
+curl -i http://localhost:3000/health
+# Expected output: HTTP/1.1 200 OK
+```
+
+### 5. Edge Networking & Cloudflare Integration (Orange Cloud)
+
+FastChat relies on Cloudflare's edge network for free DDoS mitigation, WAF inspection, and automated TLS certificates.
+
+#### Architecture: Cloudflare Tunnel (Zero Open Ingress Ports)
+The most secure topology uses **Cloudflare Tunnel (`cloudflared`)**, eliminating all inbound firewall openings on OCI:
+
+1. In Cloudflare Dashboard, navigate to **Zero Trust > Networks > Tunnels** and create a tunnel (e.g., `fastchat-signaling`).
+2. Install `cloudflared` on the Oracle VM according to the dashboard instructions:
+   ```bash
+   curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture).deb
+   sudo dpkg -i cloudflared.deb
+   sudo cloudflared service install <TUNNEL_TOKEN>
+   ```
+3. Configure Public Hostname in the Tunnel settings:
+   - **Subdomain:** `signaling`
+   - **Domain:** `fastchat.room` (or your registered apex domain)
+   - **Service Type:** `HTTP`
+   - **URL:** `localhost:3000`
+   - Under **Additional application settings > HTTP Settings**: Ensure WebSocket connections are enabled.
+
+#### Alternative: Caddy Reverse Proxy with Cloudflare DNS Proxy (Orange Cloud)
+If running a standard web server on the VM:
+```caddy
+signaling.fastchat.room {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+In the Cloudflare DNS dashboard, set an `A` record for `signaling.fastchat.room` pointing to the VM public IP with **Proxy status: Proxied (Orange Cloud)**. Cloudflare terminates external TLS and forwards WebSocket traffic over port 443.

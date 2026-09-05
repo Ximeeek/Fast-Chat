@@ -17,5 +17,9 @@ This repository is organized as a monorepo containing three independent subproje
 - Phase 2 (Signaling server core — Rust, axum, DashMap room lifecycle state machine): Completed.
 - Phase 3 (Signaling WebSocket protocol — framing, transparent SDP/ICE relay, REKEY, and room lifecycle integration): Completed.
 - Phase 4 (Multi-layer abuse protection & rate limiting — ephemeral daily pepper, HMAC-SHA256 rate keys, zero IP logging): Completed.
+- Phase 5 (Realtime TURN integration & automated cost governor): Completed.
+- Phases 6–11 (SvelteKit room application, WebRTC mesh, file transfer, UI tokens, security audits): Completed.
+- Phase 12 (Astro static landing page & brutalist design): Completed.
+- Phase 13 (Production deployment: Cloudflare Pages & Oracle Cloud Always Free): In Progress.
 
 
