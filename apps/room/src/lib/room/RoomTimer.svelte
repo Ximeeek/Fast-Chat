@@ -90,16 +90,16 @@
 </script>
 
 <div class="flex items-center gap-2 font-mono">
-	<!-- Boxed Server-Synced Countdown Timer -->
+	<!-- Server-Synced Countdown Timer -->
 	<div
-		class="px-3 py-1.5 bg-black border transition-micro flex flex-col items-center justify-center min-w-[96px] {isInExtendableWindow
-			? 'border-[#ccff00] text-[#ccff00]'
-			: 'border-[#262626] text-zinc-100'}"
+		class="px-3.5 py-1.5 rounded-xl bg-[#06080e] border transition-all flex flex-col items-center justify-center min-w-[96px] {isInExtendableWindow
+			? 'border-amber-500/60 text-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.2)]'
+			: 'border-white/10 text-white'}"
 		title={isInExtendableWindow
 			? 'Extendable Window active (< 2:00 remaining)'
 			: 'Room lifetime remaining'}
 	>
-		<div class="text-[9px] uppercase tracking-widest font-semibold {isInExtendableWindow ? 'text-[#ccff00]' : 'text-zinc-500'}">
+		<div class="text-[9px] uppercase tracking-widest font-semibold {isInExtendableWindow ? 'text-amber-400' : 'text-zinc-500'}">
 			EXPIRES IN
 		</div>
 		<div class="text-base sm:text-lg font-bold tabular-nums tracking-widest leading-none mt-0.5">
@@ -114,11 +114,11 @@
 				type="button"
 				onclick={handleExtend}
 				disabled={!canExtend}
-				class="min-h-[42px] px-3.5 py-1 bg-black text-[#ccff00] border border-[#ccff00] hover:bg-[#ccff00] hover:text-black font-bold uppercase tracking-wider text-xs transition-micro cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+				class="min-h-[40px] px-3.5 py-1 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-bold uppercase tracking-wider text-xs transition-all cursor-pointer shadow-[0_0_15px_rgba(0,102,255,0.3)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
 				title="Add 5 minutes to room duration"
 			>
 				{#if isExtending}
-					<span class="inline-block w-2 h-2 border border-current border-t-transparent animate-spin"></span>
+					<span class="inline-block w-2.5 h-2.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
 					<span>+5:00...</span>
 				{:else}
 					<span>+5:00</span>

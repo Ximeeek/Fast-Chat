@@ -2,19 +2,24 @@
 // "Why Encrypted" security and privacy architecture breakdown
 ---
 
-<section class="border-b border-[#262626] bg-[#0d0d0d] py-16 px-4 sm:px-6 relative">
-	<div class="max-w-6xl mx-auto">
-		<!-- Section header decorative hazard stripe divider -->
-		<div class="w-full h-1 hazard-stripes-dark mb-10"></div>
+---
+// "Why Encrypted" security and privacy architecture breakdown
+---
 
-		<div class="mb-12 text-left">
-			<div class="inline-flex items-center gap-2 border border-[#3f3f46] bg-[#121212] px-2.5 py-1 text-xs text-[#ccff00] font-mono mb-3">
+<section class="border-b border-[#161c28] bg-[#07090f] py-20 px-4 sm:px-6 relative overflow-hidden">
+	<!-- Background ambient glow -->
+	<div class="absolute -bottom-24 left-1/4 w-96 h-96 bg-blue-600/10 blur-[120px] pointer-events-none rounded-full"></div>
+
+	<div class="max-w-6xl mx-auto relative z-10">
+		<div class="mb-14 text-left">
+			<div class="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold uppercase tracking-wider mb-4">
+				<span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
 				<span>SECURITY &amp; PRIVACY ARCHITECTURE</span>
 			</div>
-			<h2 class="text-2xl sm:text-4xl font-extrabold text-white font-mono tracking-tight uppercase">
+			<h2 class="text-2xl sm:text-4xl font-extrabold text-white font-['Orbitron',sans-serif] tracking-tight uppercase">
 				Why Encrypted? Real Technical Privacy, Not Marketing Claims
 			</h2>
-			<p class="text-sm text-zinc-400 font-mono mt-3 max-w-3xl leading-relaxed">
+			<p class="text-sm sm:text-base text-zinc-400 font-['Inter',sans-serif] mt-3 max-w-3xl leading-relaxed">
 				Most messaging services retain metadata, maintain database backups, or hold decryption keys on company servers. 
 				FastChat Room eliminates server custody altogether. Here is exactly how your data is protected:
 			</p>
@@ -22,109 +27,119 @@
 
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
 			<!-- Pillar 1: Zero Server Logs -->
-			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between relative group">
-				<div class="absolute top-0 left-0 w-1 h-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors"></div>
-				<div class="pl-2">
-					<div class="flex items-center justify-between font-mono text-xs text-zinc-500 mb-3">
-						<span class="text-[#ccff00]">PILLAR 01</span>
-						<span>SIGNALING LAYER</span>
+			<div class="rounded-2xl border border-[#1a2233] bg-[#0a0d16]/90 backdrop-blur-sm p-6 sm:p-7 hover:border-blue-500/50 transition-all flex flex-col justify-between relative group shadow-[0_4px_25px_rgba(0,0,0,0.5)]">
+				<div class="absolute top-0 left-6 right-6 h-[2px] bg-gradient-to-r from-blue-600 via-cyan-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+				<div>
+					<div class="flex items-center justify-between font-mono text-xs mb-3">
+						<span class="text-blue-400 font-bold tracking-wider">PILLAR 01</span>
+						<span class="text-zinc-500 tracking-wider">SIGNALING LAYER</span>
 					</div>
-					<h3 class="text-lg font-bold text-white font-mono uppercase">
+					<h3 class="text-lg font-bold text-white font-['Orbitron',sans-serif] uppercase tracking-wide">
 						Zero Server Logs &amp; RAM-Only Relay
 					</h3>
-					<p class="text-xs sm:text-sm text-zinc-400 font-mono mt-3 leading-relaxed">
+					<p class="text-xs sm:text-sm text-zinc-400 font-['Inter',sans-serif] mt-3 leading-relaxed">
 						WebSocket signaling coordinates WebRTC handshakes (SDP offer/answer and ICE candidates) exclusively in volatile memory. 
 						Payloads are flushed the instant they are dispatched. IP addresses for rate limiting are salted with an ephemeral daily 
 						pepper and HMAC-hashed in RAM — never written to disk, database, or persistent log files.
 					</p>
 				</div>
-				<div class="mt-6 pt-3 border-t border-[#1f1f23] pl-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-					<span>DISK WRITES: 0 BYTES</span>
-					<span class="text-zinc-400">RAM FLUSH: INSTANT</span>
+				<div class="mt-6 pt-3.5 border-t border-white/5 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+					<span class="text-zinc-400 font-medium">DISK WRITES: 0 BYTES</span>
+					<span class="text-cyan-400 font-medium">RAM FLUSH: INSTANT</span>
 				</div>
 			</div>
 
 			<!-- Pillar 2: End-to-End Encryption -->
-			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between relative group">
-				<div class="absolute top-0 left-0 w-1 h-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors"></div>
-				<div class="pl-2">
-					<div class="flex items-center justify-between font-mono text-xs text-zinc-500 mb-3">
-						<span class="text-[#ccff00]">PILLAR 02</span>
-						<span>CRYPTOGRAPHIC CORE</span>
+			<div class="rounded-2xl border border-[#1a2233] bg-[#0a0d16]/90 backdrop-blur-sm p-6 sm:p-7 hover:border-blue-500/50 transition-all flex flex-col justify-between relative group shadow-[0_4px_25px_rgba(0,0,0,0.5)]">
+				<div class="absolute top-0 left-6 right-6 h-[2px] bg-gradient-to-r from-blue-600 via-cyan-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+				<div>
+					<div class="flex items-center justify-between font-mono text-xs mb-3">
+						<span class="text-blue-400 font-bold tracking-wider">PILLAR 02</span>
+						<span class="text-zinc-500 tracking-wider">CRYPTOGRAPHIC CORE</span>
 					</div>
-					<h3 class="text-lg font-bold text-white font-mono uppercase">
+					<h3 class="text-lg font-bold text-white font-['Orbitron',sans-serif] uppercase tracking-wide">
 						Browser-Level E2E Encryption (AES-256-GCM)
 					</h3>
-					<p class="text-xs sm:text-sm text-zinc-400 font-mono mt-3 leading-relaxed">
+					<p class="text-xs sm:text-sm text-zinc-400 font-['Inter',sans-serif] mt-3 leading-relaxed">
 						All communication is cryptographically secured before transmission using standard Web Crypto primitives. 
 						Text messages and binary file chunks are encrypted with authenticated AES-256-GCM using unique per-message 96-bit IVs. 
 						Neither our signaling service nor intermediate TURN relays ever hold keys or have access to plaintext data.
 					</p>
 				</div>
-				<div class="mt-6 pt-3 border-t border-[#1f1f23] pl-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-					<span>CIPHER: AES-256-GCM</span>
-					<span class="text-zinc-400">KEY HOLDER: BROWSER ONLY</span>
+				<div class="mt-6 pt-3.5 border-t border-white/5 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+					<span class="text-zinc-400 font-medium">CIPHER: AES-256-GCM</span>
+					<span class="text-cyan-400 font-medium">KEY: BROWSER ONLY</span>
 				</div>
 			</div>
 
 			<!-- Pillar 3: Guaranteed Auto-Deletion -->
-			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between relative group">
-				<div class="absolute top-0 left-0 w-1 h-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors"></div>
-				<div class="pl-2">
-					<div class="flex items-center justify-between font-mono text-xs text-zinc-500 mb-3">
-						<span class="text-[#ccff00]">PILLAR 03</span>
-						<span>LIFECYCLE ENGINE</span>
+			<div class="rounded-2xl border border-[#1a2233] bg-[#0a0d16]/90 backdrop-blur-sm p-6 sm:p-7 hover:border-blue-500/50 transition-all flex flex-col justify-between relative group shadow-[0_4px_25px_rgba(0,0,0,0.5)]">
+				<div class="absolute top-0 left-6 right-6 h-[2px] bg-gradient-to-r from-blue-600 via-cyan-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+				<div>
+					<div class="flex items-center justify-between font-mono text-xs mb-3">
+						<span class="text-blue-400 font-bold tracking-wider">PILLAR 03</span>
+						<span class="text-zinc-500 tracking-wider">LIFECYCLE ENGINE</span>
 					</div>
-					<h3 class="text-lg font-bold text-white font-mono uppercase">
+					<h3 class="text-lg font-bold text-white font-['Orbitron',sans-serif] uppercase tracking-wide">
 						Guaranteed Auto-Deletion &amp; Expiry
 					</h3>
-					<p class="text-xs sm:text-sm text-zinc-400 font-mono mt-3 leading-relaxed">
+					<p class="text-xs sm:text-sm text-zinc-400 font-['Inter',sans-serif] mt-3 leading-relaxed">
 						Rooms exist strictly inside an unalterable lifecycle window bound to an authoritative countdown timer. 
 						When the room timer runs down, all peer connections terminate immediately, memory structures unbind, 
 						and cryptographic session keys are erased from browser memory. There are no archives, no trash bins, and no backups.
 					</p>
 				</div>
-				<div class="mt-6 pt-3 border-t border-[#1f1f23] pl-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-					<span>PERSISTENCE: 0%</span>
-					<span class="text-zinc-400">EXPIRATION: ENFORCED</span>
+				<div class="mt-6 pt-3.5 border-t border-white/5 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+					<span class="text-zinc-400 font-medium">PERSISTENCE: 0%</span>
+					<span class="text-cyan-400 font-medium">EXPIRATION: ENFORCED</span>
 				</div>
 			</div>
 
 			<!-- Pillar 4: Zero Accounts & Identity -->
-			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between relative group">
-				<div class="absolute top-0 left-0 w-1 h-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors"></div>
-				<div class="pl-2">
-					<div class="flex items-center justify-between font-mono text-xs text-zinc-500 mb-3">
-						<span class="text-[#ccff00]">PILLAR 04</span>
-						<span>IDENTITY MODEL</span>
+			<div class="rounded-2xl border border-[#1a2233] bg-[#0a0d16]/90 backdrop-blur-sm p-6 sm:p-7 hover:border-blue-500/50 transition-all flex flex-col justify-between relative group shadow-[0_4px_25px_rgba(0,0,0,0.5)]">
+				<div class="absolute top-0 left-6 right-6 h-[2px] bg-gradient-to-r from-blue-600 via-cyan-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+				<div>
+					<div class="flex items-center justify-between font-mono text-xs mb-3">
+						<span class="text-blue-400 font-bold tracking-wider">PILLAR 04</span>
+						<span class="text-zinc-500 tracking-wider">IDENTITY MODEL</span>
 					</div>
-					<h3 class="text-lg font-bold text-white font-mono uppercase">
+					<h3 class="text-lg font-bold text-white font-['Orbitron',sans-serif] uppercase tracking-wide">
 						Zero Accounts, Passwords, or Fingerprints
 					</h3>
-					<p class="text-xs sm:text-sm text-zinc-400 font-mono mt-3 leading-relaxed">
+					<p class="text-xs sm:text-sm text-zinc-400 font-['Inter',sans-serif] mt-3 leading-relaxed">
 						You do not need to register, verify an email address, provide phone credentials, or solve intrusive captchas. 
 						No cookies or tracker identifiers are set. Room participants are identified solely by ephemeral random pseudonyms 
 						within the room lifecycle, leaving no traceable identity graph behind.
 					</p>
 				</div>
-				<div class="mt-6 pt-3 border-t border-[#1f1f23] pl-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-					<span>COOKIES: ZERO</span>
-					<span class="text-zinc-400">FINGERPRINTING: DISABLED</span>
+				<div class="mt-6 pt-3.5 border-t border-white/5 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+					<span class="text-zinc-400 font-medium">COOKIES: ZERO</span>
+					<span class="text-cyan-400 font-medium">TRACKING: DISABLED</span>
 				</div>
 			</div>
 		</div>
 
-		<!-- Architectural trust summary badge with diagonal stripe background -->
-		<div class="mt-8 border border-[#262626] bg-[#121212] bg-diagonal-stripes p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono text-xs text-zinc-400">
-			<div class="flex items-center gap-3">
-				<span class="text-[#ccff00] text-base">🛡</span>
-				<span>
-					<strong class="text-white">Security Model:</strong> Zero-knowledge ephemeral peer-to-peer transport. We cannot inspect your communications even if compelled.
+		<!-- Architectural trust summary badge -->
+		<div class="mt-8 rounded-2xl border border-[#1a2233] bg-[#0a0d16]/80 backdrop-blur-sm p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-['Inter',sans-serif] text-xs text-zinc-400 shadow-[0_4px_20px_rgba(0,0,0,0.4)]">
+			<div class="flex items-center gap-3.5">
+				<div class="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-cyan-400 shrink-0 shadow-[0_0_15px_rgba(0,102,255,0.2)]">
+					<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+						<path d="M9 12l2 2 4-4"/>
+					</svg>
+				</div>
+				<span class="leading-relaxed">
+					<strong class="text-white font-semibold">Security Model:</strong> Zero-knowledge ephemeral peer-to-peer transport. We cannot inspect your communications even if compelled.
 				</span>
 			</div>
-			<a href="/create" class="inline-flex items-center text-[#ccff00] hover:underline font-bold whitespace-nowrap">
-				Create Room Now →
+			<a
+				href="/create"
+				class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(0,102,255,0.3)] whitespace-nowrap self-start sm:self-auto"
+			>
+				<span>Create Room Now</span>
+				<span>→</span>
 			</a>
 		</div>
 	</div>
 </section>
+

@@ -2,68 +2,99 @@
 // Hero component for FastChat Room landing page
 ---
 
-<section class="relative border-b border-[#262626] bg-[#0a0a0a] bg-diagonal-stripes pt-16 pb-20 px-4 sm:px-6 overflow-hidden">
-	<!-- Subtle ambient glow matching neon accent -->
-	<div class="absolute top-0 right-1/4 w-96 h-96 bg-[#ccff00]/5 blur-3xl pointer-events-none"></div>
+---
+// Hero component for FastChat Room landing page
+---
 
-	<div class="max-w-4xl mx-auto text-left relative z-10">
-		<!-- Protocol badge with hazard stripes framing -->
-		<div class="inline-flex items-center gap-2 border border-[#3f3f46] bg-[#121212] px-3 py-1 text-xs text-zinc-400 font-mono mb-6 shadow-sm">
-			<span class="text-[#ccff00]">●</span>
+<section class="relative border-b border-[#161c28] bg-[#050608] bg-cyber-grid pt-16 sm:pt-20 pb-20 sm:pb-24 px-4 sm:px-6 overflow-hidden">
+	<!-- Electric blue and cyan ambient glow backdrop -->
+	<div class="absolute -top-20 left-1/2 -translate-x-1/2 w-[700px] h-[350px] bg-gradient-to-b from-blue-600/20 via-cyan-500/10 to-transparent blur-[110px] pointer-events-none rounded-full"></div>
+	<div class="absolute top-1/3 right-10 w-80 h-80 bg-blue-600/10 blur-[100px] pointer-events-none rounded-full"></div>
+
+	<div class="max-w-5xl mx-auto text-left relative z-10">
+		<!-- High-tech protocol pill badge -->
+		<div class="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-[#0a0f1d] border border-blue-500/30 text-blue-400 text-xs font-semibold uppercase tracking-wider mb-6 shadow-[0_0_20px_rgba(0,102,255,0.15)]">
+			<span class="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#00e5ff] animate-pulse"></span>
 			<span>ZERO-SIGNUP EPHEMERAL WEBRTC DATACHANNEL MESH</span>
 		</div>
 
-		<!-- H1 headline with targeted search phrase -->
-		<h1 class="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white leading-tight font-mono uppercase">
+		<!-- H1 headline with futuristic geometric typography -->
+		<h1 class="text-3xl sm:text-5xl lg:text-6xl font-black tracking-tight text-white leading-[1.15] font-['Orbitron',sans-serif] uppercase">
 			Fast Chat Room <br />
-			<span class="text-[#ccff00]">No Signup. Zero Trace.</span>
+			<span class="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-cyan-300 to-white">
+				No Signup. Zero Trace.
+			</span>
 		</h1>
 
-		<!-- Product description incorporating required search terms naturally -->
-		<p class="mt-6 text-base sm:text-lg text-zinc-300 max-w-2xl leading-relaxed font-mono">
-			Experience high-speed, <strong>no signup chat</strong> with end-to-end <strong>encrypted p2p chat</strong> and 
-			<strong>quick file transfer between computers</strong>. FastChat Room provides an <strong>ephemeral chat</strong> 
+		<!-- Product description -->
+		<p class="mt-6 text-base sm:text-lg text-zinc-300 max-w-2xl leading-relaxed font-['Inter',sans-serif]">
+			Experience high-speed, <strong class="text-white">no signup chat</strong> with end-to-end <strong class="text-white">encrypted p2p chat</strong> and 
+			<strong class="text-white">quick file transfer between computers</strong>. FastChat Room provides an <strong class="text-white">ephemeral chat</strong> 
 			environment where conversations exist strictly in memory. When your session ends or timer elapses, all data 
 			disappears permanently.
 		</p>
 
-		<!-- Primary Action Box with diagonal stripe accent frame -->
+		<!-- Primary Action Row -->
 		<div class="mt-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
 			<a
 				href="/create"
-				class="inline-flex items-center justify-center gap-3 px-8 py-4 text-base font-bold bg-[#ccff00] text-black hover:bg-[#b8e600] active:scale-[0.99] transition-all border border-[#ccff00] uppercase tracking-wider shadow-[0_0_20px_rgba(204,255,0,0.15)] group"
+				class="inline-flex items-center justify-center gap-3 px-8 py-4 rounded-full text-sm sm:text-base font-bold bg-white text-black hover:bg-zinc-200 active:scale-[0.99] transition-all shadow-[0_0_30px_rgba(255,255,255,0.25)] uppercase tracking-wider group font-['Inter',sans-serif]"
 			>
+				<svg class="w-4 h-4 fill-black group-hover:scale-110 transition-transform" viewBox="0 0 16 16">
+					<circle cx="2" cy="2" r="1.5"/>
+					<circle cx="8" cy="2" r="1.5"/>
+					<circle cx="14" cy="2" r="1.5"/>
+					<circle cx="2" cy="8" r="1.5"/>
+					<circle cx="8" cy="8" r="1.5"/>
+					<circle cx="14" cy="8" r="1.5"/>
+					<circle cx="2" cy="14" r="1.5"/>
+					<circle cx="8" cy="14" r="1.5"/>
+					<circle cx="14" cy="14" r="1.5"/>
+				</svg>
 				<span>CREATE ROOM</span>
 				<span class="text-lg group-hover:translate-x-1 transition-transform">→</span>
 			</a>
 
-			<div class="flex items-center gap-3 px-4 py-3 border border-[#262626] bg-[#121212] bg-diagonal-stripes-accent text-xs text-zinc-400 font-mono">
-				<span class="text-zinc-500 font-bold">MODE:</span>
-				<span class="text-zinc-200">EPHEMERAL</span>
+			<div class="flex items-center gap-3 px-5 py-3.5 rounded-full border border-white/10 bg-[#0a0d18]/90 backdrop-blur-md text-xs font-['JetBrains_Mono',monospace] text-zinc-400">
+				<span class="text-zinc-500 font-bold uppercase">MODE:</span>
+				<span class="text-cyan-400 font-semibold">EPHEMERAL</span>
 				<span class="text-zinc-600">|</span>
-				<span class="text-zinc-500 font-bold">PERSISTENCE:</span>
-				<span class="text-[#ccff00] font-bold">0% RAM ONLY</span>
+				<span class="text-zinc-500 font-bold uppercase">PERSISTENCE:</span>
+				<span class="text-blue-400 font-bold">0% RAM ONLY</span>
 			</div>
 		</div>
 
-		<!-- Technical keyword tags -->
-		<div class="mt-12 pt-8 border-t border-[#1f1f23] grid grid-cols-2 sm:grid-cols-4 gap-3">
-			<div class="border border-[#262626] bg-[#121212] p-3 text-left hover:border-[#3f3f46] transition-colors">
-				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">ACCESS</div>
-				<div class="text-xs font-bold text-zinc-200 mt-1 font-mono">No Signup Chat</div>
+		<!-- Technical specification cards with /01-/04 indices -->
+		<div class="mt-12 pt-8 border-t border-[#161c28] grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+			<div class="rounded-xl border border-[#1a2233] bg-[#0a0d16]/80 backdrop-blur-sm p-4 text-left hover:border-blue-500/40 transition-colors group">
+				<div class="flex items-center justify-between">
+					<span class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">ACCESS</span>
+					<span class="text-[11px] text-blue-400/80 font-mono font-bold">/01</span>
+				</div>
+				<div class="text-sm font-bold text-white mt-1.5 font-['Orbitron',sans-serif]">No Signup Chat</div>
 			</div>
-			<div class="border border-[#262626] bg-[#121212] p-3 text-left hover:border-[#3f3f46] transition-colors">
-				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">SECURITY</div>
-				<div class="text-xs font-bold text-zinc-200 mt-1 font-mono">Encrypted P2P Chat</div>
+			<div class="rounded-xl border border-[#1a2233] bg-[#0a0d16]/80 backdrop-blur-sm p-4 text-left hover:border-blue-500/40 transition-colors group">
+				<div class="flex items-center justify-between">
+					<span class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">SECURITY</span>
+					<span class="text-[11px] text-blue-400/80 font-mono font-bold">/02</span>
+				</div>
+				<div class="text-sm font-bold text-white mt-1.5 font-['Orbitron',sans-serif]">Encrypted P2P</div>
 			</div>
-			<div class="border border-[#262626] bg-[#121212] p-3 text-left hover:border-[#3f3f46] transition-colors">
-				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">TRANSFER</div>
-				<div class="text-xs font-bold text-zinc-200 mt-1 font-mono">Quick File Transfer</div>
+			<div class="rounded-xl border border-[#1a2233] bg-[#0a0d16]/80 backdrop-blur-sm p-4 text-left hover:border-blue-500/40 transition-colors group">
+				<div class="flex items-center justify-between">
+					<span class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">TRANSFER</span>
+					<span class="text-[11px] text-blue-400/80 font-mono font-bold">/03</span>
+				</div>
+				<div class="text-sm font-bold text-white mt-1.5 font-['Orbitron',sans-serif]">File Transfer</div>
 			</div>
-			<div class="border border-[#262626] bg-[#121212] p-3 text-left hover:border-[#3f3f46] transition-colors">
-				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">LIFECYCLE</div>
-				<div class="text-xs font-bold text-zinc-200 mt-1 font-mono">Ephemeral Chat</div>
+			<div class="rounded-xl border border-[#1a2233] bg-[#0a0d16]/80 backdrop-blur-sm p-4 text-left hover:border-blue-500/40 transition-colors group">
+				<div class="flex items-center justify-between">
+					<span class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">LIFECYCLE</span>
+					<span class="text-[11px] text-blue-400/80 font-mono font-bold">/04</span>
+				</div>
+				<div class="text-sm font-bold text-white mt-1.5 font-['Orbitron',sans-serif]">Ephemeral Chat</div>
 			</div>
 		</div>
 	</div>
 </section>
+

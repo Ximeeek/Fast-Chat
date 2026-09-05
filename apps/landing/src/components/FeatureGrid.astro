@@ -2,76 +2,114 @@
 // Feature specifications grid for FastChat Room
 ---
 
-<section class="border-b border-[#262626] bg-[#0a0a0a] py-16 px-4 sm:px-6 relative">
-	<div class="max-w-6xl mx-auto">
-		<div class="mb-10 text-left">
-			<div class="text-xs text-[#ccff00] font-mono tracking-widest uppercase mb-2">SYSTEM SPECIFICATIONS</div>
-			<h2 class="text-2xl sm:text-3xl font-extrabold text-white font-mono tracking-tight uppercase">
+---
+// Feature specifications grid for FastChat Room
+---
+
+<section class="border-b border-[#161c28] bg-[#050608] py-20 px-4 sm:px-6 relative overflow-hidden">
+	<div class="max-w-6xl mx-auto relative z-10">
+		<div class="mb-14 text-left">
+			<div class="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold uppercase tracking-wider mb-4">
+				<span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+				<span>SYSTEM SPECIFICATIONS</span>
+			</div>
+			<h2 class="text-2xl sm:text-4xl font-extrabold text-white font-['Orbitron',sans-serif] tracking-tight uppercase">
 				Engineered For Instant, Untraceable Communication
 			</h2>
-			<p class="text-sm text-zinc-400 font-mono mt-2 max-w-2xl">
-				Launch a <strong>temporary chat room no account</strong> required. FastChat Room eliminates intermediaries, 
+			<p class="text-sm sm:text-base text-zinc-400 font-['Inter',sans-serif] mt-3 max-w-2xl leading-relaxed">
+				Launch a <strong class="text-white">temporary chat room no account</strong> required. FastChat Room eliminates intermediaries, 
 				connecting peers directly across WebRTC DataChannels with zero persistent logs.
 			</p>
 		</div>
 
+		<!-- 3-column system specification cards -->
 		<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
 			<!-- Feature 1: No Signup Chat -->
-			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors relative overflow-hidden group">
-				<div class="h-1 w-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors mb-4"></div>
+			<div class="rounded-2xl border border-[#1a2233] bg-[#0a0d16]/90 backdrop-blur-sm p-6 sm:p-7 flex flex-col justify-between hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(0,102,255,0.15)] transition-all relative overflow-hidden group">
+				<div class="absolute top-0 left-6 right-6 h-[2px] bg-gradient-to-r from-blue-600 via-cyan-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
 				<div>
-					<div class="flex items-center justify-between text-xs text-zinc-500 font-mono mb-4">
-						<span>SPEC 01</span>
-						<span class="text-[#ccff00]">ANONYMOUS</span>
+					<div class="flex items-center justify-between text-xs font-mono mb-4">
+						<span class="text-zinc-500">SPEC /01</span>
+						<span class="px-2 py-0.5 rounded-full bg-blue-500/15 text-cyan-400 border border-blue-500/30 text-[10px] font-semibold">ANONYMOUS</span>
 					</div>
-					<h3 class="text-lg font-bold text-white font-mono uppercase">Instant No Signup Chat</h3>
-					<p class="mt-3 text-xs sm:text-sm text-zinc-400 font-mono leading-relaxed">
+					<h3 class="text-lg font-bold text-white font-['Orbitron',sans-serif] uppercase tracking-wide">
+						Instant No Signup Chat
+					</h3>
+					<p class="mt-3 text-xs sm:text-sm text-zinc-400 font-['Inter',sans-serif] leading-relaxed">
 						Zero onboarding friction. No registration forms, email verification, or passwords. Generate a unique room code, 
 						share the link, and begin conversing in seconds.
 					</p>
 				</div>
-				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono bg-[#0e0e10] p-2">
-					AUTH: NONE // DATABASE: NONE
+				<div class="mt-6 pt-3.5 border-t border-white/5 text-[11px] text-zinc-500 font-mono flex items-center justify-between">
+					<span>AUTH: NONE</span>
+					<span class="text-zinc-400">DATABASE: NONE</span>
 				</div>
 			</div>
 
 			<!-- Feature 2: Quick File Transfer -->
-			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors relative overflow-hidden group">
-				<div class="h-1 w-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors mb-4"></div>
+			<div class="rounded-2xl border border-[#1a2233] bg-[#0a0d16]/90 backdrop-blur-sm p-6 sm:p-7 flex flex-col justify-between hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(0,102,255,0.15)] transition-all relative overflow-hidden group">
+				<div class="absolute top-0 left-6 right-6 h-[2px] bg-gradient-to-r from-blue-600 via-cyan-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
 				<div>
-					<div class="flex items-center justify-between text-xs text-zinc-500 font-mono mb-4">
-						<span>SPEC 02</span>
-						<span class="text-[#ccff00]">HIGH SPEED</span>
+					<div class="flex items-center justify-between text-xs font-mono mb-4">
+						<span class="text-zinc-500">SPEC /02</span>
+						<span class="px-2 py-0.5 rounded-full bg-blue-500/15 text-cyan-400 border border-blue-500/30 text-[10px] font-semibold">HIGH SPEED</span>
 					</div>
-					<h3 class="text-lg font-bold text-white font-mono uppercase">Quick File Transfer Between Computers</h3>
-					<p class="mt-3 text-xs sm:text-sm text-zinc-400 font-mono leading-relaxed">
+					<h3 class="text-lg font-bold text-white font-['Orbitron',sans-serif] uppercase tracking-wide">
+						Quick File Transfer Between Computers
+					</h3>
+					<p class="mt-3 text-xs sm:text-sm text-zinc-400 font-['Inter',sans-serif] leading-relaxed">
 						Stream binary files directly from browser to browser. Chunks are dispatched over encrypted WebRTC DataChannels 
 						at local wire speed without hitting external storage or server quotas.
 					</p>
 				</div>
-				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono bg-[#0e0e10] p-2">
-					THROUGHPUT: DIRECT P2P // CLOUD: BYPASSED
+				<div class="mt-6 pt-3.5 border-t border-white/5 text-[11px] text-zinc-500 font-mono flex items-center justify-between">
+					<span>THROUGHPUT: DIRECT P2P</span>
+					<span class="text-zinc-400">CLOUD: BYPASSED</span>
 				</div>
 			</div>
 
 			<!-- Feature 3: Ephemeral Chat Lifecycle -->
-			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors relative overflow-hidden group">
-				<div class="h-1 w-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors mb-4"></div>
+			<div class="rounded-2xl border border-[#1a2233] bg-[#0a0d16]/90 backdrop-blur-sm p-6 sm:p-7 flex flex-col justify-between hover:border-blue-500/50 hover:shadow-[0_0_30px_rgba(0,102,255,0.15)] transition-all relative overflow-hidden group">
+				<div class="absolute top-0 left-6 right-6 h-[2px] bg-gradient-to-r from-blue-600 via-cyan-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
 				<div>
-					<div class="flex items-center justify-between text-xs text-zinc-500 font-mono mb-4">
-						<span>SPEC 03</span>
-						<span class="text-[#ccff00]">EPHEMERAL</span>
+					<div class="flex items-center justify-between text-xs font-mono mb-4">
+						<span class="text-zinc-500">SPEC /03</span>
+						<span class="px-2 py-0.5 rounded-full bg-blue-500/15 text-cyan-400 border border-blue-500/30 text-[10px] font-semibold">EPHEMERAL</span>
 					</div>
-					<h3 class="text-lg font-bold text-white font-mono uppercase">Temporary Chat Room No Account</h3>
-					<p class="mt-3 text-xs sm:text-sm text-zinc-400 font-mono leading-relaxed">
+					<h3 class="text-lg font-bold text-white font-['Orbitron',sans-serif] uppercase tracking-wide">
+						Temporary Chat Room No Account
+					</h3>
+					<p class="mt-3 text-xs sm:text-sm text-zinc-400 font-['Inter',sans-serif] leading-relaxed">
 						Every session runs on an unyielding server-synchronized countdown timer. When the room expires, cryptographic keys 
 						are dropped and all in-memory buffers are flushed immediately.
 					</p>
 				</div>
-				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono bg-[#0e0e10] p-2">
-					LIFECYCLE: AUTO-TERMINATION // PERSISTENCE: 0%
+				<div class="mt-6 pt-3.5 border-t border-white/5 text-[11px] text-zinc-500 font-mono flex items-center justify-between">
+					<span>AUTO-TERMINATION: ON</span>
+					<span class="text-zinc-400">PERSISTENCE: 0%</span>
 				</div>
+			</div>
+		</div>
+
+		<!-- High-impact metric counters row -->
+		<div class="mt-14 pt-10 border-t border-[#161c28] grid grid-cols-2 md:grid-cols-4 gap-6">
+			<div class="p-4 rounded-xl border border-white/5 bg-[#0a0d16]/40 text-left">
+				<div class="text-2xl sm:text-3xl font-black text-white font-['Orbitron',sans-serif]">0 MB</div>
+				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono mt-1">DISK PERSISTENCE</div>
+			</div>
+			<div class="p-4 rounded-xl border border-white/5 bg-[#0a0d16]/40 text-left">
+				<div class="text-2xl sm:text-3xl font-black text-cyan-400 font-['Orbitron',sans-serif]">256-BIT</div>
+				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono mt-1">AES-GCM CIPHER</div>
+			</div>
+			<div class="p-4 rounded-xl border border-white/5 bg-[#0a0d16]/40 text-left">
+				<div class="text-2xl sm:text-3xl font-black text-blue-400 font-['Orbitron',sans-serif]">100%</div>
+				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono mt-1">BROWSER P2P MESH</div>
+			</div>
+			<div class="p-4 rounded-xl border border-white/5 bg-[#0a0d16]/40 text-left">
+				<div class="text-2xl sm:text-3xl font-black text-white font-['Orbitron',sans-serif]">0%</div>
+				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono mt-1">LOGS OR ACCOUNTS</div>
 			</div>
 		</div>
 	</div>
 </section>
+

@@ -2,31 +2,36 @@
 // Footer component for FastChat Room landing page
 ---
 
-<footer class="mt-auto border-t border-[#262626] bg-[#0a0a0a] pt-12 pb-8 px-4 sm:px-6">
+---
+// Footer component for FastChat Room landing page
+---
+
+<footer class="mt-auto border-t border-[#161c28] bg-[#050608] pt-14 pb-10 px-4 sm:px-6">
 	<div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
 		<div>
-			<div class="flex items-center gap-2 text-zinc-100 font-mono font-bold text-sm tracking-wider">
-				<span class="w-2 h-2 bg-[#ccff00]"></span>
+			<div class="flex items-center gap-2.5 text-white font-['Orbitron',sans-serif] font-bold text-sm tracking-wider">
+				<span class="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#00e5ff]"></span>
 				<span>FASTCHAT ROOM</span>
 			</div>
-			<p class="text-xs text-zinc-500 font-mono mt-1">
-				Anonymous, ephemeral P2P chat room with file transfer — zero login, zero server cost, zero footprint.
+			<p class="text-xs text-zinc-400 font-['Inter',sans-serif] mt-1.5 max-w-md leading-relaxed">
+				Anonymous, ephemeral P2P chat room with direct file transfer — zero login, zero server cost, zero footprint.
 			</p>
-			<div class="text-[11px] text-zinc-600 font-mono mt-2">
-				TRACKERS: NONE // COOKIES: NONE // METRICS: 0
+			<div class="flex items-center gap-3 text-[11px] text-zinc-500 font-mono mt-3">
+				<span class="px-2 py-0.5 rounded-full bg-white/5 border border-white/5">TRACKERS: 0</span>
+				<span class="px-2 py-0.5 rounded-full bg-white/5 border border-white/5">COOKIES: 0</span>
+				<span class="px-2 py-0.5 rounded-full bg-white/5 border border-white/5">METRICS: 0</span>
 			</div>
 		</div>
 
-		<div class="flex items-center gap-6 text-xs font-mono">
+		<div class="flex items-center gap-6 text-xs font-['Inter',sans-serif]">
 			<a
 				href="/create"
-				class="text-[#ccff00] hover:underline font-bold tracking-wider uppercase"
+				class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/40 font-bold uppercase tracking-wider transition-all shadow-[0_0_15px_rgba(0,102,255,0.15)]"
 			>
-				Create Room →
+				<span>Create Room</span>
+				<span>→</span>
 			</a>
 		</div>
 	</div>
-
-	<!-- Bottom industrial diagonal hazard accent line -->
-	<div class="max-w-6xl mx-auto mt-8 h-1 hazard-stripes-accent opacity-75"></div>
 </footer>
+
