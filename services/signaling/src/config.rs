@@ -3,7 +3,7 @@ use std::env;
 /// Application configuration for FastChat signaling service.
 /// All timeout durations and participant limits are centralized here
 /// rather than hardcoded in business logic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     /// Maximum number of concurrent participants allowed in a single room.
     /// Default is 4. Configurable via FASTCHAT_MAX_PARTICIPANTS_PER_ROOM.
@@ -71,7 +71,26 @@ pub struct Config {
 
     /// Interval in seconds for pruning stale in-memory rate limiter records (default: 60s).
     pub limiter_prune_interval_secs: u64,
+
+    /// Cloudflare Realtime TURN API token read from CLOUDFLARE_TURN_API_TOKEN.
+    pub cloudflare_turn_api_token: Option<String>,
+
+    /// Cloudflare Realtime TURN Key ID read from CLOUDFLARE_TURN_KEY_ID.
+    pub cloudflare_turn_key_id: Option<String>,
+
+    /// Safety threshold in bytes for monthly TURN usage (default: 900 GB).
+    pub turn_max_monthly_bytes: u64,
+
+    /// Default TTL in seconds for generated temporary TURN credentials (default: 86400s).
+    pub turn_credential_ttl_secs: u64,
+
+    /// Base URL for Cloudflare Realtime TURN API (default: "https://rtc.live.cloudflare.com").
+    pub turn_api_base_url: String,
 }
+
+/// Default monthly TURN bandwidth allowance threshold in bytes (900 GiB).
+/// Cloudflare Realtime TURN provides 1,000 GB/month on the free tier; 900 GiB leaves a 10% safety margin.
+pub const DEFAULT_TURN_MAX_MONTHLY_BYTES: u64 = 900 * 1024 * 1024 * 1024;
 
 impl Default for Config {
     fn default() -> Self {
@@ -98,6 +117,11 @@ impl Default for Config {
             max_total_rooms: 1000,
             max_total_connections: 4000,
             limiter_prune_interval_secs: 60,
+            cloudflare_turn_api_token: None,
+            cloudflare_turn_key_id: None,
+            turn_max_monthly_bytes: DEFAULT_TURN_MAX_MONTHLY_BYTES,
+            turn_credential_ttl_secs: 86400,
+            turn_api_base_url: "https://rtc.live.cloudflare.com".to_string(),
         }
     }
 }
@@ -218,6 +242,29 @@ impl Config {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(default.limiter_prune_interval_secs);
 
+        let cloudflare_turn_api_token = env::var("CLOUDFLARE_TURN_API_TOKEN")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let cloudflare_turn_key_id = env::var("CLOUDFLARE_TURN_KEY_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let turn_max_monthly_bytes = env::var("FASTCHAT_TURN_MAX_MONTHLY_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(default.turn_max_monthly_bytes);
+
+        let turn_credential_ttl_secs = env::var("FASTCHAT_TURN_CREDENTIAL_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(default.turn_credential_ttl_secs);
+
+        let turn_api_base_url = env::var("FASTCHAT_TURN_API_BASE_URL")
+            .unwrap_or(default.turn_api_base_url);
+
         Self {
             max_participants_per_room,
             initial_room_duration_secs,
@@ -241,7 +288,49 @@ impl Config {
             max_total_rooms,
             max_total_connections,
             limiter_prune_interval_secs,
+            cloudflare_turn_api_token,
+            cloudflare_turn_key_id,
+            turn_max_monthly_bytes,
+            turn_credential_ttl_secs,
+            turn_api_base_url,
         }
+    }
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("max_participants_per_room", &self.max_participants_per_room)
+            .field("initial_room_duration_secs", &self.initial_room_duration_secs)
+            .field("extendable_threshold_secs", &self.extendable_threshold_secs)
+            .field("extension_duration_secs", &self.extension_duration_secs)
+            .field("closing_grace_period_secs", &self.closing_grace_period_secs)
+            .field("sweeper_interval_secs", &self.sweeper_interval_secs)
+            .field("server_port", &self.server_port)
+            .field("server_host", &self.server_host)
+            .field("pepper_rotation_secs", &self.pepper_rotation_secs)
+            .field("rate_limit_room_creations_per_hour", &self.rate_limit_room_creations_per_hour)
+            .field("rate_limit_ws_connections_per_min", &self.rate_limit_ws_connections_per_min)
+            .field("rate_limit_ws_base_backoff_secs", &self.rate_limit_ws_base_backoff_secs)
+            .field("rate_limit_ws_max_backoff_secs", &self.rate_limit_ws_max_backoff_secs)
+            .field("rate_limit_joins_per_min", &self.rate_limit_joins_per_min)
+            .field("rate_limit_failed_joins_threshold", &self.rate_limit_failed_joins_threshold)
+            .field("rate_limit_failed_joins_window_secs", &self.rate_limit_failed_joins_window_secs)
+            .field("rate_limit_join_lockout_secs", &self.rate_limit_join_lockout_secs)
+            .field("flood_bucket_capacity", &self.flood_bucket_capacity)
+            .field("flood_refill_per_sec", &self.flood_refill_per_sec)
+            .field("max_total_rooms", &self.max_total_rooms)
+            .field("max_total_connections", &self.max_total_connections)
+            .field("limiter_prune_interval_secs", &self.limiter_prune_interval_secs)
+            .field(
+                "cloudflare_turn_api_token",
+                &self.cloudflare_turn_api_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("cloudflare_turn_key_id", &self.cloudflare_turn_key_id)
+            .field("turn_max_monthly_bytes", &self.turn_max_monthly_bytes)
+            .field("turn_credential_ttl_secs", &self.turn_credential_ttl_secs)
+            .field("turn_api_base_url", &self.turn_api_base_url)
+            .finish()
     }
 }
 
@@ -260,5 +349,22 @@ mod tests {
         assert_eq!(config.sweeper_interval_secs, 1);
         assert_eq!(config.server_port, 3000);
         assert_eq!(config.server_host, "0.0.0.0");
+        assert_eq!(config.cloudflare_turn_api_token, None);
+        assert_eq!(config.cloudflare_turn_key_id, None);
+        assert_eq!(config.turn_max_monthly_bytes, DEFAULT_TURN_MAX_MONTHLY_BYTES);
+        assert_eq!(config.turn_credential_ttl_secs, 86400);
+        assert_eq!(config.turn_api_base_url, "https://rtc.live.cloudflare.com");
+    }
+
+    #[test]
+    fn test_debug_redacts_api_token() {
+        let mut config = Config::default();
+        config.cloudflare_turn_api_token = Some("super_secret_cf_token_12345".to_string());
+        config.cloudflare_turn_key_id = Some("turn-key-uuid-67890".to_string());
+
+        let debug_output = format!("{:?}", config);
+        assert!(!debug_output.contains("super_secret_cf_token_12345"));
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(debug_output.contains("turn-key-uuid-67890"));
     }
 }
