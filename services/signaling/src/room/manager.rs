@@ -74,13 +74,42 @@ impl RoomManager {
         peer_id: String,
         is_owner: bool,
     ) -> Result<(), RoomError> {
+        self.join_room_with_password(code, peer_id, is_owner, None)
+    }
+
+    /// Adds a peer to the specified room with password verification.
+    pub fn join_room_with_password(
+        &self,
+        code: &RoomCode,
+        peer_id: String,
+        is_owner: bool,
+        password: Option<&str>,
+    ) -> Result<(), RoomError> {
         let mut room = self
             .rooms
             .get_mut(code)
             .ok_or_else(|| RoomError::PeerNotFound(peer_id.clone()))?;
 
         let now_ts = Utc::now().timestamp();
-        room.add_peer(peer_id, is_owner, now_ts, &self.config)
+        room.add_peer_with_password(peer_id, is_owner, password, now_ts, &self.config)
+    }
+
+    /// Performs rekeying on an active room, configuring or updating password protection.
+    pub fn rekey_room(
+        &self,
+        code: &RoomCode,
+        peer_id: &str,
+        password: &str,
+        salt: Option<[u8; 16]>,
+    ) -> Result<PasswordStatus, RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(code)
+            .ok_or_else(|| RoomError::PeerNotFound(peer_id.to_string()))?;
+
+        room.rekey_by_owner(peer_id, password, salt)?;
+        info!(room = %code, peer = %peer_id, "Room rekeyed by owner with password protection");
+        Ok(room.password_status.clone())
     }
 
     /// Extends a room's lifetime by 5 minutes.

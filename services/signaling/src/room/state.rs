@@ -35,6 +35,8 @@ pub struct PasswordStatus {
     pub has_password: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub salt: Option<[u8; 16]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password_hash: Option<String>,
 }
 
 impl PasswordStatus {
@@ -42,6 +44,7 @@ impl PasswordStatus {
         Self {
             has_password: false,
             salt: None,
+            password_hash: None,
         }
     }
 
@@ -52,6 +55,18 @@ impl PasswordStatus {
         Self {
             has_password: true,
             salt: Some(salt),
+            password_hash: None,
+        }
+    }
+
+    pub fn with_password(password: impl Into<String>) -> Self {
+        let mut rng = rand::thread_rng();
+        let mut salt = [0u8; 16];
+        rng.fill(&mut salt);
+        Self {
+            has_password: true,
+            salt: Some(salt),
+            password_hash: Some(password.into()),
         }
     }
 }
@@ -70,6 +85,9 @@ pub enum RoomError {
 
     #[error("Action unauthorized: only the room owner can perform this operation")]
     Unauthorized,
+
+    #[error("Password required or invalid")]
+    InvalidPassword,
 
     #[error("Invalid lifecycle transition from {from:?} to {to:?}")]
     InvalidStateTransition {
@@ -198,6 +216,34 @@ impl RoomState {
         Ok(())
     }
 
+    /// Verifies whether a provided password token satisfies the room's access requirement.
+    pub fn verify_password(&self, provided_password: Option<&str>) -> bool {
+        if !self.password_status.has_password {
+            return true;
+        }
+
+        match (&self.password_status.password_hash, provided_password) {
+            (Some(expected), Some(provided)) => expected == provided,
+            (None, _) => true,
+            (Some(_), None) => false,
+        }
+    }
+
+    /// Adds a peer to the room while enforcing capacity limits and password protection.
+    pub fn add_peer_with_password(
+        &mut self,
+        peer_id: String,
+        is_owner: bool,
+        password: Option<&str>,
+        now_ts: i64,
+        config: &Config,
+    ) -> Result<(), RoomError> {
+        if !is_owner && !self.verify_password(password) {
+            return Err(RoomError::InvalidPassword);
+        }
+        self.add_peer(peer_id, is_owner, now_ts, config)
+    }
+
     /// Removes a peer from the room.
     pub fn remove_peer(&mut self, peer_id: &str) -> Result<Peer, RoomError> {
         let pos = self
@@ -295,6 +341,41 @@ impl RoomState {
         }
 
         self.initiate_closing(now_ts, config);
+        Ok(())
+    }
+
+    /// Reconfigures room password protection when requested by the room owner.
+    /// Notice: Server stores only the verifier token and cleartext salt; E2EE keys are never computed or stored.
+    pub fn rekey_by_owner(
+        &mut self,
+        peer_id: &str,
+        password: &str,
+        salt: Option<[u8; 16]>,
+    ) -> Result<(), RoomError> {
+        if !self.is_owner(peer_id) {
+            return Err(RoomError::Unauthorized);
+        }
+
+        if matches!(
+            self.state,
+            RoomLifecycleState::Closing | RoomLifecycleState::Destroyed
+        ) {
+            return Err(RoomError::RoomTerminated);
+        }
+
+        let assigned_salt = salt.unwrap_or_else(|| {
+            let mut rng = rand::thread_rng();
+            let mut s = [0u8; 16];
+            rng.fill(&mut s);
+            s
+        });
+
+        self.password_status = PasswordStatus {
+            has_password: true,
+            salt: Some(assigned_salt),
+            password_hash: Some(password.to_string()),
+        };
+
         Ok(())
     }
 
@@ -451,5 +532,45 @@ mod tests {
         let action = room.evaluate_lifecycle(start_time + 60, &config);
         assert_eq!(action, LifecycleAction::Destroy);
         assert_eq!(room.state, RoomLifecycleState::Destroyed);
+    }
+
+    #[test]
+    fn test_password_and_rekey_flow() {
+        let config = Config::default();
+        let mut room = RoomState::new(
+            sample_code(),
+            Some("owner".to_string()),
+            PasswordStatus::none(),
+            &config,
+            1000,
+        );
+
+        // Before rekey, room has no password: peer can join without password
+        assert!(room.verify_password(None));
+        assert!(room.add_peer_with_password("peer1".to_string(), false, None, 1001, &config).is_ok());
+
+        // Non-owner cannot rekey
+        let err = room.rekey_by_owner("peer1", "secret123", None);
+        assert_eq!(err, Err(RoomError::Unauthorized));
+
+        // Owner rekeys room with password
+        assert!(room.rekey_by_owner("owner", "secret123", None).is_ok());
+        assert!(room.password_status.has_password);
+        assert!(room.password_status.salt.is_some());
+
+        // Joining without password fails
+        assert!(!room.verify_password(None));
+        let join_no_pw = room.add_peer_with_password("peer2".to_string(), false, None, 1002, &config);
+        assert_eq!(join_no_pw, Err(RoomError::InvalidPassword));
+
+        // Joining with wrong password fails
+        assert!(!room.verify_password(Some("wrong")));
+        let join_wrong = room.add_peer_with_password("peer2".to_string(), false, Some("wrong"), 1002, &config);
+        assert_eq!(join_wrong, Err(RoomError::InvalidPassword));
+
+        // Joining with correct password succeeds
+        assert!(room.verify_password(Some("secret123")));
+        let join_ok = room.add_peer_with_password("peer2".to_string(), false, Some("secret123"), 1002, &config);
+        assert!(join_ok.is_ok());
     }
 }
