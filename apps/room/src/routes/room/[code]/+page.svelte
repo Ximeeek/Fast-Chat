@@ -12,6 +12,7 @@
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
 	import { validateRoomCode } from '$lib/utils/roomCode';
 	import RoomCodeHero from '$lib/room/RoomCodeHero.svelte';
+	import RoomTimer from '$lib/room/RoomTimer.svelte';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
 	const roomCode = $page.params.code || '';
@@ -135,6 +136,20 @@
 		}
 	}
 
+	async function handleRoomExtended(newExpiresAt: number) {
+		try {
+			const payload = new TextEncoder().encode(
+				JSON.stringify({
+					type: 'room-extended',
+					expiresAt: newExpiresAt
+				})
+			);
+			await webRtcManager.broadcast(payload);
+		} catch (err) {
+			console.error('Failed to broadcast room-extended packet:', err);
+		}
+	}
+
 	function leaveRoom() {
 		webRtcManager.disconnectAll();
 		signalingClient.disconnect();
@@ -204,6 +219,8 @@
 						fileReceiver?.handleControlMessage(peerId, data);
 					} else if (data.type === 'file-ready') {
 						fileSender?.handleControlMessage(peerId, data);
+					} else if (data.type === 'room-extended' && typeof data.expiresAt === 'number') {
+						roomStore.updateExpiresAt(data.expiresAt);
 					}
 				} catch {
 					// Ignore invalid JSON payload
@@ -422,15 +439,15 @@
 					</div>
 				</div>
 
-				<div class="flex items-center space-x-4">
-					{#if remainingSeconds !== null}
-						<div class="text-right">
-							<div class="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">EXPIRES IN</div>
-							<div class="text-lg font-mono font-bold tabular-nums {remainingSeconds <= 120 ? 'text-[#ccff00]' : 'text-zinc-100'}">
-								{formatSeconds(remainingSeconds)}
-							</div>
-						</div>
-					{/if}
+				<div class="flex items-center space-x-3">
+					<RoomTimer
+						expiresAt={$roomStore.expiresAt}
+						{roomCode}
+						peerId={$roomStore.peerId}
+						isOwner={$roomStore.isOwner}
+						lifecycle={$roomStore.lifecycle}
+						onExtended={handleRoomExtended}
+					/>
 
 					<button
 						onclick={leaveRoom}

@@ -128,6 +128,13 @@ function createRoomStore() {
 				quotaExhausted
 			}));
 		},
+		updateExpiresAt: (expiresAt: number) => {
+			update((state) => ({
+				...state,
+				expiresAt,
+				lifecycle: state.lifecycle === 'closing' ? 'joined' : state.lifecycle
+			}));
+		},
 		reset: () => {
 			set({ ...initialRoomState });
 		}

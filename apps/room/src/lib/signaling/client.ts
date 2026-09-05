@@ -293,6 +293,23 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Extends the room lifetime by 5 minutes via the signaling REST API.
+	 * Must be invoked by the room owner while in the ExtendableWindow (remaining <= 2:00).
+	 */
+	public async extendRoom(code: string, peerId: string): Promise<void> {
+		const res = await fetch(`${this.httpUrl}/api/rooms/${encodeURIComponent(code.trim())}/extend`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ peer_id: peerId })
+		});
+
+		if (!res.ok) {
+			const errText = await res.text().catch(() => '');
+			throw new Error(errText || `Failed to extend room: HTTP ${res.status}`);
+		}
+	}
+
+	/**
 	 * Requests ICE servers configuration (STUN/TURN) over WebSocket.
 	 */
 	public async requestIceServers(): Promise<IceServersServerMessage> {
