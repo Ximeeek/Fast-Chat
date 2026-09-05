@@ -1,3 +1,5 @@
+pub mod protocol;
+
 use crate::state::AppState;
 use axum::{
     extract::{
