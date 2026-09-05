@@ -12,9 +12,11 @@ import {
 	formatFileSize
 } from '../src/lib/transfer/chunking.ts';
 import { FileSender } from '../src/lib/transfer/sender.ts';
+import { FileReceiver, isFileSystemAccessSupported } from '../src/lib/transfer/receiver.ts';
 import { PeerConnectionSession } from '../src/lib/webrtc/peer.ts';
 import { WebRtcManager } from '../src/lib/webrtc/manager.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
+import { decryptChunk } from '../src/lib/crypto/cipher.ts';
 import type { IceServerConfig } from '../src/lib/types/signaling.ts';
 import type { RecipientProgress } from '../src/lib/transfer/types.ts';
 
@@ -439,4 +441,171 @@ describe('File Transfer: 16KB Chunking & Backpressure Outbound Streaming', () =>
 			manager.destroy();
 		});
 	});
+
+	describe('4. Chromium File System Access API Direct Streaming Receiver', () => {
+		test('acceptWithFileSystem creates writable stream and handles chunks without buffering in RAM', async () => {
+			let rawPc: MockBackpressureRTCPeerConnection | null = null;
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					rawPc = new MockBackpressureRTCPeerConnection(cfg);
+					return rawPc as unknown as RTCPeerConnection;
+				}
+			});
+
+			await manager.getOrCreateSession('peer-sender', true);
+			const dc = rawPc!.localDataChannels[0];
+			dc.open();
+
+			// Mock FileSystemWritableFileStream
+			const writtenChunks: Uint8Array[] = [];
+			let streamClosed = false;
+			const mockWritable = {
+				write: async (chunk: Uint8Array) => {
+					writtenChunks.push(new Uint8Array(chunk));
+				},
+				close: async () => {
+					streamClosed = true;
+				}
+			};
+
+			const mockHandle = {
+				createWritable: async () => mockWritable
+			};
+
+			let suggestedNameReceived = '';
+			const mockSavePicker = async (options?: any) => {
+				suggestedNameReceived = options?.suggestedName || '';
+				return mockHandle;
+			};
+
+			const receiver = new FileReceiver({
+				webRtcManager: manager,
+				showSaveFilePicker: mockSavePicker
+			});
+
+			// 1. Sender offers file
+			await receiver.handleControlMessage('peer-sender', {
+				type: 'file-meta',
+				transferId: 'trans-stream-1',
+				fileName: 'video.mp4',
+				fileSize: 32 * 1024,
+				fileType: 'video/mp4',
+				chunkSize: 16 * 1024,
+				totalChunks: 2,
+				sender: 'sender-alice',
+				senderPeerId: 'peer-sender',
+				timestamp: Date.now()
+			});
+
+			const offered = receiver.getTransfer('trans-stream-1');
+			assert.ok(offered);
+			assert.equal(offered.fileName, 'video.mp4');
+			assert.equal(offered.status, 'offered');
+
+			// 2. User accepts with File System Access API
+			await receiver.acceptWithFileSystem('trans-stream-1');
+
+			assert.equal(suggestedNameReceived, 'video.mp4');
+			assert.equal(offered.status, 'receiving');
+			assert.equal(offered.storageMode, 'filesystem');
+
+			// Check that file-ready message was encrypted and sent across data channel
+			assert.equal(dc.sentPackets.length, 1);
+			const decrypted = await decryptChunk(testKey, dc.sentPackets[0] as ArrayBuffer);
+			const sentPayloadStr = new TextDecoder().decode(decrypted);
+			assert.ok(sentPayloadStr.includes('file-ready'));
+			assert.ok(sentPayloadStr.includes('trans-stream-1'));
+
+			// 3. Ingest chunk 0 directly
+			const chunk0Data = new Uint8Array(16 * 1024).fill(0xaa);
+			await receiver.handleBinaryChunk({
+				transferId: 'trans-stream-1',
+				chunkIndex: 0,
+				totalChunks: 2,
+				data: chunk0Data
+			});
+
+			assert.equal(writtenChunks.length, 1);
+			assert.equal(writtenChunks[0].byteLength, 16 * 1024);
+			assert.equal(offered.receivedChunks, 1);
+			assert.equal(offered.bytesReceived, 16 * 1024);
+			assert.equal(streamClosed, false);
+
+			// 4. Ingest chunk 1 (final chunk)
+			const chunk1Data = new Uint8Array(16 * 1024).fill(0xbb);
+			await receiver.handleBinaryChunk({
+				transferId: 'trans-stream-1',
+				chunkIndex: 1,
+				totalChunks: 2,
+				data: chunk1Data
+			});
+
+			assert.equal(writtenChunks.length, 2);
+			assert.equal(offered.receivedChunks, 2);
+			assert.equal(offered.status, 'completed');
+			assert.equal(streamClosed, true);
+
+			// Check completed records
+			const completed = receiver.getCompletedRecords();
+			assert.equal(completed.length, 1);
+			assert.equal(completed[0].fileName, 'video.mp4');
+			assert.equal(completed[0].storageMode, 'filesystem');
+
+			manager.destroy();
+		});
+
+		test('aborting transfer closes and cleans up filesystem stream', async () => {
+			let rawPc: MockBackpressureRTCPeerConnection | null = null;
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					rawPc = new MockBackpressureRTCPeerConnection(cfg);
+					return rawPc as unknown as RTCPeerConnection;
+				}
+			});
+
+			await manager.getOrCreateSession('peer-sender', true);
+			const dc = rawPc!.localDataChannels[0];
+			dc.open();
+
+			let streamAborted = false;
+			const mockWritable = {
+				write: async () => {},
+				abort: async () => {
+					streamAborted = true;
+				}
+			};
+
+			const receiver = new FileReceiver({
+				webRtcManager: manager,
+				showSaveFilePicker: async () => ({ createWritable: async () => mockWritable })
+			});
+
+			await receiver.handleControlMessage('peer-sender', {
+				type: 'file-meta',
+				transferId: 'trans-abort-1',
+				fileName: 'test.bin',
+				fileSize: 16 * 1024,
+				fileType: 'application/octet-stream',
+				chunkSize: 16 * 1024,
+				totalChunks: 1,
+				sender: 'sender',
+				senderPeerId: 'peer-sender',
+				timestamp: Date.now()
+			});
+
+			await receiver.acceptWithFileSystem('trans-abort-1');
+			await receiver.abortTransfer('trans-abort-1', 'Aborted by user');
+
+			assert.equal(streamAborted, true);
+			const t = receiver.getTransfer('trans-abort-1')!;
+			assert.equal(t.status, 'cancelled');
+
+			manager.destroy();
+		});
+	});
 });
+
