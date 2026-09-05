@@ -2,7 +2,7 @@
 // Feature specifications grid for FastChat Room
 ---
 
-<section class="border-b border-[#262626] bg-[#0a0a0a] py-16 px-4 sm:px-6">
+<section class="border-b border-[#262626] bg-[#0a0a0a] py-16 px-4 sm:px-6 relative">
 	<div class="max-w-6xl mx-auto">
 		<div class="mb-10 text-left">
 			<div class="text-xs text-[#ccff00] font-mono tracking-widest uppercase mb-2">SYSTEM SPECIFICATIONS</div>
@@ -17,7 +17,8 @@
 
 		<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
 			<!-- Feature 1: No Signup Chat -->
-			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors">
+			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors relative overflow-hidden group">
+				<div class="h-1 w-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors mb-4"></div>
 				<div>
 					<div class="flex items-center justify-between text-xs text-zinc-500 font-mono mb-4">
 						<span>SPEC 01</span>
@@ -29,13 +30,14 @@
 						share the link, and begin conversing in seconds.
 					</p>
 				</div>
-				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono">
+				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono bg-[#0e0e10] p-2">
 					AUTH: NONE // DATABASE: NONE
 				</div>
 			</div>
 
 			<!-- Feature 2: Quick File Transfer -->
-			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors">
+			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors relative overflow-hidden group">
+				<div class="h-1 w-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors mb-4"></div>
 				<div>
 					<div class="flex items-center justify-between text-xs text-zinc-500 font-mono mb-4">
 						<span>SPEC 02</span>
@@ -47,13 +49,14 @@
 						at local wire speed without hitting external storage or server quotas.
 					</p>
 				</div>
-				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono">
+				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono bg-[#0e0e10] p-2">
 					THROUGHPUT: DIRECT P2P // CLOUD: BYPASSED
 				</div>
 			</div>
 
 			<!-- Feature 3: Ephemeral Chat Lifecycle -->
-			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors">
+			<div class="border border-[#262626] bg-[#121212] p-6 flex flex-col justify-between hover:border-[#3f3f46] transition-colors relative overflow-hidden group">
+				<div class="h-1 w-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors mb-4"></div>
 				<div>
 					<div class="flex items-center justify-between text-xs text-zinc-500 font-mono mb-4">
 						<span>SPEC 03</span>
@@ -65,7 +68,7 @@
 						are dropped and all in-memory buffers are flushed immediately.
 					</p>
 				</div>
-				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono">
+				<div class="mt-6 pt-4 border-t border-[#1f1f23] text-[11px] text-zinc-500 font-mono bg-[#0e0e10] p-2">
 					LIFECYCLE: AUTO-TERMINATION // PERSISTENCE: 0%
 				</div>
 			</div>

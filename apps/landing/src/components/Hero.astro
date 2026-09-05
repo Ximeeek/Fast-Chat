@@ -2,10 +2,13 @@
 // Hero component for FastChat Room landing page
 ---
 
-<section class="relative border-b border-[#262626] bg-[#0a0a0a] pt-16 pb-20 px-4 sm:px-6">
-	<div class="max-w-4xl mx-auto text-left">
-		<!-- Protocol badge -->
-		<div class="inline-flex items-center gap-2 border border-[#3f3f46] bg-[#121212] px-3 py-1 text-xs text-zinc-400 font-mono mb-6">
+<section class="relative border-b border-[#262626] bg-[#0a0a0a] bg-diagonal-stripes pt-16 pb-20 px-4 sm:px-6 overflow-hidden">
+	<!-- Subtle ambient glow matching neon accent -->
+	<div class="absolute top-0 right-1/4 w-96 h-96 bg-[#ccff00]/5 blur-3xl pointer-events-none"></div>
+
+	<div class="max-w-4xl mx-auto text-left relative z-10">
+		<!-- Protocol badge with hazard stripes framing -->
+		<div class="inline-flex items-center gap-2 border border-[#3f3f46] bg-[#121212] px-3 py-1 text-xs text-zinc-400 font-mono mb-6 shadow-sm">
 			<span class="text-[#ccff00]">●</span>
 			<span>ZERO-SIGNUP EPHEMERAL WEBRTC DATACHANNEL MESH</span>
 		</div>
@@ -24,40 +27,40 @@
 			disappears permanently.
 		</p>
 
-		<!-- Primary Action Box -->
+		<!-- Primary Action Box with diagonal stripe accent frame -->
 		<div class="mt-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
 			<a
 				href="/create"
-				class="inline-flex items-center justify-center gap-3 px-8 py-4 text-base font-bold bg-[#ccff00] text-black hover:bg-[#b8e600] active:scale-[0.99] transition-all border border-[#ccff00] uppercase tracking-wider shadow-[0_0_20px_rgba(204,255,0,0.15)]"
+				class="inline-flex items-center justify-center gap-3 px-8 py-4 text-base font-bold bg-[#ccff00] text-black hover:bg-[#b8e600] active:scale-[0.99] transition-all border border-[#ccff00] uppercase tracking-wider shadow-[0_0_20px_rgba(204,255,0,0.15)] group"
 			>
 				<span>CREATE ROOM</span>
-				<span class="text-lg">→</span>
+				<span class="text-lg group-hover:translate-x-1 transition-transform">→</span>
 			</a>
 
-			<div class="flex items-center gap-3 px-4 py-3 border border-[#262626] bg-[#121212] text-xs text-zinc-400 font-mono">
-				<span class="text-zinc-600">ID:</span>
-				<span class="text-zinc-200">Instant generation</span>
+			<div class="flex items-center gap-3 px-4 py-3 border border-[#262626] bg-[#121212] bg-diagonal-stripes-accent text-xs text-zinc-400 font-mono">
+				<span class="text-zinc-500 font-bold">MODE:</span>
+				<span class="text-zinc-200">EPHEMERAL</span>
 				<span class="text-zinc-600">|</span>
-				<span class="text-zinc-600">STORAGE:</span>
-				<span class="text-[#ccff00]">RAM ONLY</span>
+				<span class="text-zinc-500 font-bold">PERSISTENCE:</span>
+				<span class="text-[#ccff00] font-bold">0% RAM ONLY</span>
 			</div>
 		</div>
 
 		<!-- Technical keyword tags -->
 		<div class="mt-12 pt-8 border-t border-[#1f1f23] grid grid-cols-2 sm:grid-cols-4 gap-3">
-			<div class="border border-[#262626] bg-[#121212] p-3 text-left">
+			<div class="border border-[#262626] bg-[#121212] p-3 text-left hover:border-[#3f3f46] transition-colors">
 				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">ACCESS</div>
 				<div class="text-xs font-bold text-zinc-200 mt-1 font-mono">No Signup Chat</div>
 			</div>
-			<div class="border border-[#262626] bg-[#121212] p-3 text-left">
+			<div class="border border-[#262626] bg-[#121212] p-3 text-left hover:border-[#3f3f46] transition-colors">
 				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">SECURITY</div>
 				<div class="text-xs font-bold text-zinc-200 mt-1 font-mono">Encrypted P2P Chat</div>
 			</div>
-			<div class="border border-[#262626] bg-[#121212] p-3 text-left">
+			<div class="border border-[#262626] bg-[#121212] p-3 text-left hover:border-[#3f3f46] transition-colors">
 				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">TRANSFER</div>
 				<div class="text-xs font-bold text-zinc-200 mt-1 font-mono">Quick File Transfer</div>
 			</div>
-			<div class="border border-[#262626] bg-[#121212] p-3 text-left">
+			<div class="border border-[#262626] bg-[#121212] p-3 text-left hover:border-[#3f3f46] transition-colors">
 				<div class="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">LIFECYCLE</div>
 				<div class="text-xs font-bold text-zinc-200 mt-1 font-mono">Ephemeral Chat</div>
 			</div>

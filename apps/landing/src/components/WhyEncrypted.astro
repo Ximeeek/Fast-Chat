@@ -2,8 +2,11 @@
 // "Why Encrypted" security and privacy architecture breakdown
 ---
 
-<section class="border-b border-[#262626] bg-[#0d0d0d] py-16 px-4 sm:px-6">
+<section class="border-b border-[#262626] bg-[#0d0d0d] py-16 px-4 sm:px-6 relative">
 	<div class="max-w-6xl mx-auto">
+		<!-- Section header decorative hazard stripe divider -->
+		<div class="w-full h-1 hazard-stripes-dark mb-10"></div>
+
 		<div class="mb-12 text-left">
 			<div class="inline-flex items-center gap-2 border border-[#3f3f46] bg-[#121212] px-2.5 py-1 text-xs text-[#ccff00] font-mono mb-3">
 				<span>SECURITY &amp; PRIVACY ARCHITECTURE</span>
@@ -19,8 +22,9 @@
 
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
 			<!-- Pillar 1: Zero Server Logs -->
-			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between">
-				<div>
+			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between relative group">
+				<div class="absolute top-0 left-0 w-1 h-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors"></div>
+				<div class="pl-2">
 					<div class="flex items-center justify-between font-mono text-xs text-zinc-500 mb-3">
 						<span class="text-[#ccff00]">PILLAR 01</span>
 						<span>SIGNALING LAYER</span>
@@ -34,15 +38,16 @@
 						pepper and HMAC-hashed in RAM — never written to disk, database, or persistent log files.
 					</p>
 				</div>
-				<div class="mt-6 pt-3 border-t border-[#1f1f23] flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+				<div class="mt-6 pt-3 border-t border-[#1f1f23] pl-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
 					<span>DISK WRITES: 0 BYTES</span>
 					<span class="text-zinc-400">RAM FLUSH: INSTANT</span>
 				</div>
 			</div>
 
 			<!-- Pillar 2: End-to-End Encryption -->
-			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between">
-				<div>
+			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between relative group">
+				<div class="absolute top-0 left-0 w-1 h-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors"></div>
+				<div class="pl-2">
 					<div class="flex items-center justify-between font-mono text-xs text-zinc-500 mb-3">
 						<span class="text-[#ccff00]">PILLAR 02</span>
 						<span>CRYPTOGRAPHIC CORE</span>
@@ -56,15 +61,16 @@
 						Neither our signaling service nor intermediate TURN relays ever hold keys or have access to plaintext data.
 					</p>
 				</div>
-				<div class="mt-6 pt-3 border-t border-[#1f1f23] flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+				<div class="mt-6 pt-3 border-t border-[#1f1f23] pl-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
 					<span>CIPHER: AES-256-GCM</span>
 					<span class="text-zinc-400">KEY HOLDER: BROWSER ONLY</span>
 				</div>
 			</div>
 
 			<!-- Pillar 3: Guaranteed Auto-Deletion -->
-			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between">
-				<div>
+			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between relative group">
+				<div class="absolute top-0 left-0 w-1 h-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors"></div>
+				<div class="pl-2">
 					<div class="flex items-center justify-between font-mono text-xs text-zinc-500 mb-3">
 						<span class="text-[#ccff00]">PILLAR 03</span>
 						<span>LIFECYCLE ENGINE</span>
@@ -78,15 +84,16 @@
 						and cryptographic session keys are erased from browser memory. There are no archives, no trash bins, and no backups.
 					</p>
 				</div>
-				<div class="mt-6 pt-3 border-t border-[#1f1f23] flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+				<div class="mt-6 pt-3 border-t border-[#1f1f23] pl-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
 					<span>PERSISTENCE: 0%</span>
 					<span class="text-zinc-400">EXPIRATION: ENFORCED</span>
 				</div>
 			</div>
 
 			<!-- Pillar 4: Zero Accounts & Identity -->
-			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between">
-				<div>
+			<div class="border border-[#262626] bg-[#121212] p-6 hover:border-[#3f3f46] transition-colors flex flex-col justify-between relative group">
+				<div class="absolute top-0 left-0 w-1 h-full bg-[#262626] group-hover:bg-[#ccff00] transition-colors"></div>
+				<div class="pl-2">
 					<div class="flex items-center justify-between font-mono text-xs text-zinc-500 mb-3">
 						<span class="text-[#ccff00]">PILLAR 04</span>
 						<span>IDENTITY MODEL</span>
@@ -100,15 +107,15 @@
 						within the room lifecycle, leaving no traceable identity graph behind.
 					</p>
 				</div>
-				<div class="mt-6 pt-3 border-t border-[#1f1f23] flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+				<div class="mt-6 pt-3 border-t border-[#1f1f23] pl-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
 					<span>COOKIES: ZERO</span>
 					<span class="text-zinc-400">FINGERPRINTING: DISABLED</span>
 				</div>
 			</div>
 		</div>
 
-		<!-- Architectural trust summary badge -->
-		<div class="mt-8 border border-[#262626] bg-[#121212] p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono text-xs text-zinc-400">
+		<!-- Architectural trust summary badge with diagonal stripe background -->
+		<div class="mt-8 border border-[#262626] bg-[#121212] bg-diagonal-stripes p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono text-xs text-zinc-400">
 			<div class="flex items-center gap-3">
 				<span class="text-[#ccff00] text-base">🛡</span>
 				<span>

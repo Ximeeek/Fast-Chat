@@ -13,7 +13,7 @@
 	--color-accent-hover: #b8e600;
 }
 
-/* Force sharp rectangular shapes - zero border-radius across entire application */
+/* Force sharp rectangular shapes - zero border-radius across entire landing application */
 *, *::before, *::after {
 	border-radius: 0 !important;
 }
@@ -46,4 +46,45 @@ html, body {
 		transition-duration: 0.01ms !important;
 		scroll-behavior: auto !important;
 	}
+}
+
+/* Industrial diagonal stripe textures (landing page exclusive) */
+.bg-diagonal-stripes {
+	background-image: repeating-linear-gradient(
+		-45deg,
+		rgba(255, 255, 255, 0.02) 0,
+		rgba(255, 255, 255, 0.02) 1px,
+		transparent 1px,
+		transparent 10px
+	);
+}
+
+.bg-diagonal-stripes-accent {
+	background-image: repeating-linear-gradient(
+		-45deg,
+		rgba(204, 255, 0, 0.04) 0,
+		rgba(204, 255, 0, 0.04) 2px,
+		transparent 2px,
+		transparent 12px
+	);
+}
+
+.hazard-stripes-accent {
+	background: repeating-linear-gradient(
+		-45deg,
+		#ccff00 0,
+		#ccff00 8px,
+		#0a0a0a 8px,
+		#0a0a0a 16px
+	);
+}
+
+.hazard-stripes-dark {
+	background: repeating-linear-gradient(
+		-45deg,
+		#262626 0,
+		#262626 6px,
+		#121212 6px,
+		#121212 12px
+	);
 }
