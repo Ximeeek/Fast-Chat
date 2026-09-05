@@ -22,6 +22,23 @@ pub async fn ws_handler(
     client_ip: crate::limiter::ClientIp,
     State(state): State<AppState>,
 ) -> axum::response::Response {
+    // 1. Check global concurrent connection ceiling
+    let connection_guard = match state.limiter.ceiling.acquire_connection() {
+        Ok(guard) => guard,
+        Err(msg) => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/json".to_string()),
+                    (axum::http::header::RETRY_AFTER, "30".to_string()),
+                ],
+                format!(r#"{{"error":"SERVER_BUSY","message":"{msg}"}}"#),
+            )
+                .into_response();
+        }
+    };
+
+    // 2. Check connection attempt rate limit and exponential backoff
     let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
     if let Err(retry_after) = state.limiter.connection.check_and_record(&rate_key) {
         return (
@@ -37,7 +54,7 @@ pub async fn ws_handler(
         )
             .into_response();
     }
-    ws.on_upgrade(move |socket| handle_socket(socket, state, rate_key))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, rate_key, connection_guard))
         .into_response()
 }
 
@@ -50,7 +67,12 @@ fn generate_peer_id() -> String {
 }
 
 /// Main socket loop handling inbound frames and outbound channel dispatches.
-pub async fn handle_socket(mut socket: WebSocket, state: AppState, rate_key: crate::limiter::RateKey) {
+pub async fn handle_socket(
+    mut socket: WebSocket,
+    state: AppState,
+    rate_key: crate::limiter::RateKey,
+    _connection_guard: crate::limiter::ConnectionGuard,
+) {
     debug!("Incoming WebSocket connection accepted");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
@@ -155,6 +177,12 @@ async fn handle_client_message(
                     "ALREADY_IN_ROOM",
                     "Socket is already registered in a room",
                 ));
+                return;
+            }
+
+            let current_rooms = state.room_manager.room_count();
+            if let Err(msg) = state.limiter.ceiling.check_room_capacity(current_rooms) {
+                let _ = tx.send(ServerMessage::error("SERVER_BUSY", msg));
                 return;
             }
 

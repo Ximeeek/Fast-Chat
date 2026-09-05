@@ -61,6 +61,11 @@ async fn create_room_handler(
     State(state): State<AppState>,
     body: Option<Json<CreateRoomRequest>>,
 ) -> Result<(StatusCode, Json<CreateRoomResponse>), (StatusCode, String)> {
+    let current_rooms = state.room_manager.room_count();
+    if let Err(msg) = state.limiter.ceiling.check_room_capacity(current_rooms) {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, msg.to_string()));
+    }
+
     let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
     if let Err(retry_after) = state.limiter.room_creation.check_and_record(&rate_key) {
         return Err((
