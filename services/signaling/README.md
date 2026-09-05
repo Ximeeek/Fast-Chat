@@ -1,6 +1,6 @@
 # services/signaling
 
-Podprojekt dla serwera sygnalizacyjnego WebRTC projektu **FastChat Room**.
+Subproject for the WebRTC signaling service of **FastChat Room**.
 
-- **Technologia:** Rust + axum (planowana inicjalizacja w Fazach 2–5)
-- **Przeznaczenie:** Minimalny, wysoce wydajny serwer WebSocket pośredniczący wyłącznie w wymianie SDP offer/answer oraz kandydatów ICE pomiędzy peerami przed nawiązaniem bezpośredniego połączenia P2P.
+- **Technology:** Rust + axum (planned initialization in Phases 2–5)
+- **Purpose:** Minimal, high-performance WebSocket server strictly facilitating SDP offer/answer exchange and ICE candidate relay between peers before direct P2P connections are established.

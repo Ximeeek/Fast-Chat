@@ -1,16 +1,16 @@
 # FastChat Room
 
-> Anonimowy, efemeryczny pokój czatu P2P z transferem plików — zero logowania, zero serwerowego kosztu, zero śladu.
+> Anonymous, ephemeral P2P chat room with file transfer — zero login, zero server cost, zero footprint.
 
-## Struktura projektu (Monorepo)
+## Project Structure (Monorepo)
 
-Projekt jest zorganizowany jako monorepo składające się z trzech niezależnych podprojektów:
+This repository is organized as a monorepo containing three independent subprojects:
 
-- **`apps/landing`** — Strona główna / landing page projektu (planowana implementacja: Astro, Faza 12). Odpowiada za prezentację rozwiązania i szybkie generowanie linku do nowego pokoju.
-- **`apps/room`** — Główna aplikacja kliencka pokoju czatu (planowana implementacja: SvelteKit, Fazy 6–11). Odpowiada za interfejs czatu, negocjację połączeń P2P WebRTC (DataChannel), efemeryczny czat tekstowy oraz bezpośredni transfer plików w przeglądarce.
-- **`services/signaling`** — Serwer sygnalizacyjny WebRTC (planowana implementacja: Rust + axum, Fazy 2–5). Odpowiada za wymianę danych sygnalizacyjnych (SDP offer/answer oraz kandydatów ICE) przez WebSocket przed zestawieniem bezpośredniego połączenia P2P.
+- **`apps/landing`** — Public landing page (planned implementation: Astro, Phase 12). Responsible for product presentation and instant room link generation.
+- **`apps/room`** — Main P2P chat room client application (planned implementation: SvelteKit, Phases 6–11). Responsible for chat UI, WebRTC DataChannel P2P negotiation, ephemeral in-memory text chat, and browser-to-browser direct file transfer.
+- **`services/signaling`** — Lightweight WebRTC signaling service (planned implementation: Rust + axum, Phases 2–5). Responsible for relaying WebSocket signaling payloads (SDP offer/answer and ICE candidates) between peers before direct P2P connections are established.
 
 ## Status
 
-**Status: w budowie**
-Aktualnie zrealizowano Fazę 1 (inicjalizacja repozytorium oraz struktury monorepo).
+**Status: Under Construction**  
+Phase 1 (Monorepo scaffolding and repository initialization) completed.

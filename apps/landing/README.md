@@ -1,6 +1,6 @@
 # apps/landing
 
-Podprojekt dla publicznej strony landing page projektu **FastChat Room**.
+Subproject for the public landing page of **FastChat Room**.
 
-- **Technologia:** Astro (planowana inicjalizacja w Fazie 12)
-- **Przeznaczenie:** Prezentacja projektu, wprowadzenie użytkownika, generowanie linku do pokoju i przekierowanie do aplikacji `apps/room`.
+- **Technology:** Astro (planned initialization in Phase 12)
+- **Purpose:** Project showcase, user onboarding, instant room creation, and navigation to the `apps/room` client application.
