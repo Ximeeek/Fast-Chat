@@ -1,0 +1,13 @@
+{
+  "name": "fastchat-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-pages.mjs",
+    "build:landing": "npm --prefix apps/landing run build",
+    "build:room": "npm --prefix apps/room run build",
+    "build:pages": "node scripts/build-pages.mjs",
+    "test:room": "npm --prefix apps/room test"
+  }
+}
