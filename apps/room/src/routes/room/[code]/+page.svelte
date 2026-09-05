@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { signalingClient } from '$lib/signaling/client';
+	import { webRtcManager } from '$lib/webrtc';
 	import { roomStore, isRoomActive, peerCount } from '$lib/stores/room';
 	import { validateRoomCode } from '$lib/utils/roomCode';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
@@ -73,18 +74,32 @@
 	}
 
 	function leaveRoom() {
+		webRtcManager.disconnectAll();
 		signalingClient.disconnect();
 		roomStore.reset();
 		goto('/create');
 	}
 
 	onMount(() => {
+		webRtcManager.init();
 		timerInterval = setInterval(() => {
 			now = Math.floor(Date.now() / 1000);
 		}, 1000);
 
 		if (!isValidCode) {
 			return;
+		}
+
+		// Handle signaling events for room closure
+		const unsubClosed = signalingClient.on('ROOM_CLOSED', () => {
+			leaveRoom();
+		});
+
+		// Auto-connect if not connected
+		if (!signalingClient.isConnected()) {
+			signalingClient.connect().catch((err) => {
+				console.error('Signaling connection error:', err);
+			});
 		}
 
 		// Listen to incoming signaling messages for activity feed and WebRTC prep
@@ -137,6 +152,7 @@
 	});
 
 	onDestroy(() => {
+		webRtcManager.disconnectAll();
 		if (timerInterval) {
 			clearInterval(timerInterval);
 		}

@@ -1,3 +1,5 @@
+import { encryptChunk, decryptChunk } from '../crypto/cipher.ts';
+import { inspectCandidatePair } from './stats.ts';
 import type {
 	PeerConnectionSessionOptions,
 	PeerConnectionState,
@@ -9,7 +11,7 @@ import type {
 /**
  * Encapsulates an individual RTCPeerConnection and its associated binary RTCDataChannel.
  * Implements W3C Perfect Negotiation to reliably resolve offer/answer collisions (glare)
- * and trickle ICE candidate queuing until remote descriptions are established.
+ * and guarantees authenticated, end-to-end encrypted chunk transmission via AES-256-GCM.
  */
 export class PeerConnectionSession {
 	public readonly localPeerId: string;
@@ -20,6 +22,7 @@ export class PeerConnectionSession {
 	private pc: RTCPeerConnection;
 	private dataChannel: RTCDataChannel | null = null;
 	private options: PeerConnectionSessionOptions;
+	private activeKey: CryptoKey | null = null;
 
 	private connectionState: PeerConnectionState = 'connecting';
 	private connectionType: ConnectionType = 'unknown';
@@ -39,6 +42,7 @@ export class PeerConnectionSession {
 		this.isInitiator = options.isInitiator !== undefined
 			? options.isInitiator
 			: this.localPeerId.localeCompare(this.remotePeerId) < 0;
+		this.activeKey = options.activeKey || null;
 
 		// Deterministic politeness tie-breaker: impolite peer initiates, polite peer responds
 		this.isPolite = !this.isInitiator;
@@ -61,113 +65,40 @@ export class PeerConnectionSession {
 
 		this.setupPeerConnectionEvents();
 
-		// Initiator proactively creates binary DataChannel
+		// Designated initiator creates binary DataChannel
 		if (this.isInitiator) {
 			try {
-				const dc = this.pc.createDataChannel('fastchat-data', {
-					ordered: true
-				});
-				this.setupDataChannel(dc);
+				const channel = this.pc.createDataChannel('fastchat-data', { ordered: true });
+				this.setupDataChannel(channel);
 			} catch (err) {
-				console.error(`[PeerSession:${this.remotePeerId}] Failed to create data channel:`, err);
-				options.onError?.(err instanceof Error ? err : new Error(String(err)));
+				this.notifyError(err instanceof Error ? err : new Error(String(err)));
 			}
 		}
 	}
 
-	private setupPeerConnectionEvents(): void {
-		this.pc.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
-			if (event.candidate && !this.isClosed) {
-				const candidateStr = event.candidate.candidate;
-				// RFC 8445 loopback candidate filtering
-				if (
-					candidateStr.includes(' 127.0.0.1 ') ||
-					candidateStr.includes(' ::1 ') ||
-					candidateStr.includes('.localhost ')
-				) {
-					return;
-				}
-				this.options.onIceCandidate(event.candidate.toJSON());
-			}
-		};
-
-		this.pc.onconnectionstatechange = () => {
-			if (this.isClosed) return;
-			const pcState = this.pc.connectionState;
-			if (pcState === 'connected') {
-				this.connectionState = 'connected';
-			} else if (pcState === 'connecting') {
-				this.connectionState = 'connecting';
-			} else if (pcState === 'disconnected') {
-				this.connectionState = 'disconnected';
-			} else if (pcState === 'failed') {
-				this.connectionState = 'failed';
-			} else if (pcState === 'closed') {
-				this.connectionState = 'closed';
-			}
-			this.options.onConnectionStateChange?.(this.connectionState);
-		};
-
-		this.pc.oniceconnectionstatechange = () => {
-			if (this.isClosed) return;
-			const iceState = this.pc.iceConnectionState;
-			if (iceState === 'disconnected') {
-				this.connectionState = 'disconnected';
-				this.options.onConnectionStateChange?.(this.connectionState);
-			} else if (iceState === 'failed') {
-				this.connectionState = 'failed';
-				this.options.onConnectionStateChange?.(this.connectionState);
-			}
-		};
-
-		this.pc.ondatachannel = (event: RTCDataChannelEvent) => {
-			if (this.isClosed) return;
-			this.setupDataChannel(event.channel);
-		};
-
-		this.pc.onnegotiationneeded = async () => {
-			if (this.isClosed) return;
-			this.options.onNegotiationNeeded?.();
-		};
-	}
-
-	private setupDataChannel(dc: RTCDataChannel): void {
-		this.dataChannel = dc;
-		this.dataChannel.binaryType = 'arraybuffer';
-
-		this.dataChannel.onopen = () => {
-			if (this.isClosed) return;
-			this.dataChannelState = 'open';
-			this.options.onDataChannelStateChange?.('open');
-		};
-
-		this.dataChannel.onclose = () => {
-			if (this.isClosed) return;
-			this.dataChannelState = 'closed';
-			this.options.onDataChannelStateChange?.('closed');
-		};
-
-		this.dataChannel.onerror = (ev) => {
-			console.warn(`[PeerSession:${this.remotePeerId}] DataChannel error:`, ev);
-			this.options.onError?.(new Error('RTCDataChannel error'));
-		};
+	/**
+	 * Sets or updates the active room AES-GCM encryption key (K0 or rekeyed K1).
+	 */
+	public setEncryptionKey(key: CryptoKey | null): void {
+		this.activeKey = key;
 	}
 
 	/**
-	 * Generates and applies the initial local SDP offer.
+	 * Creates an initial SDP offer if this peer is the designated initiator.
 	 */
 	public async createInitialOffer(): Promise<RTCSessionDescriptionInit | null> {
 		if (this.isClosed || this.hasCreatedOffer) return null;
 		this.hasCreatedOffer = true;
-
 		try {
 			this.makingOffer = true;
 			const offer = await this.pc.createOffer();
 			await this.pc.setLocalDescription(offer);
-			return this.pc.localDescription || offer;
+			return this.pc.localDescription ? {
+				type: this.pc.localDescription.type,
+				sdp: this.pc.localDescription.sdp
+			} : null;
 		} catch (err) {
-			console.error(`[PeerSession:${this.remotePeerId}] Failed to create initial offer:`, err);
-			this.options.onError?.(err instanceof Error ? err : new Error(String(err)));
+			this.notifyError(err instanceof Error ? err : new Error(String(err)));
 			return null;
 		} finally {
 			this.makingOffer = false;
@@ -175,110 +106,133 @@ export class PeerConnectionSession {
 	}
 
 	/**
-	 * Processes a remote SDP offer adhering to the W3C Perfect Negotiation pattern.
+	 * Processes an incoming SDP offer from the remote peer, performing perfect negotiation
+	 * collision resolution and generating an SDP answer.
 	 */
-	public async handleRemoteOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit | null> {
+	public async handleRemoteOffer(
+		offer: RTCSessionDescriptionInit
+	): Promise<RTCSessionDescriptionInit | null> {
 		if (this.isClosed) return null;
 
+		const readyState = this.pc.signalingState;
+		const offerCollision = this.makingOffer || readyState !== 'stable';
+
+		this.ignoreOffer = !this.isPolite && offerCollision;
+		if (this.ignoreOffer) {
+			return null;
+		}
+
 		try {
-			const offerCollision =
-				this.makingOffer || this.pc.signalingState !== 'stable';
-
-			this.ignoreOffer = !this.isPolite && offerCollision;
-			if (this.ignoreOffer) {
-				console.warn(`[PeerSession:${this.remotePeerId}] Impolite peer ignoring colliding offer (glare)`);
-				return null;
-			}
-
-			if (offerCollision) {
+			if (offerCollision && this.isPolite) {
 				await this.pc.setLocalDescription({ type: 'rollback' });
 			}
 
-			await this.pc.setRemoteDescription(offer);
-			await this.drainBufferedIceCandidates();
+			const desc = typeof RTCSessionDescription !== 'undefined'
+				? new RTCSessionDescription(offer)
+				: offer;
+
+			await this.pc.setRemoteDescription(desc);
 
 			const answer = await this.pc.createAnswer();
 			await this.pc.setLocalDescription(answer);
-			return this.pc.localDescription || answer;
+			await this.flushBufferedCandidates();
+
+			return this.pc.localDescription ? {
+				type: this.pc.localDescription.type,
+				sdp: this.pc.localDescription.sdp
+			} : null;
 		} catch (err) {
-			console.error(`[PeerSession:${this.remotePeerId}] Error handling remote offer:`, err);
-			this.options.onError?.(err instanceof Error ? err : new Error(String(err)));
+			this.notifyError(err instanceof Error ? err : new Error(String(err)));
 			return null;
 		}
 	}
 
 	/**
-	 * Processes a remote SDP answer completing the offer/answer handshake.
+	 * Processes an incoming SDP answer from the remote peer.
 	 */
 	public async handleRemoteAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
 		if (this.isClosed) return;
 
 		try {
 			this.isSettingRemoteAnswerPending = true;
-			await this.pc.setRemoteDescription(answer);
-			await this.drainBufferedIceCandidates();
+			const desc = typeof RTCSessionDescription !== 'undefined'
+				? new RTCSessionDescription(answer)
+				: answer;
+
+			await this.pc.setRemoteDescription(desc);
+			await this.flushBufferedCandidates();
 		} catch (err) {
-			console.error(`[PeerSession:${this.remotePeerId}] Error handling remote answer:`, err);
-			this.options.onError?.(err instanceof Error ? err : new Error(String(err)));
+			this.notifyError(err instanceof Error ? err : new Error(String(err)));
 		} finally {
 			this.isSettingRemoteAnswerPending = false;
 		}
 	}
 
 	/**
-	 * Buffers or adds an incoming remote trickle ICE candidate.
+	 * Ingests an ICE candidate received over signaling, buffering it until the
+	 * remote description has been applied.
 	 */
 	public async addRemoteIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
-		if (this.isClosed) return;
+		if (this.isClosed || !candidate || !candidate.candidate) return;
 
-		const candidateStr = candidate.candidate || '';
+		const candStr = candidate.candidate;
 		if (
-			candidateStr.includes(' 127.0.0.1 ') ||
-			candidateStr.includes(' ::1 ') ||
-			candidateStr.includes('.localhost ')
+			candStr &&
+			(candStr.includes(' 127.0.0.1 ') ||
+				candStr.includes(' ::1 ') ||
+				candStr.includes(' localhost '))
 		) {
 			return;
 		}
 
-		if (!this.pc.remoteDescription || this.isSettingRemoteAnswerPending) {
-			this.bufferedIceCandidates.push(candidate);
-			return;
-		}
-
-		try {
-			await this.pc.addIceCandidate(candidate);
-		} catch (err) {
-			if (!this.ignoreOffer) {
-				console.warn(`[PeerSession:${this.remotePeerId}] Error adding ICE candidate:`, err);
-			}
-		}
-	}
-
-	private async drainBufferedIceCandidates(): Promise<void> {
-		if (this.bufferedIceCandidates.length === 0 || !this.pc.remoteDescription) return;
-
-		const candidatesToDrain = [...this.bufferedIceCandidates];
-		this.bufferedIceCandidates = [];
-
-		for (const cand of candidatesToDrain) {
+		if (
+			this.pc.remoteDescription &&
+			this.pc.remoteDescription.type &&
+			this.pc.localDescription &&
+			this.pc.localDescription.type
+		) {
 			try {
-				await this.pc.addIceCandidate(cand);
+				const iceCandidate = typeof RTCIceCandidate !== 'undefined'
+					? new RTCIceCandidate(candidate)
+					: (candidate as RTCIceCandidate);
+				await this.pc.addIceCandidate(iceCandidate);
 			} catch (err) {
 				if (!this.ignoreOffer) {
-					console.warn(`[PeerSession:${this.remotePeerId}] Error draining buffered ICE candidate:`, err);
+					this.notifyError(err instanceof Error ? err : new Error(String(err)));
 				}
 			}
+		} else {
+			this.bufferedIceCandidates.push(candidate);
 		}
 	}
 
-	public getPeerConnection(): RTCPeerConnection {
-		return this.pc;
+	/**
+	 * Encrypts and transmits a binary chunk or message across the RTCDataChannel.
+	 */
+	public async send(plaintext: Uint8Array | ArrayBuffer | string): Promise<void> {
+		if (this.isClosed) {
+			throw new Error(`Cannot send to peer ${this.remotePeerId}: connection closed`);
+		}
+
+		if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+			throw new Error(`DataChannel to peer ${this.remotePeerId} is not open`);
+		}
+
+		if (!this.activeKey) {
+			throw new Error(`Cannot send to peer ${this.remotePeerId}: encryption key not configured`);
+		}
+
+		const encryptedPacket = await encryptChunk(this.activeKey, plaintext);
+		const payload = encryptedPacket.buffer.slice(
+			encryptedPacket.byteOffset,
+			encryptedPacket.byteOffset + encryptedPacket.byteLength
+		) as ArrayBuffer;
+		this.dataChannel.send(payload);
 	}
 
-	public getDataChannel(): RTCDataChannel | null {
-		return this.dataChannel;
-	}
-
+	/**
+	 * Returns current serializable session snapshot.
+	 */
 	public getSessionInfo(): PeerSessionInfo {
 		return {
 			peerId: this.remotePeerId,
@@ -290,23 +244,211 @@ export class PeerConnectionSession {
 		};
 	}
 
+	/**
+	 * Closes the underlying RTCPeerConnection and RTCDataChannel.
+	 */
 	public close(): void {
 		if (this.isClosed) return;
 		this.isClosed = true;
 
+		this.bufferedIceCandidates = [];
+
 		if (this.dataChannel) {
 			try {
 				this.dataChannel.close();
-			} catch (_) {}
+			} catch {
+				// Ignore errors on close
+			}
 			this.dataChannel = null;
+			this.updateDataChannelState('closed');
 		}
 
 		try {
 			this.pc.close();
-		} catch (_) {}
+		} catch {
+			// Ignore errors on close
+		}
 
-		this.bufferedIceCandidates = [];
-		this.connectionState = 'closed';
-		this.dataChannelState = 'closed';
+		this.updateConnectionState('closed');
+	}
+
+	/**
+	 * Exposes raw RTCPeerConnection instance for diagnostics or test harnesses.
+	 */
+	public getRawPeerConnection(): RTCPeerConnection {
+		return this.pc;
+	}
+
+	/**
+	 * Exposes raw RTCDataChannel instance if instantiated.
+	 */
+	public getRawDataChannel(): RTCDataChannel | null {
+		return this.dataChannel;
+	}
+
+	private setupPeerConnectionEvents(): void {
+		this.pc.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
+			if (event.candidate) {
+				const candStr = event.candidate.candidate;
+				if (
+					candStr &&
+					(candStr.includes(' 127.0.0.1 ') ||
+						candStr.includes(' ::1 ') ||
+						candStr.includes(' localhost '))
+				) {
+					return;
+				}
+
+				const candidateInit: RTCIceCandidateInit = {
+					candidate: event.candidate.candidate,
+					sdpMid: event.candidate.sdpMid,
+					sdpMLineIndex: event.candidate.sdpMLineIndex,
+					usernameFragment: event.candidate.usernameFragment
+				};
+				this.options.onIceCandidate(candidateInit);
+			}
+		};
+
+		this.pc.onnegotiationneeded = async () => {
+			if (this.options.onNegotiationNeeded) {
+				this.options.onNegotiationNeeded();
+			}
+		};
+
+		this.pc.oniceconnectionstatechange = () => {
+			this.handleIceStateChange();
+		};
+
+		this.pc.onconnectionstatechange = () => {
+			this.handleConnectionStateChange();
+		};
+
+		this.pc.ondatachannel = (event: RTCDataChannelEvent) => {
+			this.setupDataChannel(event.channel);
+		};
+	}
+
+	private setupDataChannel(channel: RTCDataChannel): void {
+		this.dataChannel = channel;
+		this.dataChannel.binaryType = 'arraybuffer';
+		this.updateDataChannelState(channel.readyState as DataChannelState);
+
+		channel.onopen = () => {
+			this.updateDataChannelState('open');
+			this.inspectConnectionType();
+		};
+
+		channel.onclose = () => {
+			this.updateDataChannelState('closed');
+		};
+
+		channel.onerror = () => {
+			this.notifyError(new Error(`DataChannel error with peer ${this.remotePeerId}`));
+		};
+
+		channel.onmessage = async (event: MessageEvent) => {
+			await this.handleIncomingMessage(event.data);
+		};
+
+		if (channel.readyState === 'open') {
+			this.inspectConnectionType();
+		}
+	}
+
+	private async handleIncomingMessage(rawData: any): Promise<void> {
+		try {
+			let buffer: Uint8Array;
+			if (rawData instanceof ArrayBuffer) {
+				buffer = new Uint8Array(rawData);
+			} else if (rawData instanceof Uint8Array) {
+				buffer = rawData;
+			} else if (typeof Blob !== 'undefined' && rawData instanceof Blob) {
+				buffer = new Uint8Array(await rawData.arrayBuffer());
+			} else {
+				throw new Error('Unsupported binary data type received on DataChannel');
+			}
+
+			if (!this.activeKey) {
+				throw new Error('Cannot decrypt incoming chunk: encryption key is missing');
+			}
+
+			const plaintext = await decryptChunk(this.activeKey, buffer);
+			this.options.onMessage?.(plaintext);
+		} catch (err) {
+			this.notifyError(err instanceof Error ? err : new Error(String(err)));
+		}
+	}
+
+	private async flushBufferedCandidates(): Promise<void> {
+		while (this.bufferedIceCandidates.length > 0) {
+			const candidate = this.bufferedIceCandidates.shift();
+			if (candidate) {
+				try {
+					const iceCandidate = typeof RTCIceCandidate !== 'undefined'
+						? new RTCIceCandidate(candidate)
+						: (candidate as RTCIceCandidate);
+					await this.pc.addIceCandidate(iceCandidate);
+				} catch (err) {
+					if (!this.ignoreOffer) {
+						this.notifyError(err instanceof Error ? err : new Error(String(err)));
+					}
+				}
+			}
+		}
+	}
+
+	private handleIceStateChange(): void {
+		const state = this.pc.iceConnectionState;
+		if (state === 'connected' || state === 'completed') {
+			this.updateConnectionState('connected');
+			this.inspectConnectionType();
+		} else if (state === 'failed') {
+			this.updateConnectionState('failed');
+		} else if (state === 'disconnected') {
+			this.updateConnectionState('disconnected');
+		} else if (state === 'closed') {
+			this.updateConnectionState('closed');
+		}
+	}
+
+	private handleConnectionStateChange(): void {
+		const state = this.pc.connectionState;
+		if (state === 'connected') {
+			this.updateConnectionState('connected');
+			this.inspectConnectionType();
+		} else if (state === 'failed') {
+			this.updateConnectionState('failed');
+		} else if (state === 'disconnected') {
+			this.updateConnectionState('disconnected');
+		} else if (state === 'closed') {
+			this.updateConnectionState('closed');
+		}
+	}
+
+	private async inspectConnectionType(): Promise<void> {
+		if (this.isClosed) return;
+		const type = await inspectCandidatePair(this.pc);
+		if (type !== this.connectionType) {
+			this.connectionType = type;
+			this.options.onConnectionTypeChange?.(type);
+		}
+	}
+
+	private updateConnectionState(state: PeerConnectionState): void {
+		if (this.connectionState !== state) {
+			this.connectionState = state;
+			this.options.onConnectionStateChange?.(state);
+		}
+	}
+
+	private updateDataChannelState(state: DataChannelState): void {
+		if (this.dataChannelState !== state) {
+			this.dataChannelState = state;
+			this.options.onDataChannelStateChange?.(state);
+		}
+	}
+
+	private notifyError(error: Error): void {
+		this.options.onError?.(error);
 	}
 }
