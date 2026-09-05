@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::limiter::RateKey;
 use crate::room::code::RoomCode;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -127,6 +128,8 @@ pub struct RoomState {
     pub expires_at: i64,
     pub closing_deadline: Option<i64>,
     pub extension_count: u32,
+    #[serde(skip)]
+    pub creator_rate_key: Option<RateKey>,
 }
 
 impl RoomState {
@@ -135,6 +138,7 @@ impl RoomState {
     pub fn new(
         code: RoomCode,
         owner_peer_id: Option<String>,
+        creator_rate_key: Option<RateKey>,
         password_status: PasswordStatus,
         config: &Config,
         now_ts: i64,
@@ -162,7 +166,15 @@ impl RoomState {
             expires_at: now_ts + config.initial_room_duration_secs,
             closing_deadline: None,
             extension_count: 0,
+            creator_rate_key,
         }
+    }
+
+    /// Returns whether the room is actively alive (not destroyed, not in closing grace period, and unexpired).
+    pub fn is_active(&self, now_ts: i64) -> bool {
+        self.state != RoomLifecycleState::Destroyed
+            && self.state != RoomLifecycleState::Closing
+            && now_ts < self.expires_at
     }
 
     /// Transitions room to `Active`.
@@ -406,6 +418,7 @@ mod tests {
         let room = RoomState::new(
             sample_code(),
             Some("owner-peer".to_string()),
+            None,
             PasswordStatus::none(),
             &config,
             now,
@@ -429,6 +442,7 @@ mod tests {
         let mut room = RoomState::new(
             sample_code(),
             Some("owner".to_string()),
+            None,
             PasswordStatus::none(),
             &config,
             1000,
@@ -453,6 +467,7 @@ mod tests {
         let mut room = RoomState::new(
             sample_code(),
             Some("owner".to_string()),
+            None,
             PasswordStatus::none(),
             &config,
             start_time,
@@ -513,6 +528,7 @@ mod tests {
         let mut room = RoomState::new(
             sample_code(),
             Some("owner".to_string()),
+            None,
             PasswordStatus::none(),
             &config,
             start_time,
@@ -540,6 +556,7 @@ mod tests {
         let mut room = RoomState::new(
             sample_code(),
             Some("owner".to_string()),
+            None,
             PasswordStatus::none(),
             &config,
             1000,

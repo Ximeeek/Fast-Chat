@@ -38,7 +38,6 @@ pub fn start_limiter_sweeper(
 
         loop {
             ticker.tick().await;
-            service.room_creation.prune_stale();
             service.connection.prune_stale();
             service.join.prune_stale();
         }

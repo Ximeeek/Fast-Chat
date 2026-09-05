@@ -687,7 +687,10 @@ async fn test_two_independent_connections_same_ip_same_room_success() {
 
 #[tokio::test]
 async fn test_two_independent_connections_same_ip_different_rooms_success() {
-    let config = Config::default();
+    let config = Config {
+        max_active_rooms_per_ip: 2,
+        ..Default::default()
+    };
     let (addr, _state) = spawn_test_server(config).await;
     let ws_url = format!("ws://{addr}/ws");
 

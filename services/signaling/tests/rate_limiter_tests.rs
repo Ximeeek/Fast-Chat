@@ -31,27 +31,40 @@ async fn spawn_limiter_test_server(config: Config) -> (SocketAddr, AppState) {
 #[tokio::test]
 async fn test_pepper_rotation_forgets_rate_limits_for_same_ip() {
     let config = Config {
-        rate_limit_room_creations_per_hour: 2,
+        max_active_rooms_per_ip: 1,
         ..Default::default()
     };
     let app_state = AppState::new(config);
     let app = create_router(app_state.clone());
 
-    // 1. Send 2 creation requests from same IP (198.51.100.22)
-    for _ in 0..2 {
-        let req = Request::builder()
-            .method("POST")
-            .uri("/api/rooms")
-            .header("Content-Type", "application/json")
-            .header("x-forwarded-for", "198.51.100.22")
-            .body(Body::from(r#"{"owner_id":"alice"}"#))
-            .unwrap();
+    // 1. Send 1st creation request from IP (198.51.100.22)
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/api/rooms")
+        .header("Content-Type", "application/json")
+        .header("x-forwarded-for", "198.51.100.22")
+        .body(Body::from(r#"{"owner_id":"alice"}"#))
+        .unwrap();
 
-        let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-    }
+    let resp1 = app.clone().oneshot(req1).await.unwrap();
+    assert_eq!(resp1.status(), StatusCode::CREATED);
 
-    // 2. 3rd attempt from same IP is rate limited
+    // 2. 2nd attempt from same IP while 1st room is active is rejected
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/api/rooms")
+        .header("Content-Type", "application/json")
+        .header("x-forwarded-for", "198.51.100.22")
+        .body(Body::from(r#"{"owner_id":"alice"}"#))
+        .unwrap();
+
+    let resp2 = app.clone().oneshot(req2).await.unwrap();
+    assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // 3. Rotate daily pepper in RAM (simulating 24h rotation)
+    app_state.limiter.pepper.rotate();
+
+    // 4. Client from exact same IP now derives a fresh rateKey with clean quota
     let req3 = Request::builder()
         .method("POST")
         .uri("/api/rooms")
@@ -61,31 +74,16 @@ async fn test_pepper_rotation_forgets_rate_limits_for_same_ip() {
         .unwrap();
 
     let resp3 = app.clone().oneshot(req3).await.unwrap();
-    assert_eq!(resp3.status(), StatusCode::TOO_MANY_REQUESTS);
-
-    // 3. Rotate daily pepper in RAM (simulating 24h rotation)
-    app_state.limiter.pepper.rotate();
-
-    // 4. Client from exact same IP now derives a fresh rateKey with clean quota
-    let req4 = Request::builder()
-        .method("POST")
-        .uri("/api/rooms")
-        .header("Content-Type", "application/json")
-        .header("x-forwarded-for", "198.51.100.22")
-        .body(Body::from(r#"{"owner_id":"alice"}"#))
-        .unwrap();
-
-    let resp4 = app.clone().oneshot(req4).await.unwrap();
-    assert_eq!(resp4.status(), StatusCode::CREATED);
+    assert_eq!(resp3.status(), StatusCode::CREATED);
 }
 
 #[tokio::test]
 async fn test_room_creation_rate_limiting_ws() {
     let config = Config {
-        rate_limit_room_creations_per_hour: 1,
+        max_active_rooms_per_ip: 1,
         ..Default::default()
     };
-    let (addr, _state) = spawn_limiter_test_server(config).await;
+    let (addr, state) = spawn_limiter_test_server(config).await;
     let ws_url = format!("ws://{addr}/ws");
 
     let (mut ws, _) = connect_async(&ws_url).await.unwrap();
@@ -101,9 +99,12 @@ async fn test_room_creation_rate_limiting_ws() {
         .unwrap();
 
     let resp1: ServerMessage = serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
-    assert!(matches!(resp1, ServerMessage::RoomCreated { .. }));
+    let room_code = match &resp1 {
+        ServerMessage::RoomCreated { code, .. } => code.clone(),
+        other => panic!("Expected RoomCreated, got {other:?}"),
+    };
 
-    // Second connection from same IP attempting room creation
+    // Second connection from same IP attempting room creation is rejected
     let (mut ws2, _) = connect_async(&ws_url).await.unwrap();
     let create2 = ClientMessage::CreateRoom {
         peer_id: Some("owner2".to_string()),
@@ -117,11 +118,40 @@ async fn test_room_creation_rate_limiting_ws() {
     let resp2: ServerMessage = serde_json::from_str(&ws2.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
     match resp2 {
         ServerMessage::Error { code, message } => {
-            assert_eq!(code, "RATE_LIMIT_EXCEEDED");
-            assert!(message.contains("Room creation limit reached"));
+            assert_eq!(code, "ACTIVE_ROOM_LIMIT_EXCEEDED");
+            assert!(message.contains("You already have an active room"));
         }
-        other => panic!("Expected Error with RATE_LIMIT_EXCEEDED, got {other:?}"),
+        other => panic!("Expected Error with ACTIVE_ROOM_LIMIT_EXCEEDED, got {other:?}"),
     }
+
+    // Joining existing room from same IP is NOT blocked
+    let join_msg = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("joiner_same_ip".to_string()),
+        password: None,
+    };
+    ws2.send(Message::Text(serde_json::to_string(&join_msg).unwrap().into()))
+        .await
+        .unwrap();
+    let join_resp: ServerMessage = serde_json::from_str(&ws2.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    assert!(matches!(join_resp, ServerMessage::JoinOk { .. }));
+
+    // Now close room 1
+    let parsed_code = fastchat_signaling::room::RoomCode::new(&room_code).unwrap();
+    state.room_manager.close_room(&parsed_code, "owner1").unwrap();
+
+    // After closing first room, creating a new room from same IP immediately succeeds
+    let (mut ws3, _) = connect_async(&ws_url).await.unwrap();
+    let create3 = ClientMessage::CreateRoom {
+        peer_id: Some("owner3".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws3.send(Message::Text(serde_json::to_string(&create3).unwrap().into()))
+        .await
+        .unwrap();
+    let resp3: ServerMessage = serde_json::from_str(&ws3.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    assert!(matches!(resp3, ServerMessage::RoomCreated { .. }));
 }
 
 #[tokio::test]

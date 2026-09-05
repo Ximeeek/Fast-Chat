@@ -263,20 +263,20 @@ async fn handle_client_message(
                 return;
             }
 
-            if let Err(retry_after) = state.limiter.room_creation.check_and_record(rate_key) {
+            let now_ts = chrono::Utc::now().timestamp();
+            let active_rooms = state.room_manager.count_active_rooms_by_creator(rate_key, now_ts);
+            if active_rooms >= state.config.max_active_rooms_per_ip {
                 warn!(
                     event = "LIMITER_REJECTED",
                     connection_id = %connection_id,
-                    limiter = "room_creation",
-                    retry_after = retry_after,
-                    "Room creation rejected by rate limiter"
+                    limiter = "active_rooms_per_ip",
+                    active_rooms = active_rooms,
+                    max_allowed = state.config.max_active_rooms_per_ip,
+                    "Room creation rejected: creator already has an active room"
                 );
                 let _ = tx.send(ServerMessage::error(
-                    "RATE_LIMIT_EXCEEDED",
-                    format!(
-                        "Room creation limit reached (maximum {} per hour). Please wait before trying again.",
-                        state.config.rate_limit_room_creations_per_hour
-                    ),
+                    "ACTIVE_ROOM_LIMIT_EXCEEDED",
+                    "You already have an active room. Close it before creating a new one.",
                 ));
                 return;
             }
@@ -296,7 +296,7 @@ async fn handle_client_message(
 
             let code = match state
                 .room_manager
-                .create_room(Some(assigned_peer_id.clone()), password_status)
+                .create_room(Some(assigned_peer_id.clone()), Some(*rate_key), password_status)
             {
                 Ok(c) => c,
                 Err(e) => {

@@ -33,8 +33,9 @@ pub struct Config {
     /// Interval in seconds for daily pepper secret rotation in RAM (default: 86400s = 24h).
     pub pepper_rotation_secs: u64,
 
-    /// Maximum room creations allowed per hour for a single rate key (default: 10).
-    pub rate_limit_room_creations_per_hour: usize,
+    /// Maximum concurrent active rooms allowed per IP address (default: 1).
+    /// Configurable via FASTCHAT_MAX_ACTIVE_ROOMS_PER_IP.
+    pub max_active_rooms_per_ip: usize,
 
     /// Maximum WebSocket connection attempts per minute per rate key before backoff (default: 30).
     pub rate_limit_ws_connections_per_min: usize,
@@ -88,6 +89,9 @@ pub struct Config {
     pub turn_api_base_url: String,
 }
 
+/// Default maximum concurrent active rooms allowed per IP address.
+pub const DEFAULT_MAX_ACTIVE_ROOMS_PER_IP: usize = 1;
+
 /// Default monthly TURN bandwidth allowance threshold in bytes (900 GiB).
 /// Cloudflare Realtime TURN provides 1,000 GB/month on the free tier; 900 GiB leaves a 10% safety margin.
 pub const DEFAULT_TURN_MAX_MONTHLY_BYTES: u64 = 900 * 1024 * 1024 * 1024;
@@ -104,7 +108,7 @@ impl Default for Config {
             server_port: 3000,
             server_host: "0.0.0.0".to_string(),
             pepper_rotation_secs: 86400,     // 24 hours
-            rate_limit_room_creations_per_hour: 10,
+            max_active_rooms_per_ip: DEFAULT_MAX_ACTIVE_ROOMS_PER_IP,
             rate_limit_ws_connections_per_min: 30,
             rate_limit_ws_base_backoff_secs: 2,
             rate_limit_ws_max_backoff_secs: 300,
@@ -177,10 +181,10 @@ impl Config {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(default.pepper_rotation_secs);
 
-        let rate_limit_room_creations_per_hour = env::var("FASTCHAT_RATE_LIMIT_ROOM_CREATION_PER_HOUR")
+        let max_active_rooms_per_ip = env::var("FASTCHAT_MAX_ACTIVE_ROOMS_PER_IP")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(default.rate_limit_room_creations_per_hour);
+            .unwrap_or(default.max_active_rooms_per_ip);
 
         let rate_limit_ws_connections_per_min = env::var("FASTCHAT_RATE_LIMIT_WS_PER_MIN")
             .ok()
@@ -275,7 +279,7 @@ impl Config {
             server_port,
             server_host,
             pepper_rotation_secs,
-            rate_limit_room_creations_per_hour,
+            max_active_rooms_per_ip,
             rate_limit_ws_connections_per_min,
             rate_limit_ws_base_backoff_secs,
             rate_limit_ws_max_backoff_secs,
@@ -309,7 +313,7 @@ impl std::fmt::Debug for Config {
             .field("server_port", &self.server_port)
             .field("server_host", &self.server_host)
             .field("pepper_rotation_secs", &self.pepper_rotation_secs)
-            .field("rate_limit_room_creations_per_hour", &self.rate_limit_room_creations_per_hour)
+            .field("max_active_rooms_per_ip", &self.max_active_rooms_per_ip)
             .field("rate_limit_ws_connections_per_min", &self.rate_limit_ws_connections_per_min)
             .field("rate_limit_ws_base_backoff_secs", &self.rate_limit_ws_base_backoff_secs)
             .field("rate_limit_ws_max_backoff_secs", &self.rate_limit_ws_max_backoff_secs)

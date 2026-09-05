@@ -68,13 +68,12 @@ async fn create_room_handler(
     }
 
     let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
-    if let Err(retry_after) = state.limiter.room_creation.check_and_record(&rate_key) {
+    let now_ts = Utc::now().timestamp();
+    let active_rooms = state.room_manager.count_active_rooms_by_creator(&rate_key, now_ts);
+    if active_rooms >= state.config.max_active_rooms_per_ip {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
-            format!(
-                "Room creation limit reached (maximum {} per hour). Please retry in {} seconds.",
-                state.config.rate_limit_room_creations_per_hour, retry_after
-            ),
+            "You already have an active room. Close it before creating a new one.".to_string(),
         ));
     }
 
@@ -91,7 +90,7 @@ async fn create_room_handler(
 
     let code = state
         .room_manager
-        .create_room(owner_id, password_status)
+        .create_room(owner_id, Some(rate_key), password_status)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let room_snapshot = state

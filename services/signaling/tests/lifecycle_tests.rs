@@ -60,6 +60,7 @@ fn test_configurable_participant_limit() {
     let mut room = RoomState::new(
         RoomCode::new("1111-2222-3333").unwrap(),
         Some("owner".to_string()),
+        None,
         PasswordStatus::none(),
         &config,
         1000,
@@ -104,7 +105,7 @@ fn test_lifecycle_full_state_machine_with_extension_and_server_time() {
     let manager = RoomManager::with_broadcaster(config.clone(), broadcaster.clone());
 
     let code = manager
-        .create_room(Some("owner_alice".to_string()), PasswordStatus::none())
+        .create_room(Some("owner_alice".to_string()), None, PasswordStatus::none())
         .expect("Creation failed");
 
     let initial = manager.get_room_state(&code).unwrap();
@@ -180,7 +181,7 @@ fn test_manual_close_by_owner_initiates_closing_grace_period() {
     let manager = RoomManager::with_broadcaster(config, broadcaster.clone());
 
     let code = manager
-        .create_room(Some("owner".to_string()), PasswordStatus::none())
+        .create_room(Some("owner".to_string()), None, PasswordStatus::none())
         .unwrap();
 
     let start_ts = manager.get_room_state(&code).unwrap().created_at;
@@ -208,7 +209,7 @@ fn test_zero_disk_persistence() {
     let manager = RoomManager::new(config);
 
     let code = manager
-        .create_room(Some("ephemeral_peer".to_string()), PasswordStatus::none())
+        .create_room(Some("ephemeral_peer".to_string()), None, PasswordStatus::none())
         .unwrap();
 
     assert_eq!(manager.room_count(), 1);

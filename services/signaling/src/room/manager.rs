@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::limiter::RateKey;
 use crate::room::broadcast::{LoggingBroadcaster, RoomBroadcaster};
 use crate::room::code::{RoomCode, RoomCodeError};
 use crate::room::state::{LifecycleAction, PasswordStatus, RoomError, RoomLifecycleState, RoomState};
@@ -45,6 +46,7 @@ impl RoomManager {
     pub fn create_room(
         &self,
         owner_peer_id: Option<String>,
+        creator_rate_key: Option<RateKey>,
         password_status: PasswordStatus,
     ) -> Result<RoomCode, RoomCodeError> {
         let code = RoomCode::generate_unique(&self.rooms)?;
@@ -52,6 +54,7 @@ impl RoomManager {
         let state = RoomState::new(
             code.clone(),
             owner_peer_id,
+            creator_rate_key,
             password_status,
             &self.config,
             now_ts,
@@ -60,6 +63,17 @@ impl RoomManager {
         self.rooms.insert(code.clone(), state);
         info!(room = %code, "Created new ephemeral room in-memory");
         Ok(code)
+    }
+
+    /// Counts active rooms created by the specified rate key.
+    pub fn count_active_rooms_by_creator(&self, key: &RateKey, now_ts: i64) -> usize {
+        self.rooms
+            .iter()
+            .filter(|entry| {
+                let room = entry.value();
+                room.creator_rate_key.as_ref() == Some(key) && room.is_active(now_ts)
+            })
+            .count()
     }
 
     /// Retrieves a cloned snapshot of the current state of a room, if it exists.
@@ -227,7 +241,7 @@ mod tests {
         let manager = RoomManager::new(config);
 
         let code = manager
-            .create_room(Some("alice".to_string()), PasswordStatus::none())
+            .create_room(Some("alice".to_string()), None, PasswordStatus::none())
             .expect("Room creation failed");
 
         assert_eq!(manager.room_count(), 1);
@@ -236,6 +250,27 @@ mod tests {
         assert_eq!(state.code, code);
         assert_eq!(state.peers.len(), 1);
         assert_eq!(state.peers[0].id, "alice");
+    }
+
+    #[test]
+    fn test_manager_count_active_rooms_by_creator() {
+        let config = Config::default();
+        let manager = RoomManager::new(config);
+        let key_a = RateKey([1u8; 16]);
+        let key_b = RateKey([2u8; 16]);
+        let now = 1_000_000;
+
+        assert_eq!(manager.count_active_rooms_by_creator(&key_a, now), 0);
+
+        let code_a = manager
+            .create_room(Some("alice".to_string()), Some(key_a), PasswordStatus::none())
+            .unwrap();
+        assert_eq!(manager.count_active_rooms_by_creator(&key_a, now), 1);
+        assert_eq!(manager.count_active_rooms_by_creator(&key_b, now), 0);
+
+        // Close room a -> immediately not active
+        manager.close_room(&code_a, "alice").unwrap();
+        assert_eq!(manager.count_active_rooms_by_creator(&key_a, now), 0);
     }
 
     #[test]
@@ -251,7 +286,7 @@ mod tests {
         let manager = RoomManager::with_broadcaster(config, broadcaster.clone());
 
         let code = manager
-            .create_room(Some("alice".to_string()), PasswordStatus::none())
+            .create_room(Some("alice".to_string()), None, PasswordStatus::none())
             .unwrap();
 
         let initial_state = manager.get_room_state(&code).unwrap();
