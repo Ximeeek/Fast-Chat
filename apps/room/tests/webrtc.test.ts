@@ -351,6 +351,99 @@ describe('WebRTC Mesh & Secure DataChannel Subsystem (Phase 8)', () => {
 			alice.close();
 			bob.close();
 		});
+
+		test('trickle ICE candidate buffering when candidates arrive before SDP answer on initiator', async () => {
+			let pcAlice: MockRTCPeerConnection | null = null;
+			let pcBob: MockRTCPeerConnection | null = null;
+
+			const alice = new PeerConnectionSession({
+				localPeerId: 'peer-alice',
+				remotePeerId: 'peer-bob',
+				isInitiator: true,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				rtcPeerConnectionFactory: (cfg) => {
+					pcAlice = new MockRTCPeerConnection(cfg);
+					return pcAlice as unknown as RTCPeerConnection;
+				}
+			});
+
+			const bob = new PeerConnectionSession({
+				localPeerId: 'peer-bob',
+				remotePeerId: 'peer-alice',
+				isInitiator: false,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				rtcPeerConnectionFactory: (cfg) => {
+					pcBob = new MockRTCPeerConnection(cfg);
+					return pcBob as unknown as RTCPeerConnection;
+				}
+			});
+
+			// 1. Alice creates offer
+			const offer = await alice.createInitialOffer();
+			assert.ok(offer);
+
+			// 2. Bob handles offer and generates answer
+			const answer = await bob.handleRemoteOffer(offer);
+			assert.ok(answer);
+
+			// 3. Bob sends ICE candidate (including loopback candidate 127.0.0.1) before Alice receives answer
+			const loopbackCand: RTCIceCandidateInit = {
+				candidate: 'candidate:1 1 UDP 2122252543 127.0.0.1 54321 typ host',
+				sdpMid: '0'
+			};
+			await alice.addRemoteIceCandidate(loopbackCand);
+
+			// Since Alice has not processed remote answer yet, candidate is buffered in Alice
+			assert.equal(pcAlice!.remoteIceCandidates.length, 0);
+
+			// 4. Alice receives answer - buffered candidates should be flushed and applied
+			await alice.handleRemoteAnswer(answer);
+			assert.equal(pcAlice!.signalingState, 'stable');
+			assert.equal(pcAlice!.remoteIceCandidates.length, 1);
+			assert.equal(pcAlice!.remoteIceCandidates[0].candidate, loopbackCand.candidate);
+
+			alice.close();
+			bob.close();
+		});
+
+		test('preserves loopback candidates on both local gathering and remote ingestion', async () => {
+			let pcAlice: MockRTCPeerConnection | null = null;
+			const gatheredCandidates: RTCIceCandidateInit[] = [];
+
+			const alice = new PeerConnectionSession({
+				localPeerId: 'peer-alice',
+				remotePeerId: 'peer-bob',
+				isInitiator: true,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: (c) => gatheredCandidates.push(c),
+				rtcPeerConnectionFactory: (cfg) => {
+					pcAlice = new MockRTCPeerConnection(cfg);
+					return pcAlice as unknown as RTCPeerConnection;
+				}
+			});
+
+			// Simulate ICE engine generating a loopback candidate
+			const loopbackEv = {
+				candidate: {
+					candidate: 'candidate:1 1 UDP 2122252543 127.0.0.1 54321 typ host',
+					sdpMid: '0',
+					sdpMLineIndex: 0,
+					usernameFragment: 'ufrag123'
+				}
+			} as unknown as RTCPeerConnectionIceEvent;
+			pcAlice!.onicecandidate?.(loopbackEv);
+
+			// Ensure loopback candidate was not filtered out
+			assert.equal(gatheredCandidates.length, 1);
+			assert.ok(gatheredCandidates[0].candidate?.includes('127.0.0.1'));
+
+			alice.close();
+		});
 	});
 
 	describe('3. Connection Type Detection (Direct P2P vs Relayed TURN)', () => {

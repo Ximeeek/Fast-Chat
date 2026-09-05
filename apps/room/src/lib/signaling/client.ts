@@ -30,6 +30,7 @@ export class SignalingClient {
 	private handlers: Map<string, Set<MessageHandler<any>>> = new Map();
 	private messageSubscribers: Set<MessageHandler> = new Set();
 	private isExplicitlyClosed = false;
+	private connectPromise: Promise<void> | null = null;
 
 	constructor(options: SignalingClientOptions = {}) {
 		const defaultWs =
@@ -92,25 +93,31 @@ export class SignalingClient {
 	 * Establishes the WebSocket connection to the signaling service.
 	 */
 	public async connect(): Promise<void> {
-		if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+		if (this.isConnected()) {
 			return;
+		}
+
+		if (this.connectPromise) {
+			return this.connectPromise;
 		}
 
 		this.isExplicitlyClosed = false;
 		roomStore.setConnectionState('connecting');
 
-		return new Promise((resolve, reject) => {
+		this.connectPromise = new Promise<void>((resolve, reject) => {
 			let isResolved = false;
 
 			try {
 				this.ws = new WebSocket(this.wsUrl);
 			} catch (err) {
 				roomStore.setConnectionState('disconnected');
+				this.connectPromise = null;
 				return reject(err);
 			}
 
 			this.ws.onopen = () => {
 				isResolved = true;
+				this.connectPromise = null;
 				roomStore.setConnectionState('connected');
 				this.startHeartbeat();
 				resolve();
@@ -121,14 +128,16 @@ export class SignalingClient {
 				roomStore.setConnectionState('closed');
 				if (!isResolved) {
 					isResolved = true;
+					this.connectPromise = null;
 					reject(new Error('WebSocket closed before connection was established'));
 				}
 			};
 
-			this.ws.onerror = (ev) => {
+			this.ws.onerror = () => {
 				roomStore.setConnectionState('disconnected');
 				if (!isResolved) {
 					isResolved = true;
+					this.connectPromise = null;
 					reject(new Error('WebSocket connection error'));
 				}
 			};
@@ -137,6 +146,8 @@ export class SignalingClient {
 				this.handleIncomingRawMessage(event.data);
 			};
 		});
+
+		return this.connectPromise;
 	}
 
 	/**
@@ -145,6 +156,7 @@ export class SignalingClient {
 	public disconnect(): void {
 		this.isExplicitlyClosed = true;
 		this.stopHeartbeat();
+		this.connectPromise = null;
 		if (this.ws) {
 			this.ws.close();
 			this.ws = null;

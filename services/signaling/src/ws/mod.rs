@@ -22,10 +22,22 @@ pub async fn ws_handler(
     client_ip: crate::limiter::ClientIp,
     State(state): State<AppState>,
 ) -> axum::response::Response {
+    info!(
+        event = "WS_CONNECT_ATTEMPT",
+        client_ip = %client_ip.0,
+        "Incoming WebSocket connection attempt"
+    );
+
     // 1. Check global concurrent connection ceiling
     let connection_guard = match state.limiter.ceiling.acquire_connection() {
         Ok(guard) => guard,
         Err(msg) => {
+            warn!(
+                event = "LIMITER_REJECTED",
+                limiter = "ceiling_connection",
+                message = %msg,
+                "WebSocket connection rejected by global ceiling"
+            );
             return (
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
                 [
@@ -41,6 +53,12 @@ pub async fn ws_handler(
     // 2. Check connection attempt rate limit and exponential backoff
     let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
     if let Err(retry_after) = state.limiter.connection.check_and_record(&rate_key) {
+        warn!(
+            event = "LIMITER_REJECTED",
+            limiter = "connection_rate_limit",
+            retry_after = retry_after,
+            "WebSocket connection rejected by connection rate limiter"
+        );
         return (
             axum::http::StatusCode::TOO_MANY_REQUESTS,
             [
@@ -107,6 +125,11 @@ pub async fn handle_socket(
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
                         if !flood_bucket.try_acquire(1.0) {
+                            warn!(
+                                event = "LIMITER_REJECTED",
+                                limiter = "flood_control",
+                                "Signaling message rate limit exceeded by flood control"
+                            );
                             let _ = tx.send(ServerMessage::error(
                                 "FLOOD_CONTROL_EXCEEDED",
                                 "Signaling message rate limit exceeded. Slow down.",
@@ -172,6 +195,12 @@ async fn handle_client_message(
             has_password,
             password,
         } => {
+            info!(
+                event = "CREATE_ROOM",
+                peer = ?peer_id,
+                "Received CREATE_ROOM message"
+            );
+
             if current_session.is_some() {
                 let _ = tx.send(ServerMessage::error(
                     "ALREADY_IN_ROOM",
@@ -182,11 +211,24 @@ async fn handle_client_message(
 
             let current_rooms = state.room_manager.room_count();
             if let Err(msg) = state.limiter.ceiling.check_room_capacity(current_rooms) {
+                warn!(
+                    event = "LIMITER_REJECTED",
+                    limiter = "ceiling_room",
+                    current_rooms = current_rooms,
+                    message = %msg,
+                    "Room creation rejected by room ceiling"
+                );
                 let _ = tx.send(ServerMessage::error("SERVER_BUSY", msg));
                 return;
             }
 
-            if let Err(_) = state.limiter.room_creation.check_and_record(rate_key) {
+            if let Err(retry_after) = state.limiter.room_creation.check_and_record(rate_key) {
+                warn!(
+                    event = "LIMITER_REJECTED",
+                    limiter = "room_creation",
+                    retry_after = retry_after,
+                    "Room creation rejected by rate limiter"
+                );
                 let _ = tx.send(ServerMessage::error(
                     "RATE_LIMIT_EXCEEDED",
                     format!(
@@ -241,6 +283,7 @@ async fn handle_client_message(
             info!(
                 room = %code,
                 peer = %assigned_peer_id,
+                event = "ROOM_CREATED",
                 "Room created and owner session registered"
             );
 
@@ -256,6 +299,13 @@ async fn handle_client_message(
             peer_id,
             password,
         } => {
+            info!(
+                room = %code_str,
+                peer = ?peer_id,
+                event = "JOIN_ROOM",
+                "Received JOIN_ROOM message"
+            );
+
             if current_session.is_some() {
                 let _ = tx.send(ServerMessage::error(
                     "ALREADY_IN_ROOM",
@@ -266,23 +316,33 @@ async fn handle_client_message(
 
             match state.limiter.join.check_join_permitted(rate_key) {
                 Ok(()) => {}
-                Err(crate::limiter::JoinCheckError::LockedOut { retry_after_secs }) => {
-                    let _ = tx.send(ServerMessage::error(
-                        "JOIN_LOCKED_OUT",
-                        format!(
-                            "Too many failed join attempts. Temporary lockout in effect. Please try again in {retry_after_secs} seconds."
-                        ),
-                    ));
-                    return;
-                }
-                Err(crate::limiter::JoinCheckError::RateLimited { retry_after_secs }) => {
-                    let _ = tx.send(ServerMessage::error(
-                        "JOIN_RATE_LIMITED",
-                        format!(
-                            "Join attempt rate limit exceeded. Please wait {retry_after_secs} seconds before retrying."
-                        ),
-                    ));
-                    return;
+                Err(ref err) => {
+                    warn!(
+                        event = "LIMITER_REJECTED",
+                        limiter = "join_limiter",
+                        reason = ?err,
+                        "Join attempt rejected by join limiter"
+                    );
+                    match err {
+                        crate::limiter::JoinCheckError::LockedOut { retry_after_secs } => {
+                            let _ = tx.send(ServerMessage::error(
+                                "JOIN_LOCKED_OUT",
+                                format!(
+                                    "Too many failed join attempts. Temporary lockout in effect. Please try again in {retry_after_secs} seconds."
+                                ),
+                            ));
+                            return;
+                        }
+                        crate::limiter::JoinCheckError::RateLimited { retry_after_secs } => {
+                            let _ = tx.send(ServerMessage::error(
+                                "JOIN_RATE_LIMITED",
+                                format!(
+                                    "Join attempt rate limit exceeded. Please wait {retry_after_secs} seconds before retrying."
+                                ),
+                            ));
+                            return;
+                        }
+                    }
                 }
             }
 
@@ -346,6 +406,7 @@ async fn handle_client_message(
                     info!(
                         room = %code,
                         peer = %assigned_peer_id,
+                        event = "JOIN_OK",
                         "Peer joined room successfully"
                     );
 
@@ -360,6 +421,12 @@ async fn handle_client_message(
                     ));
 
                     // Broadcast PEER_JOINED to existing peers
+                    info!(
+                        room = %code,
+                        peer = %assigned_peer_id,
+                        event = "PEER_JOINED",
+                        "Broadcasting PEER_JOINED to existing peers"
+                    );
                     state.sessions.broadcast(
                         &code,
                         ServerMessage::peer_joined(assigned_peer_id.clone()),
@@ -402,7 +469,7 @@ async fn handle_client_message(
                 }
             };
 
-            debug!(
+            info!(
                 room = %code,
                 from = %sender_id,
                 to = %target_peer_id,
@@ -435,7 +502,7 @@ async fn handle_client_message(
                 }
             };
 
-            debug!(
+            info!(
                 room = %code,
                 from = %sender_id,
                 to = %target_peer_id,
@@ -472,7 +539,7 @@ async fn handle_client_message(
                 }
             };
 
-            debug!(
+            info!(
                 room = %code,
                 from = %sender_id,
                 to = %target_peer_id,

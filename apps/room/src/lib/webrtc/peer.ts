@@ -132,10 +132,10 @@ export class PeerConnectionSession {
 				: offer;
 
 			await this.pc.setRemoteDescription(desc);
+			await this.flushBufferedCandidates();
 
 			const answer = await this.pc.createAnswer();
 			await this.pc.setLocalDescription(answer);
-			await this.flushBufferedCandidates();
 
 			return this.pc.localDescription ? {
 				type: this.pc.localDescription.type,
@@ -175,22 +175,7 @@ export class PeerConnectionSession {
 	public async addRemoteIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
 		if (this.isClosed || !candidate || !candidate.candidate) return;
 
-		const candStr = candidate.candidate;
-		if (
-			candStr &&
-			(candStr.includes(' 127.0.0.1 ') ||
-				candStr.includes(' ::1 ') ||
-				candStr.includes(' localhost '))
-		) {
-			return;
-		}
-
-		if (
-			this.pc.remoteDescription &&
-			this.pc.remoteDescription.type &&
-			this.pc.localDescription &&
-			this.pc.localDescription.type
-		) {
+		if (this.pc.remoteDescription && this.pc.remoteDescription.type) {
 			try {
 				const iceCandidate = typeof RTCIceCandidate !== 'undefined'
 					? new RTCIceCandidate(candidate)
@@ -384,16 +369,6 @@ export class PeerConnectionSession {
 	private setupPeerConnectionEvents(): void {
 		this.pc.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
 			if (event.candidate) {
-				const candStr = event.candidate.candidate;
-				if (
-					candStr &&
-					(candStr.includes(' 127.0.0.1 ') ||
-						candStr.includes(' ::1 ') ||
-						candStr.includes(' localhost '))
-				) {
-					return;
-				}
-
 				const candidateInit: RTCIceCandidateInit = {
 					candidate: event.candidate.candidate,
 					sdpMid: event.candidate.sdpMid,
