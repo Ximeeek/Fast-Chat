@@ -3,5 +3,5 @@ export * from './utils/roomCode';
 export * from './stores/room';
 export * from './signaling/client';
 export * from './crypto';
+export * from './stores/webrtc';
 export * from './webrtc';
-

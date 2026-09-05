@@ -1,4 +1,4 @@
-import type { IceServerConfig } from '../types/signaling.ts';
+import type { IceServerConfig } from '$lib/types/signaling';
 
 /**
  * High-level connection state of a peer connection.
