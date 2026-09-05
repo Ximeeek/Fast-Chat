@@ -67,6 +67,23 @@ The signaling service exposes a WebSocket endpoint at `/ws` using JSON messaging
 11. **`PONG`**: Application heartbeat response.
 12. **`ERROR`**: Structured error notification: `{ "code": string, "message": string }`.
 
+## Abuse Protection & Multi-Layer Rate Limiting (Phase 4 / ADR-07)
+
+The signaling service incorporates a multi-layer rate limiting and abuse prevention subsystem adhering to strict zero-knowledge and zero-persistence privacy guarantees:
+
+1. **Zero IP Persistence & Daily Pepper**:
+   - Client IP addresses are never written to disk, never retained in long-term memory, and never logged.
+   - Upon startup, a cryptographically secure 32-byte secret (`dailyPepper`) is generated randomly in RAM.
+   - Every 24 hours, a background task (`start_pepper_rotator`) overwrites `dailyPepper` with fresh entropy.
+   - Rate limiting is keyed by `rateKey = Truncated(HMAC-SHA256(dailyPepper, client_ip))` (128-bit hash). When the pepper rotates, all existing keys become cryptographically decoupled from physical IPs, automatically forgetting old entries.
+
+2. **Five Distinct Rate-Limiting Layers (RAM with TTL)**:
+   - **Room Creation**: Maximum 10 room creations per hour per `rateKey`. Rejections return HTTP 429 or `RATE_LIMIT_EXCEEDED`.
+   - **WebSocket Connection Attempts**: Maximum 30 connection attempts per minute per `rateKey` before triggering exponential backoff ($2s \to 4s \to 8s \to \dots \to 300s$). Rejections return HTTP 429 with `Retry-After`.
+   - **Room Join Attempts & Lockout**: Maximum 30 join attempts per minute. After 5 consecutive failed join attempts (invalid code, non-existent room, expired room, or incorrect password) within 5 minutes, a 15-minute temporary lockout (`JOIN_LOCKED_OUT`) is applied. Successful room joins reset the failure counter.
+   - **Per-Connection Message Flood Control**: Lock-free in-memory `TokenBucket` evaluated inside each connection loop (burst capacity 30, refill rate 10 tokens/s). When exhausted, emits `FLOOD_CONTROL_EXCEEDED` error without terminating the socket.
+   - **Global Concurrency Ceiling**: Enforces maximum total active rooms (default: 1,000) and concurrent WebSocket connections (default: 4,000) across the server. Rejections return HTTP 503 Service Unavailable or `SERVER_BUSY`.
+
 ## Running & Testing
 
 ```bash
@@ -92,5 +109,19 @@ All configuration is driven by environment variables with sensible defaults:
 | `FASTCHAT_EXTENSION_DURATION_SECS` | `300` | Lifetime added per extension (5 minutes) |
 | `FASTCHAT_CLOSING_GRACE_PERIOD_SECS` | `10` | Grace period in `Closing` before eviction |
 | `FASTCHAT_SWEEPER_INTERVAL_SECS` | `1` | Background sweep evaluation interval |
+| `FASTCHAT_PEPPER_ROTATION_SECS` | `86400` | Ephemeral daily pepper secret rotation interval in RAM (24 hours) |
+| `FASTCHAT_RATE_LIMIT_ROOM_CREATION_PER_HOUR` | `10` | Maximum room creations per hour per rate key |
+| `FASTCHAT_RATE_LIMIT_WS_PER_MIN` | `30` | Maximum WebSocket connection attempts per minute per rate key |
+| `FASTCHAT_RATE_LIMIT_WS_BASE_BACKOFF_SECS` | `2` | Initial exponential backoff delay in seconds |
+| `FASTCHAT_RATE_LIMIT_WS_MAX_BACKOFF_SECS` | `300` | Maximum capped exponential backoff delay in seconds |
+| `FASTCHAT_RATE_LIMIT_JOIN_PER_MIN` | `30` | Maximum join attempts per minute per rate key |
+| `FASTCHAT_MAX_FAILED_JOINS` | `5` | Consecutive failed join attempts triggering temporary lockout |
+| `FASTCHAT_FAILED_JOINS_WINDOW_SECS` | `300` | Tracking window in seconds for failed join attempts |
+| `FASTCHAT_JOIN_LOCKOUT_SECS` | `900` | Duration in seconds of temporary join lockout (15 minutes) |
+| `FASTCHAT_FLOOD_CAPACITY` | `30` | Token bucket capacity for per-connection signaling message flood control |
+| `FASTCHAT_FLOOD_REFILL_PER_SEC` | `10` | Token bucket refill rate in tokens per second |
+| `FASTCHAT_MAX_TOTAL_ROOMS` | `1000` | Global server ceiling for concurrent active rooms |
+| `FASTCHAT_MAX_TOTAL_CONNECTIONS` | `4000` | Global server ceiling for concurrent WebSocket connections |
+| `FASTCHAT_LIMITER_PRUNE_INTERVAL_SECS` | `60` | Background interval in seconds for pruning stale in-memory rate records |
 | `PORT` | `3000` | Server HTTP/WebSocket port |
 | `HOST` | `0.0.0.0` | Server bind host address |

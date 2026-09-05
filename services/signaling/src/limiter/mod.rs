@@ -4,6 +4,7 @@ pub mod flood;
 pub mod join;
 pub mod key;
 pub mod room_creation;
+pub mod sweeper;
 
 pub use ceiling::{ConnectionGuard, GlobalCeiling};
 pub use connection::ConnectionLimiter;
@@ -11,6 +12,7 @@ pub use flood::TokenBucket;
 pub use join::{JoinCheckError, JoinLimiter};
 pub use key::{derive_rate_key, ClientIp, PepperManager, RateKey};
 pub use room_creation::RoomCreationLimiter;
+pub use sweeper::{start_limiter_sweeper, start_pepper_rotator};
 
 use crate::config::Config;
 use std::sync::Arc;

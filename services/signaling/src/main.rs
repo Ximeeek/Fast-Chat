@@ -1,6 +1,7 @@
 use fastchat_signaling::{
     config::Config,
     create_router,
+    limiter::{start_limiter_sweeper, start_pepper_rotator},
     room::start_sweeper_task,
     state::AppState,
 };
@@ -18,6 +19,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         extendable_threshold = config.extendable_threshold_secs,
         extension_duration = config.extension_duration_secs,
         grace_period = config.closing_grace_period_secs,
+        pepper_rotation_secs = config.pepper_rotation_secs,
+        max_total_rooms = config.max_total_rooms,
+        max_total_connections = config.max_total_connections,
         "Initializing FastChat Signaling Service"
     );
 
@@ -25,6 +29,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn background sweeper task for enforcing room lifetime on the server
     start_sweeper_task(app_state.room_manager.clone());
+
+    // Spawn background rotator for daily pepper secret rotation in RAM
+    start_pepper_rotator(app_state.limiter.clone(), config.pepper_rotation_secs);
+
+    // Spawn background sweeper for in-memory rate limiter cache eviction
+    start_limiter_sweeper(app_state.limiter.clone(), config.limiter_prune_interval_secs);
 
     let app = create_router(app_state);
 
