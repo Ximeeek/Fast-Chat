@@ -296,3 +296,155 @@ async fn test_ws_sdp_and_ice_relay_flow() {
         _ => panic!("Expected Error(PEER_NOT_FOUND), got {err_msg:?}"),
     }
 }
+
+#[tokio::test]
+async fn test_ws_rekey_and_password_protection_flow() {
+    let config = Config {
+        max_participants_per_room: 4,
+        ..Default::default()
+    };
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Peer A (owner) creates room without initial password
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // 2. Peer B joins without password -> succeeds
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    assert!(matches!(resp_b, ServerMessage::JoinOk { .. }));
+    let _ = ws_a.next().await.unwrap(); // consume PEER_JOINED(bob) on Alice
+
+    // 3. Peer B (non-owner) attempts to REKEY -> rejected with UNAUTHORIZED
+    let rogue_rekey = ClientMessage::Rekey {
+        password: "rogue-password".to_string(),
+        salt: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&rogue_rekey).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err: ServerMessage = serde_json::from_str(&b_err_raw).unwrap();
+    match b_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected Error(UNAUTHORIZED) for non-owner rekey"),
+    }
+
+    // 4. Peer A (owner) initiates REKEY with password "room-secret-999"
+    let owner_rekey = ClientMessage::Rekey {
+        password: "room-secret-999".to_string(),
+        salt: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&owner_rekey).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Alice and Bob both receive REKEY broadcast
+    let a_rekey_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_rekey: ServerMessage = serde_json::from_str(&a_rekey_raw).unwrap();
+    match a_rekey {
+        ServerMessage::Rekey { room_code: c, salt } => {
+            assert_eq!(c, room_code);
+            assert_eq!(salt.len(), 32); // 16-byte random salt = 32 hex chars
+        }
+        _ => panic!("Expected Rekey broadcast on Alice, got {a_rekey:?}"),
+    }
+
+    let b_rekey_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_rekey: ServerMessage = serde_json::from_str(&b_rekey_raw).unwrap();
+    match b_rekey {
+        ServerMessage::Rekey { room_code: c, salt } => {
+            assert_eq!(c, room_code);
+            assert_eq!(salt.len(), 32);
+        }
+        _ => panic!("Expected Rekey broadcast on Bob, got {b_rekey:?}"),
+    }
+
+    // 5. Peer C attempts to join WITHOUT password -> rejected with INVALID_PASSWORD
+    let (mut ws_c, _) = connect_async(&ws_url).await.unwrap();
+    let join_c_no_pw = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c_no_pw).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c_err1_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_err1: ServerMessage = serde_json::from_str(&c_err1_raw).unwrap();
+    match c_err1 {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "INVALID_PASSWORD"),
+        _ => panic!("Expected Error(INVALID_PASSWORD) for missing password"),
+    }
+
+    // 6. Peer C attempts to join with WRONG password -> rejected with INVALID_PASSWORD
+    let join_c_wrong = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: Some("incorrect-pass".to_string()),
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c_wrong).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c_err2_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_err2: ServerMessage = serde_json::from_str(&c_err2_raw).unwrap();
+    match c_err2 {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "INVALID_PASSWORD"),
+        _ => panic!("Expected Error(INVALID_PASSWORD) for wrong password"),
+    }
+
+    // 7. Peer C joins with CORRECT password -> succeeds
+    let join_c_correct = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: Some("room-secret-999".to_string()),
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c_correct).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c_ok_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_ok: ServerMessage = serde_json::from_str(&c_ok_raw).unwrap();
+    match c_ok {
+        ServerMessage::JoinOk {
+            status,
+            peer_id,
+            peers,
+            ..
+        } => {
+            assert_eq!(status, "OK");
+            assert_eq!(peer_id, "charlie");
+            assert!(peers.contains(&"alice".to_string()));
+            assert!(peers.contains(&"bob".to_string()));
+        }
+        _ => panic!("Expected JoinOk for Charlie with correct password"),
+    }
+}

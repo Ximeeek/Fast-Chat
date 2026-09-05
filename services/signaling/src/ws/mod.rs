@@ -398,9 +398,77 @@ async fn handle_client_message(
                 ));
             }
         }
-        ClientMessage::Rekey { .. } => {
-            // Rekey handler in next step
-            let _ = tx.send(ServerMessage::error("UNIMPLEMENTED", "Rekey handler pending"));
+        ClientMessage::Rekey { password, salt } => {
+            let (code, sender_id, is_owner) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before rekeying",
+                    ));
+                    return;
+                }
+            };
+
+            if !*is_owner {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Only the room owner can initiate a REKEY",
+                ));
+                return;
+            }
+
+            let salt_bytes = if let Some(s) = salt {
+                match crate::ws::protocol::parse_hex(&s) {
+                    Ok(b) if b.len() == 16 => {
+                        let mut arr = [0u8; 16];
+                        arr.copy_from_slice(&b);
+                        Some(arr)
+                    }
+                    _ => {
+                        let _ = tx.send(ServerMessage::error(
+                            "INVALID_SALT",
+                            "Custom salt must be a 32-character (16 bytes) hex string",
+                        ));
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            match state.room_manager.rekey_room(code, sender_id, &password, salt_bytes) {
+                Ok(status) => {
+                    let salt_hex = status.salt.map(|s| format_hex(&s)).unwrap_or_default();
+                    info!(
+                        room = %code,
+                        peer = %sender_id,
+                        event = "REKEY",
+                        "Broadcasting REKEY event with public salt to all room participants"
+                    );
+
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::rekey(code.to_string(), salt_hex),
+                        None,
+                    );
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Only the room owner can initiate a REKEY",
+                    ));
+                }
+                Err(RoomError::RoomTerminated) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "ROOM_TERMINATED",
+                        "Cannot rekey a closing or destroyed room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("REKEY_FAILED", e.to_string()));
+                }
+            }
         }
     }
 }
