@@ -171,7 +171,7 @@ describe('In-Memory Room Store Lifecycle', () => {
 	});
 });
 
-describe('Zero Storage Policy Audit', () => {
+describe('Search Engine Privacy & Zero Storage Policy Audit', () => {
 	test('no localStorage or sessionStorage present in src directory', () => {
 		function scanDir(dir: string): void {
 			const files = readdirSync(dir);
@@ -197,5 +197,21 @@ describe('Zero Storage Policy Audit', () => {
 		}
 
 		scanDir(join(process.cwd(), 'src'));
+	});
+
+	test('both /create and /room/[code] pages contain noindex nofollow meta directive', () => {
+		const createPage = readFileSync(join(process.cwd(), 'src/routes/create/+page.svelte'), 'utf8');
+		const roomPage = readFileSync(join(process.cwd(), 'src/routes/room/[code]/+page.svelte'), 'utf8');
+
+		assert.match(
+			createPage,
+			/<meta\s+name=["']robots["']\s+content=["']noindex,\s*nofollow["']\s*\/?>/,
+			'Missing noindex, nofollow in /create/+page.svelte'
+		);
+		assert.match(
+			roomPage,
+			/<meta\s+name=["']robots["']\s+content=["']noindex,\s*nofollow["']\s*\/?>/,
+			'Missing noindex, nofollow in /room/[code]/+page.svelte'
+		);
 	});
 });
