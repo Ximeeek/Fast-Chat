@@ -221,11 +221,11 @@ impl RoomState {
     pub fn evaluate_lifecycle(&mut self, now_ts: i64, config: &Config) -> LifecycleAction {
         match self.state {
             RoomLifecycleState::Closing => {
-                if let Some(deadline) = self.closing_deadline {
-                    if now_ts >= deadline {
-                        self.state = RoomLifecycleState::Destroyed;
-                        return LifecycleAction::Destroy;
-                    }
+                if let Some(deadline) = self.closing_deadline
+                    && now_ts >= deadline
+                {
+                    self.state = RoomLifecycleState::Destroyed;
+                    return LifecycleAction::Destroy;
                 }
                 LifecycleAction::None
             }
@@ -340,8 +340,10 @@ mod tests {
 
     #[test]
     fn test_participant_limit_enforcement() {
-        let mut config = Config::default();
-        config.max_participants_per_room = 2;
+        let config = Config {
+            max_participants_per_room: 2,
+            ..Default::default()
+        };
 
         let mut room = RoomState::new(
             sample_code(),

@@ -211,10 +211,12 @@ mod tests {
 
     #[test]
     fn test_manager_sweeper_lifecycle_and_purge() {
-        let mut config = Config::default();
-        config.initial_room_duration_secs = 600;
-        config.extendable_threshold_secs = 120;
-        config.closing_grace_period_secs = 10;
+        let config = Config {
+            initial_room_duration_secs: 600,
+            extendable_threshold_secs: 120,
+            closing_grace_period_secs: 10,
+            ..Default::default()
+        };
 
         let broadcaster = Arc::new(MockBroadcaster::default());
         let manager = RoomManager::with_broadcaster(config, broadcaster.clone());
