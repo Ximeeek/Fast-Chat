@@ -207,6 +207,9 @@ pub enum ServerMessage {
         quota_exhausted: bool,
         #[serde(rename = "quotaExhausted")]
         quota_exhausted_camel: bool,
+        turn_issuance_limited: bool,
+        #[serde(rename = "turnIssuanceLimited")]
+        turn_issuance_limited_camel: bool,
     },
 }
 
@@ -328,12 +331,18 @@ impl ServerMessage {
         }
     }
 
-    pub fn ice_servers(ice_servers: Vec<IceServerConfig>, quota_exhausted: bool) -> Self {
+    pub fn ice_servers(
+        ice_servers: Vec<IceServerConfig>,
+        quota_exhausted: bool,
+        turn_issuance_limited: bool,
+    ) -> Self {
         Self::IceServers {
             ice_servers: ice_servers.clone(),
             ice_servers_camel: ice_servers,
             quota_exhausted,
             quota_exhausted_camel: quota_exhausted,
+            turn_issuance_limited,
+            turn_issuance_limited_camel: turn_issuance_limited,
         }
     }
 }
@@ -469,11 +478,13 @@ mod tests {
         assert!(sdp_serialized.contains(r#""sdp":{"sdp":"data","type":"offer"}"#));
 
         let stun = IceServerConfig::default_cloudflare_stun();
-        let ice_msg = ServerMessage::ice_servers(vec![stun], false);
+        let ice_msg = ServerMessage::ice_servers(vec![stun], false, true);
         let ice_serialized = serde_json::to_string(&ice_msg).unwrap();
         assert!(ice_serialized.contains(r#""type":"ICE_SERVERS""#));
         assert!(ice_serialized.contains(r#""quota_exhausted":false"#));
         assert!(ice_serialized.contains(r#""quotaExhausted":false"#));
+        assert!(ice_serialized.contains(r#""turn_issuance_limited":true"#));
+        assert!(ice_serialized.contains(r#""turnIssuanceLimited":true"#));
         assert!(ice_serialized.contains(r#""ice_servers":[{"#));
         assert!(ice_serialized.contains(r#""iceServers":[{"#));
     }

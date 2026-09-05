@@ -40,6 +40,7 @@ pub fn start_limiter_sweeper(
             ticker.tick().await;
             service.connection.prune_stale();
             service.join.prune_stale();
+            service.turn_issuance.prune_stale();
         }
     })
 }

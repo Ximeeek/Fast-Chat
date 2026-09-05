@@ -174,10 +174,17 @@ async fn get_ice_servers_handler(
     let default_stun = turn::IceServerConfig::default_cloudflare_stun();
     let mut servers = vec![default_stun];
     let mut quota_exhausted = false;
+    let mut turn_issuance_limited = false;
 
-    if state.turn.client.is_configured() {
+    if state.limiter.turn_issuance.is_limited(&rate_key) {
+        turn_issuance_limited = true;
+    } else if state.turn.client.is_configured() {
         match state.turn.issue_ice_servers(None).await {
             Ok(turn_servers) => {
+                let has_turn = turn_servers.iter().any(|s| s.username.is_some());
+                if has_turn {
+                    state.limiter.turn_issuance.record_issuance(&rate_key);
+                }
                 servers.extend(turn_servers);
             }
             Err(turn::TurnError::QuotaExhausted(_)) => {
@@ -191,7 +198,7 @@ async fn get_ice_servers_handler(
         quota_exhausted = true;
     }
 
-    Ok(Json(turn::IceServersResponse::new(servers, quota_exhausted)))
+    Ok(Json(turn::IceServersResponse::new(servers, quota_exhausted, turn_issuance_limited)))
 }
 
 /// Constructs the Axum application router with all routes and middleware configured.

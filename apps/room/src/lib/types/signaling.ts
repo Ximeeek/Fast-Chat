@@ -15,6 +15,8 @@ export interface IceServersResponse {
 	iceServers: IceServerConfig[];
 	quota_exhausted?: boolean;
 	quotaExhausted: boolean;
+	turn_issuance_limited?: boolean;
+	turnIssuanceLimited?: boolean;
 }
 
 /**
@@ -168,6 +170,8 @@ export interface IceServersServerMessage {
 	iceServers?: IceServerConfig[];
 	quota_exhausted: boolean;
 	quotaExhausted?: boolean;
+	turn_issuance_limited?: boolean;
+	turnIssuanceLimited?: boolean;
 }
 
 export type ServerSignalingMessage =

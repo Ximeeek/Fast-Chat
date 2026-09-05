@@ -79,15 +79,20 @@ pub struct IceServersResponse {
     pub quota_exhausted: bool,
     #[serde(rename = "quotaExhausted")]
     pub quota_exhausted_camel: bool,
+    pub turn_issuance_limited: bool,
+    #[serde(rename = "turnIssuanceLimited")]
+    pub turn_issuance_limited_camel: bool,
 }
 
 impl IceServersResponse {
-    pub fn new(ice_servers: Vec<IceServerConfig>, quota_exhausted: bool) -> Self {
+    pub fn new(ice_servers: Vec<IceServerConfig>, quota_exhausted: bool, turn_issuance_limited: bool) -> Self {
         Self {
             ice_servers: ice_servers.clone(),
             ice_servers_camel: ice_servers,
             quota_exhausted,
             quota_exhausted_camel: quota_exhausted,
+            turn_issuance_limited,
+            turn_issuance_limited_camel: turn_issuance_limited,
         }
     }
 }
@@ -134,11 +139,13 @@ mod tests {
     #[test]
     fn test_ice_servers_response_serialization() {
         let stun = IceServerConfig::default_cloudflare_stun();
-        let res = IceServersResponse::new(vec![stun], false);
+        let res = IceServersResponse::new(vec![stun], false, true);
         let serialized = serde_json::to_string(&res).unwrap();
 
         assert!(serialized.contains(r#""quota_exhausted":false"#));
         assert!(serialized.contains(r#""quotaExhausted":false"#));
+        assert!(serialized.contains(r#""turn_issuance_limited":true"#));
+        assert!(serialized.contains(r#""turnIssuanceLimited":true"#));
         assert!(serialized.contains(r#""ice_servers":[{"#));
         assert!(serialized.contains(r#""iceServers":[{"#));
     }

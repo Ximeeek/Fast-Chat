@@ -692,10 +692,17 @@ async fn handle_client_message(
             let default_stun = crate::turn::IceServerConfig::default_cloudflare_stun();
             let mut servers = vec![default_stun];
             let mut quota_exhausted = false;
+            let mut turn_issuance_limited = false;
 
-            if state.turn.client.is_configured() {
+            if state.limiter.turn_issuance.is_limited(rate_key) {
+                turn_issuance_limited = true;
+            } else if state.turn.client.is_configured() {
                 match state.turn.issue_ice_servers(None).await {
                     Ok(turn_servers) => {
+                        let has_turn = turn_servers.iter().any(|s| s.username.is_some());
+                        if has_turn {
+                            state.limiter.turn_issuance.record_issuance(rate_key);
+                        }
                         servers.extend(turn_servers);
                     }
                     Err(crate::turn::TurnError::QuotaExhausted(_)) => {
@@ -709,7 +716,11 @@ async fn handle_client_message(
                 quota_exhausted = true;
             }
 
-            let _ = tx.send(ServerMessage::ice_servers(servers, quota_exhausted));
+            let _ = tx.send(ServerMessage::ice_servers(
+                servers,
+                quota_exhausted,
+                turn_issuance_limited,
+            ));
         }
     }
 }

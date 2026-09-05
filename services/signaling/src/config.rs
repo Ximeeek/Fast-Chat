@@ -87,10 +87,17 @@ pub struct Config {
 
     /// Base URL for Cloudflare Realtime TURN API (default: "https://rtc.live.cloudflare.com").
     pub turn_api_base_url: String,
+
+    /// Maximum TURN credential issuance sets allowed per hour per IP (default: 5).
+    /// Configurable via FASTCHAT_RATE_LIMIT_TURN_ISSUANCES_PER_HOUR.
+    pub rate_limit_turn_issuances_per_hour: usize,
 }
 
 /// Default maximum concurrent active rooms allowed per IP address.
 pub const DEFAULT_MAX_ACTIVE_ROOMS_PER_IP: usize = 1;
+
+/// Default maximum TURN credential issuances permitted per hour per rate key.
+pub const DEFAULT_TURN_ISSUANCE_LIMIT_PER_HOUR: usize = 5;
 
 /// Default monthly TURN bandwidth allowance threshold in bytes (900 GiB).
 /// Cloudflare Realtime TURN provides 1,000 GB/month on the free tier; 900 GiB leaves a 10% safety margin.
@@ -109,6 +116,7 @@ impl Default for Config {
             server_host: "0.0.0.0".to_string(),
             pepper_rotation_secs: 86400,     // 24 hours
             max_active_rooms_per_ip: DEFAULT_MAX_ACTIVE_ROOMS_PER_IP,
+            rate_limit_turn_issuances_per_hour: DEFAULT_TURN_ISSUANCE_LIMIT_PER_HOUR,
             rate_limit_ws_connections_per_min: 30,
             rate_limit_ws_base_backoff_secs: 2,
             rate_limit_ws_max_backoff_secs: 300,
@@ -269,6 +277,11 @@ impl Config {
         let turn_api_base_url = env::var("FASTCHAT_TURN_API_BASE_URL")
             .unwrap_or(default.turn_api_base_url);
 
+        let rate_limit_turn_issuances_per_hour = env::var("FASTCHAT_RATE_LIMIT_TURN_ISSUANCES_PER_HOUR")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(default.rate_limit_turn_issuances_per_hour);
+
         Self {
             max_participants_per_room,
             initial_room_duration_secs,
@@ -297,6 +310,7 @@ impl Config {
             turn_max_monthly_bytes,
             turn_credential_ttl_secs,
             turn_api_base_url,
+            rate_limit_turn_issuances_per_hour,
         }
     }
 }
@@ -334,6 +348,7 @@ impl std::fmt::Debug for Config {
             .field("turn_max_monthly_bytes", &self.turn_max_monthly_bytes)
             .field("turn_credential_ttl_secs", &self.turn_credential_ttl_secs)
             .field("turn_api_base_url", &self.turn_api_base_url)
+            .field("rate_limit_turn_issuances_per_hour", &self.rate_limit_turn_issuances_per_hour)
             .finish()
     }
 }
