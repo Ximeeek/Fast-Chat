@@ -12,5 +12,7 @@ This repository is organized as a monorepo containing three independent subproje
 
 ## Status
 
-**Status: Under Construction**  
-Phase 1 (Monorepo scaffolding and repository initialization) completed.
+**Status: In Development**  
+- Phase 1 (Monorepo scaffolding and repository initialization): Completed.
+- Phase 2 (Signaling server core — Rust, axum, DashMap room lifecycle state machine): Completed.
+
