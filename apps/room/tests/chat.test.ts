@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { generateUsername } from '../src/lib/chat/username.ts';
 import { serializeChatMessage, deserializeChatMessage } from '../src/lib/chat/transport.ts';
+import { formatChatLog, downloadChatLog } from '../src/lib/chat/export.ts';
 import { chatStore, type ChatState } from '../src/lib/stores/chat.ts';
 import { WebRtcManager } from '../src/lib/webrtc/index.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
@@ -384,12 +385,124 @@ describe('WebRTC Mesh Encrypted Chat Message Transmission', () => {
 	});
 });
 
+describe('Client-Side Chat Log Formatting & Export', () => {
+	test('formats empty chat log with session header and empty notice', () => {
+		const exportDate = new Date('2026-09-05T18:30:00.000Z');
+		const result = formatChatLog('1234-5678-9012', [], exportDate);
+
+		assert.ok(result.includes('FastChat Room Chat Log'));
+		assert.ok(result.includes('Room Code:    1234-5678-9012'));
+		assert.ok(result.includes('Exported At:  2026-09-05 18:30:00 UTC'));
+		assert.ok(result.includes('Messages:     0'));
+		assert.ok(result.includes('(No messages recorded in this session)'));
+		assert.ok(result.includes('End of Chat Log'));
+	});
+
+	test('formats populated chat history with chronological timestamps and sender badges', () => {
+		const messages = [
+			{
+				id: 'm1',
+				sender: 'swift-fox-42',
+				content: 'Hello everyone!',
+				timestamp: new Date('2026-09-05T18:00:15.000Z').getTime(),
+				isSelf: true
+			},
+			{
+				id: 'm2',
+				sender: 'calm-badger-19',
+				content: 'Hey swift-fox, encrypted P2P mesh established.',
+				timestamp: new Date('2026-09-05T18:01:05.000Z').getTime(),
+				isSelf: false
+			}
+		];
+
+		const result = formatChatLog('0000-1111-2222', messages, new Date('2026-09-05T18:05:00.000Z'));
+
+		assert.ok(result.includes('Room Code:    0000-1111-2222'));
+		assert.ok(result.includes('Messages:     2'));
+		assert.ok(result.includes('[18:00:15] swift-fox-42 (You): Hello everyone!'));
+		assert.ok(result.includes('[18:01:05] calm-badger-19: Hey swift-fox, encrypted P2P mesh established.'));
+	});
+
+	test('downloadChatLog executes cleanly and creates anchor download in browser environment', () => {
+		// Verify no-op in SSR without window
+		assert.doesNotThrow(() => {
+			downloadChatLog('test.txt', 'sample content');
+		});
+
+		// Simulate browser DOM environment
+		let createdBlob: Blob | null = null;
+		let objectUrlCreated = '';
+		let revokedUrl = '';
+		let clicked = false;
+		let appendedChild: any = null;
+		let removedChild: any = null;
+
+		const mockAnchor = {
+			href: '',
+			download: '',
+			style: { display: '' },
+			click: () => {
+				clicked = true;
+			}
+		};
+
+		const originalWindow = (global as any).window;
+		const originalDocument = (global as any).document;
+		const originalURL = (global as any).URL;
+
+		try {
+			(global as any).window = {};
+			(global as any).document = {
+				createElement: (tag: string) => {
+					if (tag === 'a') return mockAnchor;
+					return {};
+				},
+				body: {
+					appendChild: (el: any) => {
+						appendedChild = el;
+					},
+					removeChild: (el: any) => {
+						removedChild = el;
+					}
+				}
+			};
+			(global as any).URL = {
+				createObjectURL: (b: Blob) => {
+					createdBlob = b;
+					objectUrlCreated = 'blob:http://localhost/test-uuid';
+					return objectUrlCreated;
+				},
+				revokeObjectURL: (u: string) => {
+					revokedUrl = u;
+				}
+			};
+
+			downloadChatLog('fastchat-export.txt', 'Decrypted log payload');
+
+			assert.ok(createdBlob);
+			assert.equal((createdBlob as any).type, 'text/plain;charset=utf-8');
+			assert.equal(mockAnchor.download, 'fastchat-export.txt');
+			assert.equal(mockAnchor.href, 'blob:http://localhost/test-uuid');
+			assert.equal(clicked, true);
+			assert.equal(appendedChild, mockAnchor);
+			assert.equal(removedChild, mockAnchor);
+			assert.equal(revokedUrl, 'blob:http://localhost/test-uuid');
+		} finally {
+			(global as any).window = originalWindow;
+			(global as any).document = originalDocument;
+			(global as any).URL = originalURL;
+		}
+	});
+});
+
 describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 	test('no localStorage or sessionStorage present in chat source files', () => {
 		const files = [
 			'src/lib/chat/username.ts',
 			'src/lib/chat/types.ts',
 			'src/lib/chat/transport.ts',
+			'src/lib/chat/export.ts',
 			'src/lib/stores/chat.ts'
 		];
 

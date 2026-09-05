@@ -6,7 +6,7 @@
 	import { webRtcManager } from '$lib/webrtc';
 	import { roomStore, isRoomActive, peerCount } from '$lib/stores/room';
 	import { chatStore } from '$lib/stores/chat';
-	import { serializeChatMessage, deserializeChatMessage } from '$lib/chat';
+	import { serializeChatMessage, deserializeChatMessage, formatChatLog, downloadChatLog } from '$lib/chat';
 	import { validateRoomCode } from '$lib/utils/roomCode';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
@@ -108,6 +108,13 @@
 		} finally {
 			isSending = false;
 		}
+	}
+
+	function handleDownloadChatLog() {
+		const log = formatChatLog(roomCode, $chatStore.messages);
+		const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+		const filename = `chat-log-${roomCode || 'room'}-${timestamp}.txt`;
+		downloadChatLog(filename, log);
 	}
 
 	async function copyRoomCode() {
@@ -421,8 +428,18 @@
 							<h2 class="text-xs font-semibold uppercase tracking-wider text-gray-700">Encrypted Chat</h2>
 							<span class="text-xs px-2 py-0.5 bg-green-100 text-green-800 rounded-full font-medium">AES-256-GCM</span>
 						</div>
-						<div class="text-xs text-gray-500">
-							Posting as: <strong class="font-mono text-gray-800">{$chatStore.username || '...'}</strong>
+						<div class="flex items-center space-x-3">
+							<div class="text-xs text-gray-500">
+								Posting as: <strong class="font-mono text-gray-800">{$chatStore.username || '...'}</strong>
+							</div>
+							<button
+								type="button"
+								onclick={handleDownloadChatLog}
+								class="px-2.5 py-1 text-xs bg-white hover:bg-gray-100 text-gray-700 rounded border border-gray-300 font-medium transition-colors"
+								title="Download decrypted chat log as .txt"
+							>
+								Download chat log
+							</button>
 						</div>
 					</div>
 
