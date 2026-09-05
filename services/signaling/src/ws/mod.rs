@@ -19,9 +19,11 @@ use tracing::{debug, info, warn};
 /// Axum WebSocket upgrade endpoint handler.
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
+    client_ip: crate::limiter::ClientIp,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
+    ws.on_upgrade(move |socket| handle_socket(socket, state, rate_key))
 }
 
 /// Generates an 8-byte (16-char hex) random peer ID if not provided by client.
@@ -33,7 +35,7 @@ fn generate_peer_id() -> String {
 }
 
 /// Main socket loop handling inbound frames and outbound channel dispatches.
-pub async fn handle_socket(mut socket: WebSocket, state: AppState) {
+pub async fn handle_socket(mut socket: WebSocket, state: AppState, rate_key: crate::limiter::RateKey) {
     debug!("Incoming WebSocket connection accepted");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
@@ -63,7 +65,7 @@ pub async fn handle_socket(mut socket: WebSocket, state: AppState) {
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        handle_client_message(&text, &mut current_session, &tx, &state).await;
+                        handle_client_message(&text, &mut current_session, &tx, &state, &rate_key).await;
                     }
                     Some(Ok(Message::Ping(payload))) => {
                         if socket.send(Message::Pong(payload)).await.is_err() {
@@ -100,6 +102,7 @@ async fn handle_client_message(
     current_session: &mut Option<(RoomCode, String, bool)>,
     tx: &mpsc::UnboundedSender<ServerMessage>,
     state: &AppState,
+    rate_key: &crate::limiter::RateKey,
 ) {
     let msg: ClientMessage = match serde_json::from_str(raw_text) {
         Ok(m) => m,
@@ -125,6 +128,17 @@ async fn handle_client_message(
                 let _ = tx.send(ServerMessage::error(
                     "ALREADY_IN_ROOM",
                     "Socket is already registered in a room",
+                ));
+                return;
+            }
+
+            if let Err(_) = state.limiter.room_creation.check_and_record(rate_key) {
+                let _ = tx.send(ServerMessage::error(
+                    "RATE_LIMIT_EXCEEDED",
+                    format!(
+                        "Room creation limit reached (maximum {} per hour). Please wait before trying again.",
+                        state.config.rate_limit_room_creations_per_hour
+                    ),
                 ));
                 return;
             }

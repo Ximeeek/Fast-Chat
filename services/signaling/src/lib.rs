@@ -57,9 +57,21 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
 }
 
 async fn create_room_handler(
+    client_ip: limiter::ClientIp,
     State(state): State<AppState>,
     body: Option<Json<CreateRoomRequest>>,
 ) -> Result<(StatusCode, Json<CreateRoomResponse>), (StatusCode, String)> {
+    let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
+    if let Err(retry_after) = state.limiter.room_creation.check_and_record(&rate_key) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "Room creation limit reached (maximum {} per hour). Please retry in {} seconds.",
+                state.config.rate_limit_room_creations_per_hour, retry_after
+            ),
+        ));
+    }
+
     let (owner_id, has_password) = match body {
         Some(Json(req)) => (req.owner_id, req.has_password.unwrap_or(false)),
         None => (None, false),
