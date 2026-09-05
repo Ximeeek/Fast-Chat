@@ -11,6 +11,7 @@
 	import { transferStore } from '$lib/stores/transfer';
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
 	import { validateRoomCode } from '$lib/utils/roomCode';
+	import RoomCodeHero from '$lib/room/RoomCodeHero.svelte';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
 	const roomCode = $page.params.code || '';
@@ -457,6 +458,9 @@
 
 			<!-- Room Content Section -->
 			<div class="p-4 sm:p-6 space-y-6">
+				<!-- Hero Room Code Element -->
+				<RoomCodeHero {roomCode} />
+
 				<!-- Participants -->
 				<div>
 					<h2 class="text-[11px] font-bold uppercase tracking-wider text-zinc-400 mb-2.5">
