@@ -1,0 +1,27 @@
+# Cloudflare Pages Edge Security Headers
+# https://developers.cloudflare.com/pages/configuration/headers/
+
+# Ephemeral Room Paths & Session Creation: Forbid indexing and prevent URL/path referrer leakage
+/create
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
+
+/create/*
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
+
+/room/*
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
+
+# Static Content-Hashed Asset Bundles: Long-term immutable caching
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/_app/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Global Baseline Security Headers for all responses
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
