@@ -97,6 +97,25 @@
 		const sender = $chatStore.username || 'anonymous';
 		const timestamp = Date.now();
 
+		if (import.meta.env.DEV) {
+			const targetPeers = Array.from(
+				new Set([...$roomStore.peers, ...webRtcManager.getSessionPeerIds()])
+			);
+			const peerStates = targetPeers.map((peerId) => {
+				const session = webRtcManager.getSession(peerId);
+				return {
+					peerId,
+					dataChannelState: session?.getSessionInfo().dataChannelState ?? 'none'
+				};
+			});
+			console.debug('[Chat:Sender:Trigger]', {
+				targetPeers,
+				contentLengthBytes: new TextEncoder().encode(trimmed).byteLength,
+				peerStates,
+				timestamp: Date.now()
+			});
+		}
+
 		// Optimistically append local message
 		chatStore.addMessage({
 			id,
@@ -118,6 +137,15 @@
 			});
 			await webRtcManager.broadcast(payload);
 		} catch (err) {
+			if (import.meta.env.DEV) {
+				console.error('[Chat:Sender:BroadcastError]', {
+					error:
+						err instanceof Error
+							? { name: err.name, message: err.message, stack: err.stack }
+							: String(err),
+					timestamp: Date.now()
+				});
+			}
 			console.error('Failed to broadcast chat message:', err);
 		} finally {
 			isSending = false;
@@ -220,6 +248,14 @@
 
 					if (data.type === 'chat') {
 						const wireMsg = deserializeChatMessage(payload);
+						if (import.meta.env.DEV) {
+							console.debug('[Chat:Receiver:Deserialize]', {
+								peerId,
+								success: Boolean(wireMsg),
+								messageId: wireMsg?.id ?? null,
+								timestamp: Date.now()
+							});
+						}
 						if (wireMsg) {
 							chatStore.addMessage({
 								id: wireMsg.id,
@@ -229,6 +265,13 @@
 								isSelf: false,
 								senderPeerId: peerId
 							});
+							if (import.meta.env.DEV) {
+								console.debug('[Chat:Receiver:StoreAdded]', {
+									peerId,
+									messageId: wireMsg.id,
+									timestamp: Date.now()
+								});
+							}
 						}
 					} else if (
 						data.type === 'file-meta' ||

@@ -204,16 +204,43 @@ export class WebRtcManager {
 	}
 
 	/**
+	 * Returns identifiers of all currently registered peer sessions.
+	 */
+	public getSessionPeerIds(): string[] {
+		return Array.from(this.sessions.keys());
+	}
+
+	/**
 	 * Broadcasts an encrypted binary chunk to all peers with open DataChannels.
 	 */
 	public async broadcast(data: Uint8Array | ArrayBuffer | string): Promise<void> {
 		const sendPromises: Promise<void>[] = [];
 		for (const session of this.sessions.values()) {
 			const info = session.getSessionInfo();
+			if (import.meta.env.DEV) {
+				console.debug('[WebRtcManager:Broadcast:PeerCheck]', {
+					peerId: info.peerId,
+					dataChannelState: info.dataChannelState,
+					connectionState: info.connectionState,
+					timestamp: Date.now()
+				});
+			}
 			if (info.dataChannelState === 'open') {
-				sendPromises.push(session.send(data).catch((err) => {
-					console.warn(`[WebRtcManager] Broadcast error to peer ${info.peerId}:`, err);
-				}));
+				sendPromises.push(
+					session.send(data).catch((err) => {
+						if (import.meta.env.DEV) {
+							console.error('[WebRtcManager:Broadcast:SendFailure]', {
+								peerId: info.peerId,
+								error:
+									err instanceof Error
+										? { name: err.name, message: err.message, stack: err.stack }
+										: String(err),
+								timestamp: Date.now()
+							});
+						}
+						console.warn(`[WebRtcManager] Broadcast error to peer ${info.peerId}:`, err);
+					})
+				);
 			}
 		}
 		await Promise.all(sendPromises);
