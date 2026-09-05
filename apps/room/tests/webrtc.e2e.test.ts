@@ -41,9 +41,12 @@ describe('WebRTC Real Two-Browser E2E Integration (Playwright)', () => {
 		}
 		bundleCode = code;
 
-		// 3. Launch headless Edge/Chromium with loopback enabled for deterministic local ICE resolution
+		// 3. Launch headless Chromium with loopback enabled for deterministic local ICE resolution.
+		// Dynamically resolves custom browser binary from PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH if defined,
+		// falling back to Playwright's managed Chromium browser for CI runner portability.
+		const customExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 		browser = await chromium.launch({
-			executablePath: 'C:\\Program Files (x86)\\Microsoft\\EdgeCore\\152.0.4191.62\\msedge.exe',
+			...(customExecutablePath ? { executablePath: customExecutablePath } : {}),
 			headless: true,
 			args: [
 				'--no-sandbox',
