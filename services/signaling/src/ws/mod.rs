@@ -295,11 +295,108 @@ async fn handle_client_message(
                 }
             }
         }
-        ClientMessage::SdpOffer { .. }
-        | ClientMessage::SdpAnswer { .. }
-        | ClientMessage::IceCandidates { .. } => {
-            // Relayed in next step
-            let _ = tx.send(ServerMessage::error("UNIMPLEMENTED", "Relay handler pending"));
+        ClientMessage::SdpOffer { target_peer_id, sdp } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before sending signaling messages",
+                    ));
+                    return;
+                }
+            };
+
+            debug!(
+                room = %code,
+                from = %sender_id,
+                to = %target_peer_id,
+                event = "SDP_OFFER_RELAY",
+                "Relaying SDP offer transparently to target peer"
+            );
+
+            let sent = state.sessions.send_to_peer(
+                code,
+                &target_peer_id,
+                ServerMessage::sdp_offer(sender_id.clone(), sdp),
+            );
+
+            if !sent {
+                let _ = tx.send(ServerMessage::error(
+                    "PEER_NOT_FOUND",
+                    format!("Target peer '{target_peer_id}' not found in room"),
+                ));
+            }
+        }
+        ClientMessage::SdpAnswer { target_peer_id, sdp } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before sending signaling messages",
+                    ));
+                    return;
+                }
+            };
+
+            debug!(
+                room = %code,
+                from = %sender_id,
+                to = %target_peer_id,
+                event = "SDP_ANSWER_RELAY",
+                "Relaying SDP answer transparently to target peer"
+            );
+
+            let sent = state.sessions.send_to_peer(
+                code,
+                &target_peer_id,
+                ServerMessage::sdp_answer(sender_id.clone(), sdp),
+            );
+
+            if !sent {
+                let _ = tx.send(ServerMessage::error(
+                    "PEER_NOT_FOUND",
+                    format!("Target peer '{target_peer_id}' not found in room"),
+                ));
+            }
+        }
+        ClientMessage::IceCandidates {
+            target_peer_id,
+            candidates,
+            candidate,
+        } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before sending signaling messages",
+                    ));
+                    return;
+                }
+            };
+
+            debug!(
+                room = %code,
+                from = %sender_id,
+                to = %target_peer_id,
+                event = "ICE_CANDIDATES_RELAY",
+                "Relaying ICE candidate(s) transparently to target peer"
+            );
+
+            let sent = state.sessions.send_to_peer(
+                code,
+                &target_peer_id,
+                ServerMessage::ice_candidates(sender_id.clone(), candidates, candidate),
+            );
+
+            if !sent {
+                let _ = tx.send(ServerMessage::error(
+                    "PEER_NOT_FOUND",
+                    format!("Target peer '{target_peer_id}' not found in room"),
+                ));
+            }
         }
         ClientMessage::Rekey { .. } => {
             // Rekey handler in next step
