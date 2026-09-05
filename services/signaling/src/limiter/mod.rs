@@ -1,9 +1,11 @@
 pub mod connection;
+pub mod flood;
 pub mod join;
 pub mod key;
 pub mod room_creation;
 
 pub use connection::ConnectionLimiter;
+pub use flood::TokenBucket;
 pub use join::{JoinCheckError, JoinLimiter};
 pub use key::{derive_rate_key, ClientIp, PepperManager, RateKey};
 pub use room_creation::RoomCreationLimiter;

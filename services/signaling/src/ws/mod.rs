@@ -55,6 +55,10 @@ pub async fn handle_socket(mut socket: WebSocket, state: AppState, rate_key: cra
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut current_session: Option<(RoomCode, String, bool)> = None;
+    let mut flood_bucket = crate::limiter::TokenBucket::new(
+        state.config.flood_bucket_capacity,
+        state.config.flood_refill_per_sec,
+    );
 
     loop {
         tokio::select! {
@@ -80,7 +84,14 @@ pub async fn handle_socket(mut socket: WebSocket, state: AppState, rate_key: cra
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        handle_client_message(&text, &mut current_session, &tx, &state, &rate_key).await;
+                        if !flood_bucket.try_acquire(1.0) {
+                            let _ = tx.send(ServerMessage::error(
+                                "FLOOD_CONTROL_EXCEEDED",
+                                "Signaling message rate limit exceeded. Slow down.",
+                            ));
+                        } else {
+                            handle_client_message(&text, &mut current_session, &tx, &state, &rate_key).await;
+                        }
                     }
                     Some(Ok(Message::Ping(payload))) => {
                         if socket.send(Message::Pong(payload)).await.is_err() {
