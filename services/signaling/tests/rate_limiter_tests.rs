@@ -310,3 +310,120 @@ async fn test_global_room_and_connection_ceiling() {
     let http_resp = app.oneshot(req).await.unwrap();
     assert_eq!(http_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+#[tokio::test]
+async fn test_turn_bandwidth_limiter_and_usage_reports() {
+    use axum::{routing::post, Json, Router};
+    use fastchat_signaling::turn::{CloudflareTurnClient, TurnService};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    // 1. Mock upstream Cloudflare TURN server
+    let mock_app = Router::new().route(
+        "/v1/turn/keys/cf-key-bandwidth/credentials/generate-ice-servers",
+        post(|| async {
+            Json(json!({
+                "iceServers": [
+                    {
+                        "urls": ["stun:stun.cloudflare.com:3478"]
+                    },
+                    {
+                        "urls": ["turn:turn.cloudflare.com:3478?transport=udp"],
+                        "username": "ephemeral_user",
+                        "credential": "ephemeral_pass"
+                    }
+                ]
+            }))
+        }),
+    );
+
+    let mock_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_port = mock_listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(mock_listener, mock_app).await;
+    });
+
+    // 2. Set up signaling app with a small 1,000 bytes hourly TURN limit
+    let config = Config {
+        cloudflare_turn_api_token: Some("cf-token-secret".to_string()),
+        cloudflare_turn_key_id: Some("cf-key-bandwidth".to_string()),
+        turn_api_base_url: format!("http://127.0.0.1:{mock_port}"),
+        rate_limit_turn_max_hourly_bytes_per_ip: 1000,
+        rate_limit_ws_connections_per_min: 100,
+        ..Default::default()
+    };
+
+    let client = CloudflareTurnClient::new(&config);
+    let governor = Arc::new(fastchat_signaling::turn::TurnCostGovernor::new(&config));
+    let turn = Arc::new(TurnService::with_custom(client, governor));
+
+    let app_state = AppState::new(config).with_turn_service(turn);
+    let app = create_router(app_state.clone());
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let ws_url = format!("ws://{addr}/ws");
+    let (mut ws, _) = connect_async(&ws_url).await.unwrap();
+
+    // 3. Initial REQUEST_ICE_SERVERS within budget -> returns STUN + TURN
+    let req_ice = ClientMessage::RequestIceServers;
+    ws.send(Message::Text(serde_json::to_string(&req_ice).unwrap().into())).await.unwrap();
+
+    let resp_raw = ws.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp: ServerMessage = serde_json::from_str(&resp_raw).unwrap();
+    match resp {
+        ServerMessage::IceServers {
+            ice_servers,
+            turn_issuance_limited,
+            ..
+        } => {
+            assert!(!turn_issuance_limited);
+            assert!(ice_servers.iter().any(|s| s.username.is_some()));
+        }
+        other => panic!("Expected IceServers message, got {other:?}"),
+    }
+
+    // 4. Client reports 600 bytes relayed usage (within 1,000 budget)
+    let report1 = ClientMessage::TurnUsageReport { bytes: 600 };
+    ws.send(Message::Text(serde_json::to_string(&report1).unwrap().into())).await.unwrap();
+
+    // Short yield for message processing
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // 5. Client reports another 500 bytes relayed usage -> total 1,100 bytes (exceeds 1,000 budget!)
+    let report2 = ClientMessage::TurnUsageReport { bytes: 500 };
+    ws.send(Message::Text(serde_json::to_string(&report2).unwrap().into())).await.unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // 6. Subsequent REQUEST_ICE_SERVERS should now be denied TURN credentials and receive STUN only
+    ws.send(Message::Text(serde_json::to_string(&req_ice).unwrap().into())).await.unwrap();
+
+    let resp2_raw = ws.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp2: ServerMessage = serde_json::from_str(&resp2_raw).unwrap();
+    match resp2 {
+        ServerMessage::IceServers {
+            ice_servers,
+            turn_issuance_limited,
+            turn_issuance_limited_camel,
+            ..
+        } => {
+            assert!(turn_issuance_limited);
+            assert!(turn_issuance_limited_camel);
+            assert_eq!(ice_servers.len(), 1);
+            assert_eq!(ice_servers[0].urls[0], "stun:stun.cloudflare.com:3478");
+        }
+        other => panic!("Expected IceServers message with turn_issuance_limited=true, got {other:?}"),
+    }
+
+    // 7. Active session is NOT terminated; socket remains alive and handles messages (e.g. Ping)
+    ws.send(Message::Text(serde_json::to_string(&ClientMessage::Ping).unwrap().into())).await.unwrap();
+    let pong_raw = ws.next().await.unwrap().unwrap().into_text().unwrap();
+    let pong: ServerMessage = serde_json::from_str(&pong_raw).unwrap();
+    assert_eq!(pong, ServerMessage::Pong);
+}
+

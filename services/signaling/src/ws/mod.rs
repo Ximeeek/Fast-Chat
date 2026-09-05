@@ -694,7 +694,10 @@ async fn handle_client_message(
             let mut quota_exhausted = false;
             let mut turn_issuance_limited = false;
 
-            if state.limiter.turn_issuance.is_limited(rate_key) {
+            let is_issuance_limited = state.limiter.turn_issuance.is_limited(rate_key);
+            let is_bandwidth_limited = state.limiter.turn_bandwidth.is_limited(rate_key);
+
+            if is_issuance_limited || is_bandwidth_limited {
                 turn_issuance_limited = true;
             } else if state.turn.client.is_configured() {
                 match state.turn.issue_ice_servers(None).await {
@@ -721,6 +724,15 @@ async fn handle_client_message(
                 quota_exhausted,
                 turn_issuance_limited,
             ));
+        }
+        ClientMessage::TurnUsageReport { bytes } => {
+            debug!(
+                event = "TURN_USAGE_REPORT",
+                connection_id = %connection_id,
+                bytes = bytes,
+                "Received client TURN usage report"
+            );
+            state.limiter.turn_bandwidth.record_usage(rate_key, bytes);
         }
     }
 }

@@ -29,6 +29,7 @@ export class WebRtcManager {
 	private rekeyCleanups: (() => void)[] = [];
 	private rtcFactory?: (config?: RTCConfiguration) => RTCPeerConnection;
 	private disconnectGracePeriodMs?: number;
+	private relayReportIntervalMs?: number;
 	private isInitialized = false;
 	private localPeerId: string | null = null;
 	private sessionPromises: Map<string, Promise<PeerConnectionSession>> = new Map();
@@ -39,6 +40,7 @@ export class WebRtcManager {
 		this.iceServers = options.iceServers || [];
 		this.rtcFactory = options.rtcPeerConnectionFactory;
 		this.disconnectGracePeriodMs = options.disconnectGracePeriodMs;
+		this.relayReportIntervalMs = options.relayReportIntervalMs;
 	}
 
 	/**
@@ -408,7 +410,13 @@ export class WebRtcManager {
 					},
 					onMessage: (payload) => {
 						this.dispatchIncomingMessage(remotePeerId, payload);
-					}
+					},
+					onTurnUsageReport: (bytes: number) => {
+						if (this.signaling.isConnected()) {
+							this.signaling.sendTurnUsageReport(bytes);
+						}
+					},
+					relayReportIntervalMs: this.relayReportIntervalMs
 				});
 
 				this.sessions.set(remotePeerId, session);
@@ -429,6 +437,15 @@ export class WebRtcManager {
 
 		this.sessionPromises.set(remotePeerId, sessionPromise);
 		return sessionPromise;
+	}
+
+	/**
+	 * Flushes incremental relayed TURN byte usage across all active peer sessions.
+	 * Triggered periodically and immediately following transfer completions.
+	 */
+	public async reportRelayUsage(): Promise<void> {
+		const promises = Array.from(this.sessions.values()).map((s) => s.flushRelayUsage());
+		await Promise.allSettled(promises);
 	}
 
 	/**

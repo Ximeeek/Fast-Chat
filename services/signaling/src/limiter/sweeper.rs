@@ -41,6 +41,7 @@ pub fn start_limiter_sweeper(
             service.connection.prune_stale();
             service.join.prune_stale();
             service.turn_issuance.prune_stale();
+            service.turn_bandwidth.prune_stale();
         }
     })
 }

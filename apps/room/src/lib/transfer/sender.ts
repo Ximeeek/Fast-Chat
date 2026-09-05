@@ -269,6 +269,7 @@ export class FileSender {
 				);
 				if (allDone) {
 					transfer.status = 'completed';
+					this.webRtcManager.reportRelayUsage().catch(() => {});
 				}
 			} catch (err) {
 				recipient.status = 'failed';

@@ -83,3 +83,92 @@ export async function inspectCandidatePair(pc: RTCPeerConnection): Promise<Conne
 		return 'unknown';
 	}
 }
+
+export interface RelayedUsageStats {
+	isRelayed: boolean;
+	totalBytes: number;
+}
+
+/**
+ * Inspects RTCPeerConnection statistics to evaluate whether the active candidate pair
+ * is relayed through a TURN server, and aggregates total payload bytes (sent + received).
+ *
+ * @param pc - The active RTCPeerConnection instance.
+ * @returns Promise resolving to { isRelayed: boolean, totalBytes: number }.
+ */
+export async function inspectRelayedUsage(pc: RTCPeerConnection): Promise<RelayedUsageStats> {
+	if (!pc || typeof pc.getStats !== 'function') {
+		return { isRelayed: false, totalBytes: 0 };
+	}
+
+	try {
+		const stats = await pc.getStats();
+		let activePair: any = null;
+
+		// 1. Inspect transport stats for modern standard selectedCandidatePairId
+		for (const report of stats.values()) {
+			if (report.type === 'transport' && report.selectedCandidatePairId) {
+				activePair = stats.get(report.selectedCandidatePairId);
+				if (activePair) break;
+			}
+		}
+
+		// 2. Candidate pair with selected === true or nominated === true and state === 'succeeded'
+		if (!activePair) {
+			for (const report of stats.values()) {
+				if (report.type === 'candidate-pair') {
+					if (report.selected === true) {
+						activePair = report;
+						break;
+					}
+					if (report.nominated === true && report.state === 'succeeded') {
+						activePair = report;
+						break;
+					}
+				}
+			}
+		}
+
+		// 3. Fallback to any succeeded pair if nominated flag is omitted
+		if (!activePair) {
+			for (const report of stats.values()) {
+				if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+					activePair = report;
+					break;
+				}
+			}
+		}
+
+		if (!activePair || !activePair.localCandidateId || !activePair.remoteCandidateId) {
+			return { isRelayed: false, totalBytes: 0 };
+		}
+
+		const localCandidate = stats.get(activePair.localCandidateId);
+		const remoteCandidate = stats.get(activePair.remoteCandidateId);
+
+		const localType = (localCandidate?.candidateType || '').toLowerCase();
+		const remoteType = (remoteCandidate?.candidateType || '').toLowerCase();
+
+		const isRelayed =
+			localType === 'relay' ||
+			localType === 'relayed' ||
+			remoteType === 'relay' ||
+			remoteType === 'relayed';
+
+		if (!isRelayed) {
+			return { isRelayed: false, totalBytes: 0 };
+		}
+
+		const bytesSent = typeof activePair.bytesSent === 'number' ? activePair.bytesSent : 0;
+		const bytesReceived =
+			typeof activePair.bytesReceived === 'number' ? activePair.bytesReceived : 0;
+
+		return {
+			isRelayed: true,
+			totalBytes: bytesSent + bytesReceived
+		};
+	} catch {
+		return { isRelayed: false, totalBytes: 0 };
+	}
+}
+

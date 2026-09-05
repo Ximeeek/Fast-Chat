@@ -1,5 +1,5 @@
 import { encryptChunk, decryptChunk } from '../crypto/cipher.ts';
-import { inspectCandidatePair } from './stats.ts';
+import { inspectCandidatePair, inspectRelayedUsage } from './stats.ts';
 import type {
 	PeerConnectionSessionOptions,
 	PeerConnectionState,
@@ -38,6 +38,8 @@ export class PeerConnectionSession {
 	private disconnectGracePeriodMs = 6000;
 	private retryCount = 0;
 	private hasFailedAfterRetry = false;
+	private lastReportedRelayBytes = 0;
+	private relayReportTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(options: PeerConnectionSessionOptions) {
 		this.options = options;
@@ -346,6 +348,8 @@ export class PeerConnectionSession {
 		if (this.isClosed) return;
 		this.isClosed = true;
 		this.clearDisconnectTimer();
+		this.flushRelayUsage().catch(() => {});
+		this.stopRelayReportTimer();
 
 		this.bufferedIceCandidates = [];
 
@@ -669,6 +673,7 @@ export class PeerConnectionSession {
 		// 1. Closed connection lifecycle
 		if (connState === 'closed' || iceState === 'closed') {
 			this.clearDisconnectTimer();
+			this.stopRelayReportTimer();
 			this.updateConnectionState('closed');
 			return;
 		}
@@ -676,6 +681,7 @@ export class PeerConnectionSession {
 		// 2. Definitive failure
 		if (connState === 'failed' || iceState === 'failed') {
 			this.clearDisconnectTimer();
+			this.stopRelayReportTimer();
 			if (this.retryCount > 0) {
 				this.hasFailedAfterRetry = true;
 			}
@@ -694,11 +700,13 @@ export class PeerConnectionSession {
 			this.hasFailedAfterRetry = false;
 			this.updateConnectionState('connected');
 			this.inspectConnectionType();
+			this.startRelayReportTimer();
 			return;
 		}
 
 		// 4. Transient disconnect: buffer before declaring failure
 		if (connState === 'disconnected' || iceState === 'disconnected') {
+			this.stopRelayReportTimer();
 			if (this.connectionState === 'failed') {
 				return;
 			}
@@ -746,9 +754,42 @@ export class PeerConnectionSession {
 		}
 	}
 
+	/**
+	 * Inspects WebRTC statistics and flushes incremental relayed TURN byte usage
+	 * to the signaling server via onTurnUsageReport callback.
+	 * Guaranteed to be a no-op for direct P2P connections or when no new bytes are measured.
+	 */
+	public async flushRelayUsage(): Promise<void> {
+		if (this.isClosed) return;
+		const { isRelayed, totalBytes } = await inspectRelayedUsage(this.pc);
+		if (isRelayed && totalBytes > this.lastReportedRelayBytes) {
+			const delta = totalBytes - this.lastReportedRelayBytes;
+			this.lastReportedRelayBytes = totalBytes;
+			this.options.onTurnUsageReport?.(delta);
+		}
+	}
+
+	private startRelayReportTimer(): void {
+		if (this.relayReportTimer) return;
+		const interval = this.options.relayReportIntervalMs ?? 30_000;
+		this.relayReportTimer = setInterval(() => {
+			this.flushRelayUsage().catch(() => {});
+		}, interval);
+	}
+
+	private stopRelayReportTimer(): void {
+		if (this.relayReportTimer) {
+			clearInterval(this.relayReportTimer);
+			this.relayReportTimer = null;
+		}
+	}
+
 	private updateConnectionState(state: PeerConnectionState): void {
 		if (this.connectionState !== state) {
 			this.connectionState = state;
+			if (state !== 'connected') {
+				this.stopRelayReportTimer();
+			}
 			this.options.onConnectionStateChange?.(state);
 		}
 	}

@@ -305,6 +305,18 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Transmits a relayed TURN usage report to the signaling server.
+	 * Reports are sent strictly for relayed connections to track bandwidth consumption.
+	 */
+	public sendTurnUsageReport(bytes: number): boolean {
+		if (bytes <= 0) return false;
+		return this.send({
+			type: 'TURN_USAGE_REPORT',
+			bytes
+		});
+	}
+
+	/**
 	 * Extends the room lifetime by 5 minutes via the signaling REST API.
 	 * Must be invoked by the room owner while in the ExtendableWindow (remaining <= 2:00).
 	 */

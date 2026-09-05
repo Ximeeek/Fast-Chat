@@ -176,7 +176,10 @@ async fn get_ice_servers_handler(
     let mut quota_exhausted = false;
     let mut turn_issuance_limited = false;
 
-    if state.limiter.turn_issuance.is_limited(&rate_key) {
+    let is_issuance_limited = state.limiter.turn_issuance.is_limited(&rate_key);
+    let is_bandwidth_limited = state.limiter.turn_bandwidth.is_limited(&rate_key);
+
+    if is_issuance_limited || is_bandwidth_limited {
         turn_issuance_limited = true;
     } else if state.turn.client.is_configured() {
         match state.turn.issue_ice_servers(None).await {

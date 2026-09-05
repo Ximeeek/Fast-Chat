@@ -337,6 +337,7 @@ export class FileReceiver {
 
 			this.completedRecords.set(transferId, completedRecord);
 			this.notifyCompleted(completedRecord);
+			(this.webRtcManager as any).reportRelayUsage?.().catch(() => {});
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
 			transfer.status = 'failed';

@@ -4,6 +4,7 @@ pub mod flood;
 pub mod join;
 pub mod key;
 pub mod sweeper;
+pub mod turn_bandwidth;
 pub mod turn_issuance;
 
 pub use ceiling::{ConnectionGuard, GlobalCeiling};
@@ -12,6 +13,7 @@ pub use flood::TokenBucket;
 pub use join::{JoinCheckError, JoinLimiter};
 pub use key::{derive_rate_key, ClientIp, PepperManager, RateKey};
 pub use sweeper::{start_limiter_sweeper, start_pepper_rotator};
+pub use turn_bandwidth::TurnBandwidthLimiter;
 pub use turn_issuance::TurnIssuanceLimiter;
 
 use crate::config::Config;
@@ -26,6 +28,7 @@ pub struct RateLimiterService {
     pub join: Arc<JoinLimiter>,
     pub ceiling: Arc<GlobalCeiling>,
     pub turn_issuance: Arc<TurnIssuanceLimiter>,
+    pub turn_bandwidth: Arc<TurnBandwidthLimiter>,
 }
 
 impl RateLimiterService {
@@ -49,6 +52,9 @@ impl RateLimiterService {
             )),
             turn_issuance: Arc::new(TurnIssuanceLimiter::new(
                 config.rate_limit_turn_issuances_per_hour,
+            )),
+            turn_bandwidth: Arc::new(TurnBandwidthLimiter::new(
+                config.rate_limit_turn_max_hourly_bytes_per_ip,
             )),
         }
     }

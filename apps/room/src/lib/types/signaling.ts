@@ -69,6 +69,10 @@ export type ClientSignalingMessage =
 			type: 'REQUEST_ICE_SERVERS';
 	  }
 	| {
+			type: 'TURN_USAGE_REPORT';
+			bytes: number;
+	  }
+	| {
 			type: 'PING';
 	  };
 

@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import {
 	PeerConnectionSession,
 	WebRtcManager,
-	inspectCandidatePair
+	inspectCandidatePair,
+	inspectRelayedUsage
 } from '../src/lib/webrtc/index.ts';
 import {
 	webrtcPeers,
@@ -183,7 +184,11 @@ class MockRTCPeerConnection {
 	}
 
 	// Test helper to simulate connection transitions
-	public simulateConnected(type: ConnectionType = 'direct'): void {
+	public simulateConnected(
+		type: ConnectionType = 'direct',
+		bytesSent: number = 0,
+		bytesReceived: number = 0
+	): void {
 		this.iceConnectionState = 'connected';
 		this.connectionState = 'connected';
 
@@ -201,7 +206,9 @@ class MockRTCPeerConnection {
 				state: 'succeeded',
 				selected: true,
 				localCandidateId: 'cand-local-host',
-				remoteCandidateId: 'cand-remote-relay'
+				remoteCandidateId: 'cand-remote-relay',
+				bytesSent,
+				bytesReceived
 			});
 			this.statsMap.set('cand-local-host', {
 				id: 'cand-local-host',
@@ -225,7 +232,9 @@ class MockRTCPeerConnection {
 				state: 'succeeded',
 				selected: true,
 				localCandidateId: 'cand-local-host',
-				remoteCandidateId: 'cand-remote-srflx'
+				remoteCandidateId: 'cand-remote-srflx',
+				bytesSent,
+				bytesReceived
 			});
 			this.statsMap.set('cand-local-host', {
 				id: 'cand-local-host',
@@ -241,6 +250,19 @@ class MockRTCPeerConnection {
 
 		this.oniceconnectionstatechange?.();
 		this.onconnectionstatechange?.();
+	}
+
+	public updatePairBytes(bytesSent: number, bytesReceived: number): void {
+		const relayPair = this.statsMap.get('pair-relay-1');
+		if (relayPair) {
+			relayPair.bytesSent = bytesSent;
+			relayPair.bytesReceived = bytesReceived;
+		}
+		const directPair = this.statsMap.get('pair-direct-1');
+		if (directPair) {
+			directPair.bytesSent = bytesSent;
+			directPair.bytesReceived = bytesReceived;
+		}
 	}
 }
 
@@ -529,6 +551,99 @@ describe('WebRTC Mesh & Secure DataChannel Subsystem (Phase 8)', () => {
 
 			unsub();
 			session.close();
+		});
+
+		test('inspectRelayedUsage returns totalBytes for relayed connections', async () => {
+			const mockPc = new MockRTCPeerConnection();
+			mockPc.simulateConnected('relayed', 20000, 30000);
+
+			const usage = await inspectRelayedUsage(mockPc as unknown as RTCPeerConnection);
+			assert.equal(usage.isRelayed, true);
+			assert.equal(usage.totalBytes, 50000);
+		});
+
+		test('inspectRelayedUsage returns zero bytes and isRelayed=false for direct connections', async () => {
+			const mockPc = new MockRTCPeerConnection();
+			mockPc.simulateConnected('direct', 50000, 50000);
+
+			const usage = await inspectRelayedUsage(mockPc as unknown as RTCPeerConnection);
+			assert.equal(usage.isRelayed, false);
+			assert.equal(usage.totalBytes, 0);
+		});
+
+		test('inspectRelayedUsage returns zero bytes when stats are empty or unestablished', async () => {
+			const mockPc = new MockRTCPeerConnection();
+			const usage = await inspectRelayedUsage(mockPc as unknown as RTCPeerConnection);
+			assert.equal(usage.isRelayed, false);
+			assert.equal(usage.totalBytes, 0);
+		});
+
+		test('PeerConnectionSession emits TURN usage reports with incremental deltas only for relayed connections', async () => {
+			let rawPc: MockRTCPeerConnection | null = null;
+			const reportedDeltas: number[] = [];
+
+			const session = new PeerConnectionSession({
+				localPeerId: 'peer-local',
+				remotePeerId: 'peer-remote',
+				isInitiator: true,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				onTurnUsageReport: (delta) => {
+					reportedDeltas.push(delta);
+				},
+				rtcPeerConnectionFactory: (cfg) => {
+					rawPc = new MockRTCPeerConnection(cfg);
+					return rawPc as unknown as RTCPeerConnection;
+				}
+			});
+
+			rawPc!.simulateConnected('relayed', 10000, 20000);
+			await session.flushRelayUsage();
+
+			assert.deepEqual(reportedDeltas, [30000]);
+
+			// Increment byte counts: delta = 70000 - 30000 = 40000
+			rawPc!.updatePairBytes(30000, 40000);
+			await session.flushRelayUsage();
+
+			assert.deepEqual(reportedDeltas, [30000, 40000]);
+
+			// Flush again without new bytes -> no-op
+			await session.flushRelayUsage();
+			assert.equal(reportedDeltas.length, 2);
+
+			session.close();
+		});
+
+		test('PeerConnectionSession emits zero TURN usage reports for direct connections', async () => {
+			let rawPc: MockRTCPeerConnection | null = null;
+			const reportedDeltas: number[] = [];
+
+			const session = new PeerConnectionSession({
+				localPeerId: 'peer-local',
+				remotePeerId: 'peer-remote',
+				isInitiator: true,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				onTurnUsageReport: (delta) => {
+					reportedDeltas.push(delta);
+				},
+				rtcPeerConnectionFactory: (cfg) => {
+					rawPc = new MockRTCPeerConnection(cfg);
+					return rawPc as unknown as RTCPeerConnection;
+				}
+			});
+
+			// Direct P2P connection even with high byte volume
+			rawPc!.simulateConnected('direct', 1000000, 2000000);
+			await session.flushRelayUsage();
+
+			assert.equal(reportedDeltas.length, 0);
+
+			session.close();
+			assert.equal(reportedDeltas.length, 0);
 		});
 	});
 

@@ -63,8 +63,10 @@ export interface PeerConnectionSessionOptions {
 	onConnectionTypeChange?: (type: ConnectionType) => void;
 	onMessage?: (payload: Uint8Array) => void;
 	onError?: (error: Error) => void;
+	onTurnUsageReport?: (bytes: number) => void;
 	rtcPeerConnectionFactory?: (config?: RTCConfiguration) => RTCPeerConnection;
 	disconnectGracePeriodMs?: number;
+	relayReportIntervalMs?: number;
 }
 
 /**
@@ -75,5 +77,6 @@ export interface WebRtcManagerOptions {
 	iceServers?: IceServerConfig[];
 	rtcPeerConnectionFactory?: (config?: RTCConfiguration) => RTCPeerConnection;
 	disconnectGracePeriodMs?: number;
+	relayReportIntervalMs?: number;
 }
 

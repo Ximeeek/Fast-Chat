@@ -88,6 +88,11 @@ pub enum ClientMessage {
     #[serde(alias = "GET_ICE_SERVERS")]
     RequestIceServers,
 
+    /// Client-reported relayed TURN bandwidth usage in bytes.
+    TurnUsageReport {
+        bytes: u64,
+    },
+
     /// Application-level heartbeat ping.
     Ping,
 }
@@ -498,5 +503,12 @@ mod tests {
         let json_alias = r#"{"type":"GET_ICE_SERVERS"}"#;
         let msg_alias: ClientMessage = serde_json::from_str(json_alias).unwrap();
         assert_eq!(msg_alias, ClientMessage::RequestIceServers);
+    }
+
+    #[test]
+    fn test_client_message_turn_usage_report_deserialization() {
+        let json_data = r#"{"type":"TURN_USAGE_REPORT","bytes":1048576}"#;
+        let msg: ClientMessage = serde_json::from_str(json_data).unwrap();
+        assert_eq!(msg, ClientMessage::TurnUsageReport { bytes: 1048576 });
     }
 }

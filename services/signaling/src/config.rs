@@ -91,6 +91,10 @@ pub struct Config {
     /// Maximum TURN credential issuance sets allowed per hour per IP (default: 5).
     /// Configurable via FASTCHAT_RATE_LIMIT_TURN_ISSUANCES_PER_HOUR.
     pub rate_limit_turn_issuances_per_hour: usize,
+
+    /// Maximum relayed TURN bandwidth allowed per hour per IP in bytes (default: 2 GiB).
+    /// Configurable via FASTCHAT_RATE_LIMIT_TURN_HOURLY_BYTES.
+    pub rate_limit_turn_max_hourly_bytes_per_ip: u64,
 }
 
 /// Default maximum concurrent active rooms allowed per IP address.
@@ -98,6 +102,9 @@ pub const DEFAULT_MAX_ACTIVE_ROOMS_PER_IP: usize = 1;
 
 /// Default maximum TURN credential issuances permitted per hour per rate key.
 pub const DEFAULT_TURN_ISSUANCE_LIMIT_PER_HOUR: usize = 5;
+
+/// Default hourly relayed TURN bandwidth allowance per IP in bytes (2 GiB).
+pub const DEFAULT_TURN_MAX_HOURLY_BYTES_PER_IP: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Default monthly TURN bandwidth allowance threshold in bytes (900 GiB).
 /// Cloudflare Realtime TURN provides 1,000 GB/month on the free tier; 900 GiB leaves a 10% safety margin.
@@ -117,6 +124,7 @@ impl Default for Config {
             pepper_rotation_secs: 86400,     // 24 hours
             max_active_rooms_per_ip: DEFAULT_MAX_ACTIVE_ROOMS_PER_IP,
             rate_limit_turn_issuances_per_hour: DEFAULT_TURN_ISSUANCE_LIMIT_PER_HOUR,
+            rate_limit_turn_max_hourly_bytes_per_ip: DEFAULT_TURN_MAX_HOURLY_BYTES_PER_IP,
             rate_limit_ws_connections_per_min: 30,
             rate_limit_ws_base_backoff_secs: 2,
             rate_limit_ws_max_backoff_secs: 300,
@@ -282,6 +290,11 @@ impl Config {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(default.rate_limit_turn_issuances_per_hour);
 
+        let rate_limit_turn_max_hourly_bytes_per_ip = env::var("FASTCHAT_RATE_LIMIT_TURN_HOURLY_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(default.rate_limit_turn_max_hourly_bytes_per_ip);
+
         Self {
             max_participants_per_room,
             initial_room_duration_secs,
@@ -311,6 +324,7 @@ impl Config {
             turn_credential_ttl_secs,
             turn_api_base_url,
             rate_limit_turn_issuances_per_hour,
+            rate_limit_turn_max_hourly_bytes_per_ip,
         }
     }
 }
@@ -349,6 +363,7 @@ impl std::fmt::Debug for Config {
             .field("turn_credential_ttl_secs", &self.turn_credential_ttl_secs)
             .field("turn_api_base_url", &self.turn_api_base_url)
             .field("rate_limit_turn_issuances_per_hour", &self.rate_limit_turn_issuances_per_hour)
+            .field("rate_limit_turn_max_hourly_bytes_per_ip", &self.rate_limit_turn_max_hourly_bytes_per_ip)
             .finish()
     }
 }
