@@ -13,6 +13,11 @@
 	import { validateRoomCode } from '$lib/utils/roomCode';
 	import RoomCodeHero from '$lib/room/RoomCodeHero.svelte';
 	import RoomTimer from '$lib/room/RoomTimer.svelte';
+	import RoomClosingBanner from '$lib/room/RoomClosingBanner.svelte';
+	import SecurityInfoPanel from '$lib/room/SecurityInfoPanel.svelte';
+	import ConnectionBadge from '$lib/room/ConnectionBadge.svelte';
+	import { completedFiles } from '$lib/stores/transfer';
+	import { downloadFiles } from '$lib/transfer/archive';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
 	const roomCode = $page.params.code || '';
@@ -29,6 +34,8 @@
 	let unsubWebRtcMessage: (() => void) | null = null;
 	let fileSender = $state<FileSender | null>(null);
 	let fileReceiver = $state<FileReceiver | null>(null);
+	let isSecurityInfoOpen = $state(false);
+	let isZippingFiles = $state(false);
 
 	// Expiration countdown
 	let now = $state(Math.floor(Date.now() / 1000));
@@ -122,6 +129,18 @@
 		const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 		const filename = `chat-log-${roomCode || 'room'}-${timestamp}.txt`;
 		downloadChatLog(filename, log);
+	}
+
+	async function handleDownloadAllFiles() {
+		if ($completedFiles.length === 0 || isZippingFiles) return;
+		isZippingFiles = true;
+		try {
+			await downloadFiles($completedFiles);
+		} catch (err) {
+			console.error('Failed to bundle files into ZIP:', err);
+		} finally {
+			isZippingFiles = false;
+		}
 	}
 
 	async function copyRoomCode() {
@@ -414,32 +433,30 @@
 		</div>
 	{:else}
 		<div class="w-full max-w-4xl bg-[#0a0a0a] border border-[#262626] overflow-hidden">
-			<!-- Header -->
-			<header class="p-4 sm:p-6 border-b border-[#262626] bg-[#121212] flex flex-wrap items-center justify-between gap-4">
-				<div>
-					<div class="flex items-center space-x-3">
-						<h1 class="text-xl font-bold font-mono tracking-wider text-white">{roomCode}</h1>
-						<button
-							onclick={copyRoomCode}
-							class="px-2.5 py-1 text-[11px] bg-black hover:bg-[#1c1c1c] text-zinc-300 border border-[#262626] uppercase font-semibold transition-micro cursor-pointer"
-						>
-							{copySuccess ? 'Copied!' : 'Copy Code'}
-						</button>
+			<!-- Minimal Chrome Header -->
+			<header class="p-3 sm:p-4 border-b border-[#262626] bg-[#121212] flex flex-wrap items-center justify-between gap-3">
+				<!-- Left: Identity, Connection & Participants -->
+				<div class="flex flex-wrap items-center gap-2">
+					<div class="inline-flex items-center px-2 py-1 bg-black border border-[#262626] text-[10px] uppercase font-bold text-white tracking-wider">
+						FASTCHAT
 					</div>
-					<div class="flex items-center space-x-2 mt-2">
-						<span class="inline-block w-2 h-2 {$roomStore.connectionState === 'connected' ? 'bg-[#ccff00]' : 'bg-yellow-400'}"></span>
-						<span class="text-[10px] text-zinc-400 uppercase tracking-widest font-semibold">
-							{$roomStore.connectionState}
+
+					<ConnectionBadge />
+
+					<div class="inline-flex items-center space-x-1.5 px-2 py-1 bg-black border border-[#262626] text-[10px] text-zinc-400 uppercase font-semibold">
+						<span>PEERS:</span>
+						<strong class="text-zinc-200 tabular-nums">{$peerCount + 1}</strong>
+					</div>
+
+					{#if $roomStore.isOwner}
+						<span class="inline-flex items-center px-1.5 py-1 bg-black text-[#ccff00] border border-[#262626] text-[10px] font-bold uppercase">
+							OWNER
 						</span>
-						{#if $roomStore.isOwner}
-							<span class="text-[10px] px-2 py-0.5 bg-black text-[#ccff00] border border-[#262626] font-bold uppercase">
-								ROOM OWNER
-							</span>
-						{/if}
-					</div>
+					{/if}
 				</div>
 
-				<div class="flex items-center space-x-3">
+				<!-- Right: Timer, Log Export, Security & Leave Action -->
+				<div class="flex items-center gap-2">
 					<RoomTimer
 						expiresAt={$roomStore.expiresAt}
 						{roomCode}
@@ -449,27 +466,53 @@
 						onExtended={handleRoomExtended}
 					/>
 
+					<!-- Quick Log Export -->
 					<button
-						onclick={leaveRoom}
-						class="min-h-[36px] py-1.5 px-3 text-xs bg-black hover:bg-red-950/40 text-red-400 border border-[#262626] hover:border-red-800 uppercase font-semibold transition-micro cursor-pointer"
+						type="button"
+						onclick={handleDownloadChatLog}
+						class="min-h-[38px] px-2.5 py-1 bg-black hover:bg-[#1c1c1c] text-zinc-300 border border-[#262626] hover:border-zinc-500 uppercase font-semibold text-xs transition-micro cursor-pointer flex items-center gap-1.5"
+						title="Export decrypted chat log as .txt"
+						aria-label="Download chat log"
 					>
-						Leave Room
+						<span>⤓</span>
+						<span class="hidden sm:inline">LOG</span>
+					</button>
+
+					<!-- Security Architecture Modal Trigger -->
+					<button
+						type="button"
+						onclick={() => (isSecurityInfoOpen = true)}
+						class="min-h-[38px] px-2.5 py-1 bg-black hover:bg-[#1c1c1c] text-zinc-300 border border-[#262626] hover:border-zinc-500 uppercase font-semibold text-xs transition-micro cursor-pointer flex items-center gap-1.5"
+						title="Why FastChat Room is secure"
+						aria-label="Security specifications"
+					>
+						<span>🛡</span>
+						<span class="hidden sm:inline">SECURITY</span>
+					</button>
+
+					<!-- Leave Session -->
+					<button
+						type="button"
+						onclick={leaveRoom}
+						class="min-h-[38px] px-3 py-1 bg-black hover:bg-red-950/40 text-red-400 border border-[#262626] hover:border-red-800 uppercase font-bold text-xs transition-micro cursor-pointer flex items-center gap-1"
+						title="Leave and disconnect from room"
+					>
+						<span>✕</span>
+						<span class="hidden sm:inline">LEAVE</span>
 					</button>
 				</div>
 			</header>
 
-			<!-- Room Closing Alert -->
+			<!-- Room Closing 10-Second Grace Warning Banner -->
 			{#if $roomStore.lifecycle === 'closing'}
-				<div role="alert" class="p-4 bg-red-950/30 border-b border-red-800 text-red-300 text-xs flex flex-wrap items-center justify-between gap-2">
-					<div class="flex items-center space-x-2">
-						<span class="text-red-400 font-bold">⚠ LAST CHANCE:</span>
-						<span>Room entering termination window.</span>
-					</div>
-					{#if closingCountdown !== null}
-						<span class="font-mono font-bold text-[#ccff00] text-sm tabular-nums">
-							CLOSING IN: {closingCountdown}s
-						</span>
-					{/if}
+				<div class="p-3 sm:p-4 border-b border-[#262626] bg-black">
+					<RoomClosingBanner
+						countdown={closingCountdown}
+						onDownloadChatLog={handleDownloadChatLog}
+						onDownloadFiles={handleDownloadAllFiles}
+						hasFiles={$completedFiles.length > 0}
+						isZipping={isZippingFiles}
+					/>
 				</div>
 			{/if}
 
@@ -574,7 +617,52 @@
 				{#if fileSender && fileReceiver}
 					<FileTransfer {fileSender} {fileReceiver} username={$chatStore.username || 'anonymous'} />
 				{/if}
+
+				<!-- Compact Security Info Box -->
+				<aside class="p-3.5 bg-[#121212] border border-[#262626] space-y-2">
+					<div class="flex items-center justify-between">
+						<div class="flex items-center space-x-2">
+							<span class="text-[10px] font-bold uppercase tracking-widest text-[#ccff00]">
+								ZERO PERSISTENCE ARCHITECTURE
+							</span>
+							<span class="text-[9px] px-1.5 py-0.5 bg-black border border-[#262626] text-zinc-400 uppercase">
+								AUDITED
+							</span>
+						</div>
+						<button
+							type="button"
+							onclick={() => (isSecurityInfoOpen = true)}
+							class="text-[10px] text-[#ccff00] hover:underline uppercase font-bold tracking-wider cursor-pointer"
+						>
+							[ VIEW FULL SPECS ]
+						</button>
+					</div>
+					<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[10px] text-zinc-400">
+						<div class="p-2 bg-black border border-[#1f1f23]">
+							<div class="text-zinc-200 font-bold uppercase">ZERO LOGS</div>
+							<div class="text-zinc-500 mt-0.5">RAM-only relay</div>
+						</div>
+						<div class="p-2 bg-black border border-[#1f1f23]">
+							<div class="text-zinc-200 font-bold uppercase">E2E ENCRYPTED</div>
+							<div class="text-zinc-500 mt-0.5">AES-256-GCM</div>
+						</div>
+						<div class="p-2 bg-black border border-[#1f1f23]">
+							<div class="text-zinc-200 font-bold uppercase">AUTO-DELETION</div>
+							<div class="text-zinc-500 mt-0.5">Purged on expiry</div>
+						</div>
+						<div class="p-2 bg-black border border-[#1f1f23]">
+							<div class="text-zinc-200 font-bold uppercase">NO ACCOUNTS</div>
+							<div class="text-zinc-500 mt-0.5">Zero stored tokens</div>
+						</div>
+					</div>
+				</aside>
 			</div>
 		</div>
+
+		<!-- Security Specifications Modal -->
+		<SecurityInfoPanel
+			isOpen={isSecurityInfoOpen}
+			onClose={() => (isSecurityInfoOpen = false)}
+		/>
 	{/if}
 </main>
