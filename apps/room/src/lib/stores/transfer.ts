@@ -155,3 +155,10 @@ export const completedFiles = derived(transferStore, ($s) => $s.completed);
 export const hasLargeFileRamWarning = derived(transferStore, ($s) =>
 	$s.incoming.some((t) => t.ramWarning && (t.status === 'offered' || t.status === 'receiving'))
 );
+
+/**
+ * Reactive flag indicating if any outbound file transfer is currently active or offered.
+ */
+export const hasActiveUpload = derived(activeUploads, ($uploads) =>
+	$uploads.some((t) => t.status === 'offered' || t.status === 'sending' || t.status === 'preparing')
+);

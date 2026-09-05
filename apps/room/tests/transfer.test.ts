@@ -27,7 +27,8 @@ import {
 	activeUploads,
 	activeDownloads,
 	completedFiles,
-	hasLargeFileRamWarning
+	hasLargeFileRamWarning,
+	hasActiveUpload
 } from '../src/lib/stores/transfer.ts';
 import { PeerConnectionSession } from '../src/lib/webrtc/peer.ts';
 import { WebRtcManager } from '../src/lib/webrtc/manager.ts';
@@ -874,6 +875,56 @@ describe('File Transfer: 16KB Chunking & Backpressure Outbound Streaming', () =>
 			unsubDown();
 			unsubComp();
 			unsubWarn();
+		});
+
+		test('hasActiveUpload tracks active outbound file streaming states', () => {
+			transferStore.reset();
+
+			let activeUpload = false;
+			const unsub = hasActiveUpload.subscribe((v) => (activeUpload = v));
+
+			assert.equal(activeUpload, false);
+
+			// Add active outgoing transfer with status 'offered'
+			const recipients = new Map();
+			recipients.set('peer-1', {
+				peerId: 'peer-1',
+				bytesSent: 0,
+				totalBytes: 1024,
+				chunksSent: 0,
+				totalChunks: 1,
+				percentage: 0,
+				status: 'offered'
+			});
+
+			transferStore.addOutgoingTransfer({
+				transferId: 'out-1',
+				file: new Blob(['test']),
+				fileName: 'test.txt',
+				fileSize: 1024,
+				fileType: 'text/plain',
+				totalChunks: 1,
+				recipients,
+				status: 'offered',
+				createdAt: Date.now()
+			});
+
+			assert.equal(activeUpload, true, 'hasActiveUpload must be true when transfer is offered');
+
+			// Transition recipient to completed
+			transferStore.updateOutgoingProgress('out-1', 'peer-1', {
+				peerId: 'peer-1',
+				bytesSent: 1024,
+				totalBytes: 1024,
+				chunksSent: 1,
+				totalChunks: 1,
+				percentage: 100,
+				status: 'completed'
+			});
+
+			assert.equal(activeUpload, false, 'hasActiveUpload must be false when all recipients complete');
+
+			unsub();
 		});
 	});
 

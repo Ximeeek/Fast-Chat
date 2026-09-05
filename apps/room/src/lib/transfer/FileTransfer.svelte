@@ -4,7 +4,8 @@
 		activeUploads,
 		activeDownloads,
 		completedFiles,
-		hasLargeFileRamWarning
+		hasLargeFileRamWarning,
+		hasActiveUpload
 	} from '$lib/stores/transfer';
 	import { isFileSystemAccessSupported, formatFileSize, RAM_HARD_LIMIT_BYTES } from '$lib/transfer';
 	import { downloadFiles } from '$lib/transfer/archive';
@@ -22,8 +23,10 @@
 	let fileInput: HTMLInputElement | null = null;
 	let selectedFiles = $state<File[]>([]);
 	let isZipping = $state(false);
+	let isSending = $state(false);
 	let sendError = $state<string | null>(null);
 
+	const isUploadActive = $derived(isSending || $hasActiveUpload);
 	const fsSupported = isFileSystemAccessSupported();
 
 	function handleFileSelect(e: Event) {
@@ -34,22 +37,27 @@
 	}
 
 	async function handleSendFiles() {
-		if (!fileSender || selectedFiles.length === 0) return;
+		if (isUploadActive || !fileSender || selectedFiles.length === 0) return;
+		isSending = true;
 		sendError = null;
 
-		for (const file of selectedFiles) {
-			try {
-				const transfer = await fileSender.sendFile(file, {
-					senderUsername: username
-				});
-				transferStore.addOutgoingTransfer(transfer);
-			} catch (err) {
-				sendError = err instanceof Error ? err.message : 'Failed to initiate transfer';
+		try {
+			for (const file of selectedFiles) {
+				try {
+					const transfer = await fileSender.sendFile(file, {
+						senderUsername: username
+					});
+					transferStore.addOutgoingTransfer(transfer);
+				} catch (err) {
+					sendError = err instanceof Error ? err.message : 'Failed to initiate transfer';
+				}
 			}
-		}
 
-		selectedFiles = [];
-		if (fileInput) fileInput.value = '';
+			selectedFiles = [];
+			if (fileInput) fileInput.value = '';
+		} finally {
+			isSending = false;
+		}
 	}
 
 	async function handleAcceptFileSystem(transferId: string) {
@@ -134,17 +142,26 @@
 				type="file"
 				bind:this={fileInput}
 				multiple
+				disabled={isUploadActive}
 				onchange={handleFileSelect}
-				class="text-xs text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+				class="text-xs text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
 			/>
 			{#if selectedFiles.length > 0}
 				<button
 					type="button"
 					onclick={handleSendFiles}
-					class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded transition-colors"
+					disabled={isUploadActive}
+					class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
 				>
 					Send {selectedFiles.length} {selectedFiles.length === 1 ? 'file' : 'files'}
 				</button>
+			{/if}
+
+			{#if isUploadActive}
+				<span class="text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200 font-medium flex items-center gap-1.5">
+					<span class="inline-block w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
+					Upload in progress...
+				</span>
 			{/if}
 		</div>
 
