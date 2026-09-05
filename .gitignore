@@ -30,3 +30,10 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Tooling and local workspace metadata
+.agents/
+.agent/
+AGENTS.md
+GEMINI.md
+
