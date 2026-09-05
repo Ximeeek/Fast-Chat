@@ -36,10 +36,7 @@ impl IceServerConfig {
 
     /// Default free and unlimited Cloudflare STUN server configuration.
     pub fn default_cloudflare_stun() -> Self {
-        Self::stun([
-            "stun:stun.cloudflare.com:3478",
-            "stun:stun.cloudflare.com:53",
-        ])
+        Self::stun(["stun:stun.cloudflare.com:3478"])
     }
 }
 

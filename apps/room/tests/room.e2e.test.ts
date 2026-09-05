@@ -127,10 +127,10 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 			});
 
 			// 3. Verify Symptom 2 is resolved: WebRTC peer connection establishes between Page 1 and Page 2
-			// The ConnectionBadge shows "DIRECT P2P"
+			// Wait for data channel to be open (title contains "(1 data channels open)")
 			await Promise.all([
-				page1.waitForSelector('text=DIRECT P2P', { timeout: 15000 }),
-				page2.waitForSelector('text=DIRECT P2P', { timeout: 15000 })
+				page1.waitForSelector('div[title*="(1 data channels open)"]', { timeout: 15000 }),
+				page2.waitForSelector('div[title*="(1 data channels open)"]', { timeout: 15000 })
 			]);
 
 			// 4. Test bidirectional E2E encrypted chat over WebRTC DataChannel

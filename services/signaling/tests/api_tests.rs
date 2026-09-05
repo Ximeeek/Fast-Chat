@@ -90,10 +90,7 @@ async fn test_get_ice_servers_endpoint_default_stun_when_unconfigured() {
     assert_eq!(res.ice_servers.len(), 1);
     assert_eq!(
         res.ice_servers[0].urls,
-        vec![
-            "stun:stun.cloudflare.com:3478".to_string(),
-            "stun:stun.cloudflare.com:53".to_string()
-        ]
+        vec!["stun:stun.cloudflare.com:3478".to_string()]
     );
     assert!(res.ice_servers[0].username.is_none());
 }
