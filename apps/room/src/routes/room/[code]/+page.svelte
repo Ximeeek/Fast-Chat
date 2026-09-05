@@ -7,6 +7,9 @@
 	import { roomStore, isRoomActive, peerCount } from '$lib/stores/room';
 	import { chatStore } from '$lib/stores/chat';
 	import { serializeChatMessage, deserializeChatMessage, formatChatLog, downloadChatLog } from '$lib/chat';
+	import { FileSender, FileReceiver, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
+	import { transferStore } from '$lib/stores/transfer';
+	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
 	import { validateRoomCode } from '$lib/utils/roomCode';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
@@ -22,6 +25,8 @@
 	let messageInput = $state('');
 	let isSending = $state(false);
 	let unsubWebRtcMessage: (() => void) | null = null;
+	let fileSender = $state<FileSender | null>(null);
+	let fileReceiver = $state<FileReceiver | null>(null);
 
 	// Expiration countdown
 	let now = $state(Math.floor(Date.now() / 1000));
@@ -134,6 +139,7 @@
 		signalingClient.disconnect();
 		roomStore.reset();
 		chatStore.reset();
+		transferStore.reset();
 		goto('/create');
 	}
 
@@ -144,17 +150,63 @@
 			now = Math.floor(Date.now() / 1000);
 		}, 1000);
 
+		fileSender = new FileSender(webRtcManager, {
+			onProgress: (transferId, peerId, progress) => {
+				transferStore.updateOutgoingProgress(transferId, peerId, progress);
+			}
+		});
+
+		fileReceiver = new FileReceiver({
+			webRtcManager,
+			onTransferOffered: (transfer) => {
+				transferStore.addIncomingTransfer(transfer);
+			},
+			onProgress: (transfer) => {
+				transferStore.updateIncomingProgress(transfer);
+			},
+			onCompleted: (record) => {
+				transferStore.addCompletedRecord(record);
+			}
+		});
+
 		unsubWebRtcMessage = webRtcManager.onMessage((peerId, payload) => {
-			const wireMsg = deserializeChatMessage(payload);
-			if (wireMsg) {
-				chatStore.addMessage({
-					id: wireMsg.id,
-					sender: wireMsg.sender,
-					content: wireMsg.content,
-					timestamp: wireMsg.timestamp,
-					isSelf: false,
-					senderPeerId: peerId
-				});
+			if (isFileChunkPacket(payload)) {
+				const chunk = parseFileChunkPacket(payload);
+				if (chunk && fileReceiver) {
+					fileReceiver.handleBinaryChunk(chunk);
+				}
+				return;
+			}
+
+			if (payload.length > 0 && payload[0] === 0x7b) {
+				try {
+					const jsonStr = new TextDecoder().decode(payload);
+					const data = JSON.parse(jsonStr);
+
+					if (data.type === 'chat') {
+						const wireMsg = deserializeChatMessage(payload);
+						if (wireMsg) {
+							chatStore.addMessage({
+								id: wireMsg.id,
+								sender: wireMsg.sender,
+								content: wireMsg.content,
+								timestamp: wireMsg.timestamp,
+								isSelf: false,
+								senderPeerId: peerId
+							});
+						}
+					} else if (
+						data.type === 'file-meta' ||
+						data.type === 'file-complete' ||
+						data.type === 'file-cancel'
+					) {
+						fileReceiver?.handleControlMessage(peerId, data);
+					} else if (data.type === 'file-ready') {
+						fileSender?.handleControlMessage(peerId, data);
+					}
+				} catch {
+					// Ignore invalid JSON payload
+				}
 			}
 		});
 
@@ -226,6 +278,7 @@
 	onDestroy(() => {
 		webRtcManager.disconnectAll();
 		chatStore.reset();
+		transferStore.reset();
 		if (unsubWebRtcMessage) {
 			unsubWebRtcMessage();
 		}
@@ -485,6 +538,11 @@
 						</button>
 					</form>
 				</section>
+
+				<!-- End-to-End Encrypted File Transfer -->
+				{#if fileSender && fileReceiver}
+					<FileTransfer {fileSender} {fileReceiver} username={$chatStore.username || 'anonymous'} />
+				{/if}
 
 				<!-- Signaling Activity Feed (WebRTC readiness verification) -->
 				<div>

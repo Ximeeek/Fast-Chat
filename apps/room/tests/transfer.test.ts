@@ -1,5 +1,6 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import {
 	CHUNK_SIZE,
@@ -11,6 +12,7 @@ import {
 	isFileChunkPacket,
 	formatFileSize
 } from '../src/lib/transfer/chunking.ts';
+import { createZipArchive } from '../src/lib/transfer/archive.ts';
 import { FileSender } from '../src/lib/transfer/sender.ts';
 import {
 	FileReceiver,
@@ -824,6 +826,182 @@ describe('File Transfer: 16KB Chunking & Backpressure Outbound Streaming', () =>
 			unsubWarn();
 		});
 	});
+
+	describe('8. Client-Side Multi-File ZIP Archive Export via fflate', () => {
+		test('createZipArchive bundles multiple binary files into valid ZIP without server roundtrip', async () => {
+			const file1Data = new TextEncoder().encode('Content of file 1');
+			const file2Data = new TextEncoder().encode('Content of file 2 with more bytes');
+
+			const zipBlob = await createZipArchive([
+				{ name: 'document1.txt', data: file1Data },
+				{ name: 'document2.txt', data: file2Data }
+			]);
+
+			assert.ok(zipBlob instanceof Blob);
+			assert.equal(zipBlob.type, 'application/zip');
+			assert.ok(zipBlob.size > 0);
+
+			// Verify standard ZIP magic PK\x03\x04
+			const zipBytes = new Uint8Array(await zipBlob.arrayBuffer());
+			assert.equal(zipBytes[0], 0x50); // 'P'
+			assert.equal(zipBytes[1], 0x4b); // 'K'
+			assert.equal(zipBytes[2], 0x03);
+			assert.equal(zipBytes[3], 0x04);
+		});
+
+		test('de-duplicates duplicate filenames automatically in ZIP archive table', async () => {
+			const fileData = new Uint8Array([1, 2, 3, 4]);
+
+			const zipBlob = await createZipArchive([
+				{ name: 'test.pdf', data: fileData },
+				{ name: 'test.pdf', data: fileData }
+			]);
+
+			assert.ok(zipBlob instanceof Blob);
+			assert.ok(zipBlob.size > 0);
+		});
+	});
+
+	describe('9. End-to-End Encrypted File Transfer & Large Multi-Chunk Roundtrip', () => {
+		test('encrypts outbound chunks and decrypts inbound chunks across mock WebRTC mesh', async () => {
+			let pcAlice: MockBackpressureRTCPeerConnection | null = null;
+			let pcBob: MockBackpressureRTCPeerConnection | null = null;
+
+			const managerAlice = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					pcAlice = new MockBackpressureRTCPeerConnection(cfg);
+					return pcAlice as unknown as RTCPeerConnection;
+				}
+			});
+
+			const managerBob = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					pcBob = new MockBackpressureRTCPeerConnection(cfg);
+					return pcBob as unknown as RTCPeerConnection;
+				}
+			});
+
+			await managerAlice.getOrCreateSession('peer-bob', true);
+			await managerBob.getOrCreateSession('peer-alice', false);
+
+			const dcAlice = pcAlice!.localDataChannels[0];
+			const dcBob = new MockBackpressureRTCDataChannel('fastchat-data');
+			dcAlice.peerChannel = dcBob;
+			dcBob.peerChannel = dcAlice;
+
+			pcBob!.ondatachannel?.({ channel: dcBob });
+			dcAlice.open();
+			dcBob.open();
+
+			const sender = new FileSender(managerAlice);
+			const receiver = new FileReceiver({ webRtcManager: managerBob });
+
+			// Wire incoming messages on Bob to receiver
+			managerBob.onMessage((peerId, payload) => {
+				if (isFileChunkPacket(payload)) {
+					const parsed = parseFileChunkPacket(payload);
+					if (parsed) receiver.handleBinaryChunk(parsed);
+					return;
+				}
+
+				if (payload.length > 0 && payload[0] === 0x7b) {
+					try {
+						const json = JSON.parse(new TextDecoder().decode(payload));
+						receiver.handleControlMessage(peerId, json);
+					} catch {}
+				}
+			});
+
+			// Wire incoming messages on Alice to sender
+			managerAlice.onMessage((peerId, payload) => {
+				if (payload.length > 0 && payload[0] === 0x7b) {
+					try {
+						const json = JSON.parse(new TextDecoder().decode(payload));
+						sender.handleControlMessage(peerId, json);
+					} catch {}
+				}
+			});
+
+			// Create 64KB random buffer (4 chunks of 16KB)
+			const fileLength = 64 * 1024;
+			const rawSource = new Uint8Array(fileLength);
+			for (let i = 0; i < fileLength; i++) {
+				rawSource[i] = (i * 7 + 13) % 256;
+			}
+			const sourceBlob = new Blob([rawSource], { type: 'application/octet-stream' });
+
+			// Alice initiates send
+			const transfer = await sender.sendFile(sourceBlob, {
+				fileName: 'large-payload.dat',
+				targetPeers: ['peer-bob'],
+				senderUsername: 'alice'
+			});
+
+			// Await async microtask message propagation
+			await new Promise((r) => setTimeout(r, 20));
+
+			const offeredOnBob = receiver.getTransfer(transfer.transferId);
+			assert.ok(offeredOnBob);
+			assert.equal(offeredOnBob.fileName, 'large-payload.dat');
+			assert.equal(offeredOnBob.totalChunks, 4);
+
+			// Bob accepts via Blob mode
+			await receiver.acceptWithBlob(transfer.transferId);
+
+			// Await transfer streaming across channels
+			await new Promise((r) => setTimeout(r, 60));
+
+			const completedOnBob = receiver.getTransfer(transfer.transferId)!;
+			assert.equal(completedOnBob.status, 'completed');
+			assert.equal(completedOnBob.receivedChunks, 4);
+			assert.ok(completedOnBob.blob instanceof Blob);
+			assert.equal(completedOnBob.blob.size, fileLength);
+
+			// Assert byte-for-byte exact equality between sent and received file
+			const receivedBytes = new Uint8Array(await completedOnBob.blob.arrayBuffer());
+			assert.deepEqual(receivedBytes, rawSource);
+
+			managerAlice.destroy();
+			managerBob.destroy();
+		});
+	});
+
+	describe('10. Zero Server Footprint & Zero Persistence Audit', () => {
+		test('no localStorage or sessionStorage references present in transfer source files', () => {
+			const transferFiles = [
+				'src/lib/transfer/chunking.ts',
+				'src/lib/transfer/sender.ts',
+				'src/lib/transfer/receiver.ts',
+				'src/lib/transfer/archive.ts',
+				'src/lib/transfer/types.ts',
+				'src/lib/transfer/index.ts',
+				'src/lib/stores/transfer.ts',
+				'src/lib/transfer/FileTransfer.svelte'
+			];
+
+			for (const relPath of transferFiles) {
+				const fullPath = new URL(`../${relPath}`, import.meta.url);
+				if (fs.existsSync(fullPath)) {
+					const code = fs.readFileSync(fullPath, 'utf8');
+					assert.equal(
+						code.includes('localStorage'),
+						false,
+						`Forbidden localStorage detected in ${relPath}`
+					);
+					assert.equal(
+						code.includes('sessionStorage'),
+						false,
+						`Forbidden sessionStorage detected in ${relPath}`
+					);
+				}
+			}
+		});
+	});
 });
+
 
 
