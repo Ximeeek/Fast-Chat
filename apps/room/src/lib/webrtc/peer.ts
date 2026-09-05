@@ -112,6 +112,40 @@ export class PeerConnectionSession {
 	}
 
 	/**
+	 * Initiates an ICE restart on the existing peer connection.
+	 * Increments retryCount and returns an SDP offer with iceRestart: true.
+	 */
+	public async restartIce(): Promise<RTCSessionDescriptionInit | null> {
+		if (this.isClosed) {
+			throw new Error(`Cannot restart ICE for peer ${this.remotePeerId}: connection is closed`);
+		}
+
+		this.clearDisconnectTimer();
+		this.retryCount += 1;
+		this.updateConnectionState('connecting');
+
+		try {
+			this.makingOffer = true;
+			if (typeof this.pc.restartIce === 'function') {
+				this.pc.restartIce();
+			}
+			const offer = await this.pc.createOffer({ iceRestart: true });
+			await this.pc.setLocalDescription(offer);
+			return this.pc.localDescription
+				? {
+						type: this.pc.localDescription.type,
+						sdp: this.pc.localDescription.sdp
+					}
+				: null;
+		} catch (err) {
+			this.notifyError(err instanceof Error ? err : new Error(String(err)));
+			throw err;
+		} finally {
+			this.makingOffer = false;
+		}
+	}
+
+	/**
 	 * Processes an incoming SDP offer from the remote peer, performing perfect negotiation
 	 * collision resolution and generating an SDP answer.
 	 */

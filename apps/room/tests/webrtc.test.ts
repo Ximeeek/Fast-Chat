@@ -973,6 +973,122 @@ describe('WebRTC Mesh & Secure DataChannel Subsystem (Phase 8)', () => {
 
 			manager.destroy();
 		});
+
+		test('PeerConnectionSession.restartIce initiates renegotiation with iceRestart: true and tracks retry lifecycle', async () => {
+			let rawPc: MockRTCPeerConnection | null = null;
+			const session = new PeerConnectionSession({
+				localPeerId: 'peer-alice',
+				remotePeerId: 'peer-bob',
+				isInitiator: true,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				rtcPeerConnectionFactory: (cfg) => {
+					rawPc = new MockRTCPeerConnection(cfg);
+					return rawPc as unknown as RTCPeerConnection;
+				}
+			});
+
+			// Initial failure
+			rawPc!.simulateConnectionState('failed');
+			assert.equal(session.getSessionInfo().connectionState, 'failed');
+			assert.equal(session.getSessionInfo().retryCount, 0);
+			assert.equal(session.getSessionInfo().hasFailedAfterRetry, false);
+
+			// Trigger ICE restart
+			const offer = await session.restartIce();
+			assert.ok(offer);
+			assert.equal(offer.type, 'offer');
+			assert.equal(rawPc!.restartIceCalled, true);
+			assert.equal(rawPc!.lastOfferOptions?.iceRestart, true);
+			assert.equal(session.getSessionInfo().connectionState, 'connecting');
+			assert.equal(session.getSessionInfo().retryCount, 1);
+			assert.equal(session.getSessionInfo().hasFailedAfterRetry, false);
+
+			// Second failure marks hasFailedAfterRetry
+			rawPc!.simulateConnectionState('failed');
+			assert.equal(session.getSessionInfo().connectionState, 'failed');
+			assert.equal(session.getSessionInfo().hasFailedAfterRetry, true);
+
+			session.close();
+		});
+
+		test('WebRtcManager.restartPeerIce triggers ICE restart on session and transmits offer over signaling', async () => {
+			let pcInstance: MockRTCPeerConnection | null = null;
+			let transmittedOffer: any = null;
+			let targetPeer: string | null = null;
+
+			const mockSignaling = {
+				on: () => () => {},
+				isConnected: () => true,
+				sendSdpOffer: (peerId: string, offer: any) => {
+					targetPeer = peerId;
+					transmittedOffer = offer;
+				},
+				sendIceCandidates: () => {},
+				sendSdpAnswer: () => {}
+			};
+
+			const manager = new WebRtcManager(
+				{
+					activeKey: testKey,
+					iceServers: dummyIceServers,
+					rtcPeerConnectionFactory: (cfg) => {
+						pcInstance = new MockRTCPeerConnection(cfg);
+						return pcInstance as unknown as RTCPeerConnection;
+					}
+				},
+				mockSignaling as any
+			);
+
+			await manager.getOrCreateSession('peer-target', true);
+			pcInstance!.simulateConnectionState('failed');
+
+			// Non-existent peer fails gracefully
+			const failedUnknown = await manager.restartPeerIce('unknown-peer');
+			assert.equal(failedUnknown, false);
+
+			// Existing peer initiates restart and sends offer
+			const success = await manager.restartPeerIce('peer-target');
+			assert.equal(success, true);
+			assert.equal(targetPeer, 'peer-target');
+			assert.ok(transmittedOffer);
+			assert.equal(transmittedOffer.type, 'offer');
+			assert.equal(pcInstance!.lastOfferOptions?.iceRestart, true);
+
+			manager.destroy();
+		});
+
+		test('reconnection after ICE restart recovers session state and resets failure indicators', async () => {
+			let rawPc: MockRTCPeerConnection | null = null;
+			const session = new PeerConnectionSession({
+				localPeerId: 'peer-alice',
+				remotePeerId: 'peer-bob',
+				isInitiator: true,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				rtcPeerConnectionFactory: (cfg) => {
+					rawPc = new MockRTCPeerConnection(cfg);
+					return rawPc as unknown as RTCPeerConnection;
+				}
+			});
+
+			rawPc!.simulateConnectionState('failed');
+			assert.equal(session.getSessionInfo().connectionState, 'failed');
+
+			await session.restartIce();
+			assert.equal(session.getSessionInfo().connectionState, 'connecting');
+			assert.equal(session.getSessionInfo().retryCount, 1);
+
+			// Connection recovers
+			rawPc!.simulateConnectionState('connected');
+			assert.equal(session.getSessionInfo().connectionState, 'connected');
+			assert.equal(session.getSessionInfo().retryCount, 0);
+			assert.equal(session.getSessionInfo().hasFailedAfterRetry, false);
+
+			session.close();
+		});
 	});
 });
 

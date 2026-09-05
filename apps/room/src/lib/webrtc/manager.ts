@@ -282,6 +282,30 @@ export class WebRtcManager {
 	}
 
 	/**
+	 * Initiates an ICE restart for a specific remote peer without leaving or rejoining the room.
+	 * Generates an SDP offer with iceRestart: true and transmits it across the signaling channel.
+	 */
+	public async restartPeerIce(peerId: string): Promise<boolean> {
+		const session = this.sessions.get(peerId);
+		if (!session) {
+			console.warn(`[WebRtcManager] Cannot restart ICE: no session found for peer ${peerId}`);
+			return false;
+		}
+
+		try {
+			const offer = await session.restartIce();
+			if (offer && this.signaling.isConnected()) {
+				this.signaling.sendSdpOffer(peerId, offer);
+				return true;
+			}
+			return false;
+		} catch (err) {
+			console.error(`[WebRtcManager] Failed to restart ICE for peer ${peerId}:`, err);
+			return false;
+		}
+	}
+
+	/**
 	 * Explicitly terminates and removes a specific peer session.
 	 */
 	public closePeer(peerId: string): void {

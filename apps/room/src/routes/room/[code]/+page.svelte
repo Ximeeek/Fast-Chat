@@ -37,6 +37,7 @@
 	let fileReceiver = $state<FileReceiver | null>(null);
 	let isSecurityInfoOpen = $state(false);
 	let isZippingFiles = $state(false);
+	let retryingPeers = $state<Record<string, boolean>>({});
 
 	const isChatDisabled = $derived($hasFailedPeers && $openDataChannelsCount === 0);
 	const chatPlaceholder = $derived(
@@ -91,6 +92,20 @@
 	function handleJoinSubmit(e: SubmitEvent) {
 		e.preventDefault();
 		performJoin(password);
+	}
+
+	async function handleRetryPeer(peerId: string) {
+		if (retryingPeers[peerId]) return;
+		retryingPeers[peerId] = true;
+		try {
+			await webRtcManager.restartPeerIce(peerId);
+		} catch (err) {
+			console.error(`Failed to restart ICE for peer ${peerId}:`, err);
+		} finally {
+			setTimeout(() => {
+				retryingPeers[peerId] = false;
+			}, 1000);
+		}
 	}
 
 	async function handleSendMessage(e?: SubmitEvent) {
@@ -632,20 +647,42 @@
 							{@const peerInfo = $webrtcPeers[peer]}
 							{@const isConnected = peerInfo?.dataChannelState === 'open'}
 							{@const isFailed = peerInfo?.connectionState === 'failed'}
-							<div class="p-3.5 rounded-xl bg-[#06080e] border border-white/5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-								<div class="flex items-center space-x-2">
-									<span class="w-2 h-2 rounded-full {isConnected ? 'bg-cyan-400 shadow-[0_0_8px_#00e5ff]' : isFailed ? 'bg-red-500 shadow-[0_0_8px_#ef4444]' : 'bg-amber-400 animate-pulse'}"></span>
-									<span class="font-mono text-zinc-300">{peer}</span>
+							<div class="p-3.5 rounded-xl bg-[#06080e] border border-white/5 text-xs flex flex-col gap-2.5">
+								<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+									<div class="flex items-center space-x-2">
+										<span class="w-2 h-2 rounded-full {isConnected ? 'bg-cyan-400 shadow-[0_0_8px_#00e5ff]' : isFailed ? 'bg-red-500 shadow-[0_0_8px_#ef4444]' : 'bg-amber-400 animate-pulse'}"></span>
+										<span class="font-mono text-zinc-300">{peer}</span>
+									</div>
+									<div class="flex items-center gap-2">
+										{#if isConnected}
+											<span class="text-[10px] text-cyan-300 uppercase font-bold font-mono">Connected</span>
+										{:else if isFailed}
+											<span class="text-[10px] text-red-400 uppercase font-bold font-mono">Connection Failed</span>
+											{#if !peerInfo?.hasFailedAfterRetry}
+												<button
+													type="button"
+													onclick={() => handleRetryPeer(peer)}
+													disabled={retryingPeers[peer]}
+													class="px-2.5 py-1 text-[10px] rounded bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 uppercase font-bold tracking-wider transition-all disabled:opacity-50 cursor-pointer font-mono"
+												>
+													{retryingPeers[peer] ? 'Retrying...' : 'Retry'}
+												</button>
+											{/if}
+										{:else}
+											<span class="text-[10px] text-amber-400 uppercase font-bold animate-pulse font-mono">Connecting...</span>
+										{/if}
+									</div>
 								</div>
-								<div class="flex items-center gap-2">
-									{#if isConnected}
-										<span class="text-[10px] text-cyan-300 uppercase font-bold font-mono">Connected</span>
-									{:else if isFailed}
-										<span class="text-[10px] text-red-400 uppercase font-bold font-mono">Connection Failed</span>
-									{:else}
-										<span class="text-[10px] text-amber-400 uppercase font-bold animate-pulse font-mono">Connecting...</span>
-									{/if}
-								</div>
+								{#if isFailed && peerInfo?.hasFailedAfterRetry}
+									<div role="alert" class="p-2.5 rounded-lg bg-red-950/40 border border-red-500/30 text-red-300 text-[11px] font-mono flex items-start gap-2">
+										<svg class="w-4 h-4 text-red-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<circle cx="12" cy="12" r="10"/>
+											<line x1="12" y1="8" x2="12" y2="12"/>
+											<line x1="12" y1="16" x2="12.01" y2="16"/>
+										</svg>
+										<span>Direct P2P connection could not be established, and the relay server is currently unavailable.</span>
+									</div>
+								{/if}
 							</div>
 						{/each}
 					</div>
