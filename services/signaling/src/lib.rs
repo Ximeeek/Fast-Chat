@@ -160,11 +160,47 @@ async fn close_room_handler(
     Ok(StatusCode::OK)
 }
 
+async fn get_ice_servers_handler(
+    client_ip: limiter::ClientIp,
+    State(state): State<AppState>,
+) -> Result<Json<turn::IceServersResponse>, (StatusCode, String)> {
+    let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
+    if let Err(retry_after) = state.limiter.connection.check_and_record(&rate_key) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("Rate limit exceeded. Please retry in {retry_after} seconds."),
+        ));
+    }
+
+    let default_stun = turn::IceServerConfig::default_cloudflare_stun();
+    let mut servers = vec![default_stun];
+    let mut quota_exhausted = false;
+
+    if state.turn.client.is_configured() {
+        match state.turn.issue_ice_servers(None).await {
+            Ok(turn_servers) => {
+                servers.extend(turn_servers);
+            }
+            Err(turn::TurnError::QuotaExhausted(_)) => {
+                quota_exhausted = true;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch TURN credentials: {e}");
+            }
+        }
+    } else if state.turn.governor.is_quota_exhausted() {
+        quota_exhausted = true;
+    }
+
+    Ok(Json(turn::IceServersResponse::new(servers, quota_exhausted)))
+}
+
 /// Constructs the Axum application router with all routes and middleware configured.
 pub fn create_router(app_state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws::ws_handler))
+        .route("/api/ice-servers", get(get_ice_servers_handler))
         .route("/api/rooms", post(create_room_handler))
         .route("/api/rooms/{code}", get(get_room_handler))
         .route("/api/rooms/{code}/extend", post(extend_room_handler))

@@ -563,3 +563,61 @@ async fn test_ws_lifecycle_closing_and_closed_broadcast_flow() {
         _ => panic!("Expected Error(ROOM_NOT_FOUND) for destroyed room"),
     }
 }
+
+#[tokio::test]
+async fn test_ws_request_ice_servers_flow() {
+    let config = Config::default();
+    let (addr, state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    let (mut ws, _) = connect_async(&ws_url).await.unwrap();
+
+    // Send REQUEST_ICE_SERVERS
+    let msg = ClientMessage::RequestIceServers;
+    ws.send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_raw = ws.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp: ServerMessage = serde_json::from_str(&resp_raw).unwrap();
+
+    match resp {
+        ServerMessage::IceServers {
+            ice_servers,
+            quota_exhausted,
+            ..
+        } => {
+            assert!(!quota_exhausted);
+            assert_eq!(ice_servers.len(), 1);
+            assert_eq!(ice_servers[0].urls[0], "stun:stun.cloudflare.com:3478");
+        }
+        other => panic!("Expected IceServers message, got {other:?}"),
+    }
+
+    // Now trip quota on governor in state
+    state
+        .turn
+        .governor
+        .set_usage(state.config.turn_max_monthly_bytes + 100);
+
+    // Send another REQUEST_ICE_SERVERS
+    ws.send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp2_raw = ws.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp2: ServerMessage = serde_json::from_str(&resp2_raw).unwrap();
+
+    match resp2 {
+        ServerMessage::IceServers {
+            ice_servers,
+            quota_exhausted,
+            ..
+        } => {
+            assert!(quota_exhausted);
+            assert_eq!(ice_servers.len(), 1);
+            assert_eq!(ice_servers[0].urls[0], "stun:stun.cloudflare.com:3478");
+        }
+        other => panic!("Expected IceServers message with quota_exhausted, got {other:?}"),
+    }
+}

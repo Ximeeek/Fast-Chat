@@ -1,3 +1,4 @@
+use crate::turn::IceServerConfig;
 use serde::{Deserialize, Serialize};
 
 /// Formats a byte slice into a lowercase hexadecimal string.
@@ -82,6 +83,10 @@ pub enum ClientMessage {
         #[serde(default)]
         salt: Option<String>,
     },
+
+    /// Request ICE servers configuration (STUN/TURN) for WebRTC peer connection.
+    #[serde(alias = "GET_ICE_SERVERS")]
+    RequestIceServers,
 
     /// Application-level heartbeat ping.
     Ping,
@@ -192,6 +197,16 @@ pub enum ServerMessage {
     Error {
         code: String,
         message: String,
+    },
+
+    /// Response containing ICE servers configuration and quota status.
+    IceServers {
+        ice_servers: Vec<IceServerConfig>,
+        #[serde(rename = "iceServers")]
+        ice_servers_camel: Vec<IceServerConfig>,
+        quota_exhausted: bool,
+        #[serde(rename = "quotaExhausted")]
+        quota_exhausted_camel: bool,
     },
 }
 
@@ -310,6 +325,15 @@ impl ServerMessage {
         Self::Error {
             code: code.into(),
             message: message.into(),
+        }
+    }
+
+    pub fn ice_servers(ice_servers: Vec<IceServerConfig>, quota_exhausted: bool) -> Self {
+        Self::IceServers {
+            ice_servers: ice_servers.clone(),
+            ice_servers_camel: ice_servers,
+            quota_exhausted,
+            quota_exhausted_camel: quota_exhausted,
         }
     }
 }
@@ -443,5 +467,25 @@ mod tests {
         assert!(sdp_serialized.contains(r#""sender_peer_id":"alice""#));
         assert!(sdp_serialized.contains(r#""senderPeerId":"alice""#));
         assert!(sdp_serialized.contains(r#""sdp":{"sdp":"data","type":"offer"}"#));
+
+        let stun = IceServerConfig::default_cloudflare_stun();
+        let ice_msg = ServerMessage::ice_servers(vec![stun], false);
+        let ice_serialized = serde_json::to_string(&ice_msg).unwrap();
+        assert!(ice_serialized.contains(r#""type":"ICE_SERVERS""#));
+        assert!(ice_serialized.contains(r#""quota_exhausted":false"#));
+        assert!(ice_serialized.contains(r#""quotaExhausted":false"#));
+        assert!(ice_serialized.contains(r#""ice_servers":[{"#));
+        assert!(ice_serialized.contains(r#""iceServers":[{"#));
+    }
+
+    #[test]
+    fn test_client_message_request_ice_servers_deserialization() {
+        let json_data = r#"{"type":"REQUEST_ICE_SERVERS"}"#;
+        let msg: ClientMessage = serde_json::from_str(json_data).unwrap();
+        assert_eq!(msg, ClientMessage::RequestIceServers);
+
+        let json_alias = r#"{"type":"GET_ICE_SERVERS"}"#;
+        let msg_alias: ClientMessage = serde_json::from_str(json_alias).unwrap();
+        assert_eq!(msg_alias, ClientMessage::RequestIceServers);
     }
 }

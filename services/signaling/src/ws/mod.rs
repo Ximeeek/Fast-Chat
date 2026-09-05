@@ -565,5 +565,28 @@ async fn handle_client_message(
                 }
             }
         }
+        ClientMessage::RequestIceServers => {
+            let default_stun = crate::turn::IceServerConfig::default_cloudflare_stun();
+            let mut servers = vec![default_stun];
+            let mut quota_exhausted = false;
+
+            if state.turn.client.is_configured() {
+                match state.turn.issue_ice_servers(None).await {
+                    Ok(turn_servers) => {
+                        servers.extend(turn_servers);
+                    }
+                    Err(crate::turn::TurnError::QuotaExhausted(_)) => {
+                        quota_exhausted = true;
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch TURN credentials over WS: {e}");
+                    }
+                }
+            } else if state.turn.governor.is_quota_exhausted() {
+                quota_exhausted = true;
+            }
+
+            let _ = tx.send(ServerMessage::ice_servers(servers, quota_exhausted));
+        }
     }
 }

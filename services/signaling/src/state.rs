@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::limiter::RateLimiterService;
 use crate::room::manager::RoomManager;
+use crate::turn::TurnService;
 use crate::ws::session::PeerSessionRegistry;
 use std::sync::Arc;
 
@@ -11,6 +12,7 @@ pub struct AppState {
     pub sessions: PeerSessionRegistry,
     pub config: Config,
     pub limiter: Arc<RateLimiterService>,
+    pub turn: Arc<TurnService>,
 }
 
 impl AppState {
@@ -19,21 +21,30 @@ impl AppState {
         let broadcaster = Arc::new(crate::room::broadcast::WebSocketBroadcaster::new(sessions.clone()));
         let room_manager = Arc::new(RoomManager::with_broadcaster(config.clone(), broadcaster));
         let limiter = Arc::new(RateLimiterService::new(&config));
+        let turn = Arc::new(TurnService::new(&config));
         Self {
             room_manager,
             sessions,
             config,
             limiter,
+            turn,
         }
     }
 
     pub fn with_room_manager(room_manager: Arc<RoomManager>, sessions: PeerSessionRegistry, config: Config) -> Self {
         let limiter = Arc::new(RateLimiterService::new(&config));
+        let turn = Arc::new(TurnService::new(&config));
         Self {
             room_manager,
             sessions,
             config,
             limiter,
+            turn,
         }
+    }
+
+    pub fn with_turn_service(mut self, turn: Arc<TurnService>) -> Self {
+        self.turn = turn;
+        self
     }
 }
