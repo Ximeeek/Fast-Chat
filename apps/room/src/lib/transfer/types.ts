@@ -127,6 +127,7 @@ export interface IncomingTransfer {
 	status: TransferStatus;
 	storageMode: StorageMode;
 	ramWarning: boolean;
+	ramLimitExceeded?: boolean;
 	blob?: Blob;
 	downloadUrl?: string;
 	error?: string;

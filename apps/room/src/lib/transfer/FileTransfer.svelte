@@ -6,7 +6,7 @@
 		completedFiles,
 		hasLargeFileRamWarning
 	} from '$lib/stores/transfer';
-	import { isFileSystemAccessSupported, formatFileSize } from '$lib/transfer';
+	import { isFileSystemAccessSupported, formatFileSize, RAM_HARD_LIMIT_BYTES } from '$lib/transfer';
 	import { downloadFiles } from '$lib/transfer/archive';
 	import type { FileSender } from '$lib/transfer/sender';
 	import type { FileReceiver } from '$lib/transfer/receiver';
@@ -66,6 +66,7 @@
 		try {
 			await fileReceiver.acceptWithBlob(transferId);
 		} catch (err) {
+			sendError = err instanceof Error ? err.message : 'Failed to accept transfer via Blob fallback';
 			console.error('Failed to accept transfer via Blob fallback:', err);
 		}
 	}
@@ -239,7 +240,17 @@
 
 					<!-- Offered State Acceptance Options -->
 					{#if transfer.status === 'offered'}
-						{#if transfer.ramWarning}
+						{#if transfer.ramLimitExceeded}
+							<div role="alert" class="p-2.5 bg-red-50 border border-red-300 text-red-900 rounded text-[11px] space-y-1">
+								<div class="font-bold flex items-center space-x-1 text-red-800">
+									<span>🛑</span>
+									<span>File is too large to accept in this browser</span>
+								</div>
+								<p class="text-[11px] text-red-700 leading-relaxed">
+									File size ({formatFileSize(transfer.fileSize)}) exceeds the {formatFileSize(RAM_HARD_LIMIT_BYTES)} in-memory assembly limit for browsers without File System Access API support. Transfer cannot be accepted.
+								</p>
+							</div>
+						{:else if transfer.ramWarning}
 							<div class="p-2 bg-amber-100 border border-amber-300 text-amber-900 rounded text-[11px]">
 								⚠️ File is over 500MB ({formatFileSize(transfer.fileSize)}). This browser does not support disk streaming; file will consume RAM.
 							</div>
@@ -255,19 +266,21 @@
 									Save to Disk (Stream)
 								</button>
 							{/if}
-							<button
-								type="button"
-								onclick={() => handleAcceptBlob(transfer.transferId)}
-								class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded text-xs transition-colors"
-							>
-								{fsSupported ? 'Download to RAM' : 'Accept & Download'}
-							</button>
+							{#if !transfer.ramLimitExceeded && (!fsSupported || transfer.fileSize <= RAM_HARD_LIMIT_BYTES)}
+								<button
+									type="button"
+									onclick={() => handleAcceptBlob(transfer.transferId)}
+									class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded text-xs transition-colors"
+								>
+									{fsSupported ? 'Download to RAM' : 'Accept & Download'}
+								</button>
+							{/if}
 							<button
 								type="button"
 								onclick={() => handleAbortIncoming(transfer.transferId)}
 								class="px-2.5 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs transition-colors"
 							>
-								Decline
+								{transfer.ramLimitExceeded ? 'Dismiss' : 'Decline'}
 							</button>
 						</div>
 					{:else if transfer.status === 'receiving'}

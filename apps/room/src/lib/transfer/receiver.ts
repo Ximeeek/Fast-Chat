@@ -1,4 +1,5 @@
 import type { WebRtcManager } from '../webrtc/manager.ts';
+import { formatFileSize } from './chunking.ts';
 import type {
 	IncomingTransfer,
 	ParsedFileChunk,
@@ -12,6 +13,7 @@ export type TransferCallback = (transfer: IncomingTransfer) => void;
 
 export interface FileReceiverOptions {
 	webRtcManager: WebRtcManager;
+	ramHardLimitBytes?: number;
 	onTransferOffered?: TransferCallback;
 	onProgress?: TransferCallback;
 	onCompleted?: (record: CompletedFileRecord) => void;
@@ -37,10 +39,33 @@ export function isFileSystemAccessSupported(): boolean {
 export const RAM_WARNING_THRESHOLD_BYTES = 500 * 1024 * 1024; // 500MB
 
 /**
- * Checks if a file size warrants displaying the high RAM usage alert for in-memory assembly.
+ * Hard upper limit in bytes (1GB) for in-memory Blob aggregation fallback.
+ * Incoming transfers exceeding this threshold in browsers lacking File System Access API support
+ * are rejected to prevent tab termination via Out-Of-Memory (OOM) errors.
  */
-export function shouldWarnLargeFile(fileSize: number): boolean {
-	return !isFileSystemAccessSupported() && fileSize > RAM_WARNING_THRESHOLD_BYTES;
+export const RAM_HARD_LIMIT_BYTES = 1024 * 1024 * 1024; // 1GB
+
+/**
+ * Checks if a file size warrants displaying the high RAM usage alert for in-memory assembly.
+ * Returns true if File System Access API is unsupported and file size is between 500MB and 1GB.
+ */
+export function shouldWarnLargeFile(
+	fileSize: number,
+	warningThreshold: number = RAM_WARNING_THRESHOLD_BYTES,
+	hardLimit: number = RAM_HARD_LIMIT_BYTES
+): boolean {
+	return !isFileSystemAccessSupported() && fileSize > warningThreshold && fileSize <= hardLimit;
+}
+
+/**
+ * Checks if a file size exceeds the hard RAM limit for in-memory Blob aggregation
+ * when File System Access API is unavailable.
+ */
+export function shouldRejectLargeBlobFile(
+	fileSize: number,
+	hardLimit: number = RAM_HARD_LIMIT_BYTES
+): boolean {
+	return !isFileSystemAccessSupported() && fileSize > hardLimit;
 }
 
 /**
@@ -62,10 +87,12 @@ export class FileReceiver {
 	private errorCallbacks: Set<(transferId: string, error: Error) => void> = new Set();
 
 	private customSavePicker?: (options?: any) => Promise<any>;
+	private ramHardLimitBytes: number;
 
 	constructor(options: FileReceiverOptions) {
 		this.webRtcManager = options.webRtcManager;
 		this.customSavePicker = options.showSaveFilePicker;
+		this.ramHardLimitBytes = options.ramHardLimitBytes ?? RAM_HARD_LIMIT_BYTES;
 
 		if (options.onTransferOffered) this.offeredCallbacks.add(options.onTransferOffered);
 		if (options.onProgress) this.progressCallbacks.add(options.onProgress);
@@ -192,6 +219,15 @@ export class FileReceiver {
 		const transfer = this.incomingTransfers.get(transferId);
 		if (!transfer) {
 			throw new Error(`Cannot accept transfer ${transferId}: transfer record not found`);
+		}
+
+		if (transfer.fileSize > this.ramHardLimitBytes) {
+			const errorMsg = `File size (${formatFileSize(transfer.fileSize)}) exceeds in-memory Blob assembly limit of ${formatFileSize(this.ramHardLimitBytes)}`;
+			transfer.status = 'failed';
+			transfer.error = errorMsg;
+			this.notifyError(transferId, new Error(errorMsg));
+			this.notifyProgress(transfer);
+			throw new Error(errorMsg);
 		}
 
 		transfer.storageMode = 'blob';
@@ -339,8 +375,10 @@ export class FileReceiver {
 
 	private handleFileMeta(senderPeerId: string, meta: FileMetaWirePayload): void {
 		const fsSupported = isFileSystemAccessSupported();
-		// Flag RAM warning if File System Access API is not supported and file exceeds 500MB
-		const ramWarning = !fsSupported && meta.fileSize > RAM_WARNING_THRESHOLD_BYTES;
+		const hardLimit = this.ramHardLimitBytes;
+		const ramLimitExceeded = !fsSupported && meta.fileSize > hardLimit;
+		// Flag RAM warning if File System Access API is not supported and file exceeds 500MB but does not exceed hard limit
+		const ramWarning = !fsSupported && !ramLimitExceeded && meta.fileSize > RAM_WARNING_THRESHOLD_BYTES;
 
 		const transfer: IncomingTransfer = {
 			transferId: meta.transferId,
@@ -355,6 +393,7 @@ export class FileReceiver {
 			status: 'offered',
 			storageMode: fsSupported ? 'filesystem' : 'blob',
 			ramWarning,
+			ramLimitExceeded,
 			startedAt: Date.now()
 		};
 

@@ -18,7 +18,9 @@ import {
 	FileReceiver,
 	isFileSystemAccessSupported,
 	RAM_WARNING_THRESHOLD_BYTES,
-	shouldWarnLargeFile
+	RAM_HARD_LIMIT_BYTES,
+	shouldWarnLargeFile,
+	shouldRejectLargeBlobFile
 } from '../src/lib/transfer/receiver.ts';
 import {
 	transferStore,
@@ -704,12 +706,29 @@ describe('File Transfer: 16KB Chunking & Backpressure Outbound Streaming', () =>
 		});
 	});
 
-	describe('6. High RAM Consumption Alert (>500MB Threshold)', () => {
+	describe('6. High RAM Consumption Alert (>500MB) & 1GB Blob Fallback Hard Limit', () => {
 		test('RAM_WARNING_THRESHOLD_BYTES is configured to exactly 500MB', () => {
 			assert.equal(RAM_WARNING_THRESHOLD_BYTES, 500 * 1024 * 1024);
 		});
 
-		test('flags ramWarning for files > 500MB when File System Access API is unavailable', async () => {
+		test('RAM_HARD_LIMIT_BYTES is configured to exactly 1GB', () => {
+			assert.equal(RAM_HARD_LIMIT_BYTES, 1024 * 1024 * 1024);
+		});
+
+		test('shouldWarnLargeFile and shouldRejectLargeBlobFile differentiate memory tiers', () => {
+			// In node environment, isFileSystemAccessSupported is false
+			assert.equal(shouldWarnLargeFile(100 * 1024 * 1024), false); // Under 500MB
+			assert.equal(shouldWarnLargeFile(500 * 1024 * 1024), false); // Exactly 500MB
+			assert.equal(shouldWarnLargeFile(750 * 1024 * 1024), true); // Between 500MB and 1GB
+			assert.equal(shouldWarnLargeFile(1024 * 1024 * 1024), true); // Exactly 1GB
+			assert.equal(shouldWarnLargeFile(1200 * 1024 * 1024), false); // Above 1GB (rejected, not merely warned)
+
+			assert.equal(shouldRejectLargeBlobFile(750 * 1024 * 1024), false); // Under 1GB
+			assert.equal(shouldRejectLargeBlobFile(1024 * 1024 * 1024), false); // Exactly 1GB
+			assert.equal(shouldRejectLargeBlobFile(1024 * 1024 * 1024 + 1), true); // Over 1GB
+		});
+
+		test('flags ramWarning for files between 500MB and 1GB, and ramLimitExceeded for files > 1GB', async () => {
 			let rawPc: MockBackpressureRTCPeerConnection | null = null;
 			const manager = new WebRtcManager({
 				activeKey: testKey,
@@ -722,7 +741,7 @@ describe('File Transfer: 16KB Chunking & Backpressure Outbound Streaming', () =>
 
 			const receiver = new FileReceiver({ webRtcManager: manager });
 
-			// Large file: 750 MB (> 500MB)
+			// Large file: 750 MB (> 500MB, <= 1GB) -> ramWarning = true, ramLimitExceeded = false
 			const largeFileSize = 750 * 1024 * 1024;
 			await receiver.handleControlMessage('peer-safari-sender', {
 				type: 'file-meta',
@@ -738,8 +757,27 @@ describe('File Transfer: 16KB Chunking & Backpressure Outbound Streaming', () =>
 			});
 
 			const transfer = receiver.getTransfer('trans-large-1')!;
-			// In node test environment, showSaveFilePicker is not in window, so isFileSystemAccessSupported is false
 			assert.equal(transfer.ramWarning, true);
+			assert.equal(transfer.ramLimitExceeded, false);
+
+			// Huge file: 1.5 GB (> 1GB hard limit) -> ramLimitExceeded = true, ramWarning = false
+			const hugeFileSize = 1536 * 1024 * 1024;
+			await receiver.handleControlMessage('peer-safari-sender', {
+				type: 'file-meta',
+				transferId: 'trans-huge-1',
+				fileName: 'database-dump.sql',
+				fileSize: hugeFileSize,
+				fileType: 'application/sql',
+				chunkSize: 16 * 1024,
+				totalChunks: calculateTotalChunks(hugeFileSize),
+				sender: 'charlie',
+				senderPeerId: 'peer-safari-sender',
+				timestamp: Date.now()
+			});
+
+			const hugeTransfer = receiver.getTransfer('trans-huge-1')!;
+			assert.equal(hugeTransfer.ramLimitExceeded, true);
+			assert.equal(hugeTransfer.ramWarning, false);
 
 			// Small file: 100 MB (< 500MB)
 			await receiver.handleControlMessage('peer-safari-sender', {
@@ -757,6 +795,18 @@ describe('File Transfer: 16KB Chunking & Backpressure Outbound Streaming', () =>
 
 			const smallTransfer = receiver.getTransfer('trans-small-1')!;
 			assert.equal(smallTransfer.ramWarning, false);
+			assert.equal(smallTransfer.ramLimitExceeded, false);
+
+			// Attempting acceptWithBlob on the >1GB file must reject and throw
+			let errorThrown: Error | null = null;
+			try {
+				await receiver.acceptWithBlob('trans-huge-1');
+			} catch (err: any) {
+				errorThrown = err;
+			}
+			assert.ok(errorThrown !== null, 'acceptWithBlob must throw on file exceeding hard limit');
+			assert.match(errorThrown!.message, /exceeds in-memory Blob assembly limit/i);
+			assert.equal(hugeTransfer.status, 'failed');
 
 			manager.destroy();
 		});
