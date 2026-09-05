@@ -12,7 +12,19 @@ import {
 	formatFileSize
 } from '../src/lib/transfer/chunking.ts';
 import { FileSender } from '../src/lib/transfer/sender.ts';
-import { FileReceiver, isFileSystemAccessSupported } from '../src/lib/transfer/receiver.ts';
+import {
+	FileReceiver,
+	isFileSystemAccessSupported,
+	RAM_WARNING_THRESHOLD_BYTES,
+	shouldWarnLargeFile
+} from '../src/lib/transfer/receiver.ts';
+import {
+	transferStore,
+	activeUploads,
+	activeDownloads,
+	completedFiles,
+	hasLargeFileRamWarning
+} from '../src/lib/stores/transfer.ts';
 import { PeerConnectionSession } from '../src/lib/webrtc/peer.ts';
 import { WebRtcManager } from '../src/lib/webrtc/manager.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
@@ -607,5 +619,211 @@ describe('File Transfer: 16KB Chunking & Backpressure Outbound Streaming', () =>
 			manager.destroy();
 		});
 	});
+
+	describe('5. In-Memory Blob Assembly Fallback (Firefox & Safari)', () => {
+		test('acceptWithBlob accumulates chunks into a unified Blob upon completion', async () => {
+			let rawPc: MockBackpressureRTCPeerConnection | null = null;
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					rawPc = new MockBackpressureRTCPeerConnection(cfg);
+					return rawPc as unknown as RTCPeerConnection;
+				}
+			});
+
+			await manager.getOrCreateSession('peer-firefox-sender', true);
+			const dc = rawPc!.localDataChannels[0];
+			dc.open();
+
+			const receiver = new FileReceiver({ webRtcManager: manager });
+
+			// 1. Offer file
+			await receiver.handleControlMessage('peer-firefox-sender', {
+				type: 'file-meta',
+				transferId: 'trans-blob-1',
+				fileName: 'document.pdf',
+				fileSize: 32 * 1024,
+				fileType: 'application/pdf',
+				chunkSize: 16 * 1024,
+				totalChunks: 2,
+				sender: 'bob',
+				senderPeerId: 'peer-firefox-sender',
+				timestamp: Date.now()
+			});
+
+			const transfer = receiver.getTransfer('trans-blob-1')!;
+			assert.equal(transfer.status, 'offered');
+
+			// 2. Accept via Blob fallback
+			await receiver.acceptWithBlob('trans-blob-1');
+			assert.equal(transfer.status, 'receiving');
+			assert.equal(transfer.storageMode, 'blob');
+
+			// Check file-ready was sent across WebRTC
+			assert.equal(dc.sentPackets.length, 1);
+
+			// 3. Send 2 chunks
+			const chunk0 = new Uint8Array(16 * 1024).fill(0x11);
+			const chunk1 = new Uint8Array(16 * 1024).fill(0x22);
+
+			await receiver.handleBinaryChunk({
+				transferId: 'trans-blob-1',
+				chunkIndex: 0,
+				totalChunks: 2,
+				data: chunk0
+			});
+
+			assert.equal(transfer.receivedChunks, 1);
+
+			await receiver.handleBinaryChunk({
+				transferId: 'trans-blob-1',
+				chunkIndex: 1,
+				totalChunks: 2,
+				data: chunk1
+			});
+
+			// Transfer auto-completes on last chunk
+			assert.equal(transfer.status, 'completed');
+			assert.ok(transfer.blob instanceof Blob);
+			assert.equal(transfer.blob.size, 32 * 1024);
+			assert.equal(transfer.blob.type, 'application/pdf');
+
+			// Verify data integrity of assembled Blob
+			const assembledArray = new Uint8Array(await transfer.blob.arrayBuffer());
+			assert.equal(assembledArray[0], 0x11);
+			assert.equal(assembledArray[16 * 1024], 0x22);
+
+			const completed = receiver.getCompletedRecords();
+			assert.equal(completed.length, 1);
+			assert.equal(completed[0].storageMode, 'blob');
+
+			manager.destroy();
+		});
+	});
+
+	describe('6. High RAM Consumption Alert (>500MB Threshold)', () => {
+		test('RAM_WARNING_THRESHOLD_BYTES is configured to exactly 500MB', () => {
+			assert.equal(RAM_WARNING_THRESHOLD_BYTES, 500 * 1024 * 1024);
+		});
+
+		test('flags ramWarning for files > 500MB when File System Access API is unavailable', async () => {
+			let rawPc: MockBackpressureRTCPeerConnection | null = null;
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					rawPc = new MockBackpressureRTCPeerConnection(cfg);
+					return rawPc as unknown as RTCPeerConnection;
+				}
+			});
+
+			const receiver = new FileReceiver({ webRtcManager: manager });
+
+			// Large file: 750 MB (> 500MB)
+			const largeFileSize = 750 * 1024 * 1024;
+			await receiver.handleControlMessage('peer-safari-sender', {
+				type: 'file-meta',
+				transferId: 'trans-large-1',
+				fileName: 'large-archive.iso',
+				fileSize: largeFileSize,
+				fileType: 'application/octet-stream',
+				chunkSize: 16 * 1024,
+				totalChunks: calculateTotalChunks(largeFileSize),
+				sender: 'charlie',
+				senderPeerId: 'peer-safari-sender',
+				timestamp: Date.now()
+			});
+
+			const transfer = receiver.getTransfer('trans-large-1')!;
+			// In node test environment, showSaveFilePicker is not in window, so isFileSystemAccessSupported is false
+			assert.equal(transfer.ramWarning, true);
+
+			// Small file: 100 MB (< 500MB)
+			await receiver.handleControlMessage('peer-safari-sender', {
+				type: 'file-meta',
+				transferId: 'trans-small-1',
+				fileName: 'small.zip',
+				fileSize: 100 * 1024 * 1024,
+				fileType: 'application/zip',
+				chunkSize: 16 * 1024,
+				totalChunks: calculateTotalChunks(100 * 1024 * 1024),
+				sender: 'charlie',
+				senderPeerId: 'peer-safari-sender',
+				timestamp: Date.now()
+			});
+
+			const smallTransfer = receiver.getTransfer('trans-small-1')!;
+			assert.equal(smallTransfer.ramWarning, false);
+
+			manager.destroy();
+		});
+	});
+
+	describe('7. Reactive Transfer Store Lifecycle', () => {
+		test('registers transfers, updates progress, and tracks completed records', () => {
+			transferStore.reset();
+
+			let uploads: any[] = [];
+			let downloads: any[] = [];
+			let completed: any[] = [];
+			let ramWarning = false;
+
+			const unsubUp = activeUploads.subscribe((v) => (uploads = v));
+			const unsubDown = activeDownloads.subscribe((v) => (downloads = v));
+			const unsubComp = completedFiles.subscribe((v) => (completed = v));
+			const unsubWarn = hasLargeFileRamWarning.subscribe((v) => (ramWarning = v));
+
+			assert.equal(uploads.length, 0);
+			assert.equal(downloads.length, 0);
+			assert.equal(completed.length, 0);
+			assert.equal(ramWarning, false);
+
+			// Add incoming transfer with ram warning
+			transferStore.addIncomingTransfer({
+				transferId: 't-store-1',
+				fileName: 'dump.tar',
+				fileSize: 600 * 1024 * 1024,
+				fileType: 'application/x-tar',
+				totalChunks: 1000,
+				receivedChunks: 10,
+				bytesReceived: 160 * 1024,
+				sender: 'alice',
+				senderPeerId: 'peer-1',
+				status: 'receiving',
+				storageMode: 'blob',
+				ramWarning: true,
+				startedAt: Date.now()
+			});
+
+			assert.equal(downloads.length, 1);
+			assert.equal(ramWarning, true);
+
+			// Add completed record
+			transferStore.addCompletedRecord({
+				transferId: 't-comp-1',
+				fileName: 'photo.jpg',
+				fileSize: 50000,
+				fileType: 'image/jpeg',
+				storageMode: 'blob',
+				completedAt: Date.now()
+			});
+
+			assert.equal(completed.length, 1);
+			assert.equal(completed[0].fileName, 'photo.jpg');
+
+			// Reset flushes all
+			transferStore.reset();
+			assert.equal(downloads.length, 0);
+			assert.equal(completed.length, 0);
+			assert.equal(ramWarning, false);
+
+			unsubUp();
+			unsubDown();
+			unsubComp();
+			unsubWarn();
+		});
+	});
 });
+
 

@@ -31,14 +31,29 @@ export function isFileSystemAccessSupported(): boolean {
 }
 
 /**
+ * Threshold in bytes (500MB) above which browsers assembling files in memory
+ * (Firefox/Safari without File System Access API) display a prominent RAM consumption warning.
+ */
+export const RAM_WARNING_THRESHOLD_BYTES = 500 * 1024 * 1024; // 500MB
+
+/**
+ * Checks if a file size warrants displaying the high RAM usage alert for in-memory assembly.
+ */
+export function shouldWarnLargeFile(fileSize: number): boolean {
+	return !isFileSystemAccessSupported() && fileSize > RAM_WARNING_THRESHOLD_BYTES;
+}
+
+/**
  * FileReceiver coordinates incoming peer-to-peer file transfers across WebRTC.
  * In Chromium environments, writes incoming 16KB binary chunks directly to the destination
  * filesystem stream (createWritable) without buffering the file in memory.
+ * In Firefox and Safari, falls back to in-memory Blob assembly with a >500MB RAM warning.
  */
 export class FileReceiver {
 	private webRtcManager: WebRtcManager;
 	private incomingTransfers: Map<string, IncomingTransfer> = new Map();
 	private writableStreams: Map<string, any> = new Map();
+	private blobChunks: Map<string, Uint8Array[]> = new Map();
 	private completedRecords: Map<string, CompletedFileRecord> = new Map();
 
 	private offeredCallbacks: Set<TransferCallback> = new Set();
@@ -170,7 +185,33 @@ export class FileReceiver {
 	}
 
 	/**
-	 * Ingests an incoming decrypted binary chunk and streams it directly to disk.
+	 * Accepts an incoming file transfer using in-memory Blob aggregation.
+	 * Utilized as fallback for Firefox and Safari where File System Access API is absent.
+	 */
+	public async acceptWithBlob(transferId: string): Promise<void> {
+		const transfer = this.incomingTransfers.get(transferId);
+		if (!transfer) {
+			throw new Error(`Cannot accept transfer ${transferId}: transfer record not found`);
+		}
+
+		transfer.storageMode = 'blob';
+		transfer.status = 'receiving';
+		this.blobChunks.set(transferId, []);
+		this.notifyProgress(transfer);
+
+		// Signal file-ready to sender to initiate chunk streaming
+		const readyPayload: FileReadyWirePayload = {
+			type: 'file-ready',
+			transferId,
+			peerId: (this.webRtcManager as any).localPeerId || ''
+		};
+
+		await this.webRtcManager.send(transfer.senderPeerId, JSON.stringify(readyPayload));
+	}
+
+	/**
+	 * Ingests an incoming decrypted binary chunk and streams it directly to disk
+	 * or aggregates it into in-memory chunks based on storageMode.
 	 */
 	public async handleBinaryChunk(chunk: ParsedFileChunk): Promise<void> {
 		const transfer = this.incomingTransfers.get(chunk.transferId);
@@ -186,6 +227,13 @@ export class FileReceiver {
 				}
 				// Direct write to disk stream without buffering in RAM
 				await writable.write(chunk.data);
+			} else if (transfer.storageMode === 'blob') {
+				let chunks = this.blobChunks.get(chunk.transferId);
+				if (!chunks) {
+					chunks = [];
+					this.blobChunks.set(chunk.transferId, chunks);
+				}
+				chunks.push(new Uint8Array(chunk.data));
 			}
 
 			transfer.receivedChunks++;
@@ -220,6 +268,20 @@ export class FileReceiver {
 					await writable.close();
 					this.writableStreams.delete(transferId);
 				}
+			} else if (transfer.storageMode === 'blob') {
+				const chunks = this.blobChunks.get(transferId) || [];
+				const mimeType = transfer.fileType || 'application/octet-stream';
+				const blob = new Blob(chunks as BlobPart[], { type: mimeType });
+				transfer.blob = blob;
+
+				if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+					try {
+						transfer.downloadUrl = URL.createObjectURL(blob);
+					} catch {
+						// In node test environments createObjectURL might not be present
+					}
+				}
+				this.blobChunks.delete(transferId);
 			}
 
 			transfer.status = 'completed';
@@ -268,6 +330,8 @@ export class FileReceiver {
 			this.writableStreams.delete(transferId);
 		}
 
+		this.blobChunks.delete(transferId);
+
 		transfer.status = 'cancelled';
 		transfer.error = reason;
 		this.notifyProgress(transfer);
@@ -276,7 +340,7 @@ export class FileReceiver {
 	private handleFileMeta(senderPeerId: string, meta: FileMetaWirePayload): void {
 		const fsSupported = isFileSystemAccessSupported();
 		// Flag RAM warning if File System Access API is not supported and file exceeds 500MB
-		const ramWarning = !fsSupported && meta.fileSize > 500 * 1024 * 1024;
+		const ramWarning = !fsSupported && meta.fileSize > RAM_WARNING_THRESHOLD_BYTES;
 
 		const transfer: IncomingTransfer = {
 			transferId: meta.transferId,
