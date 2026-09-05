@@ -1,4 +1,4 @@
-import { roomStore } from '$lib/stores/room';
+import { roomStore } from '../stores/room.ts';
 import type {
 	ClientSignalingMessage,
 	ServerSignalingMessage,
@@ -7,7 +7,7 @@ import type {
 	IceServersServerMessage,
 	IceServersResponse,
 	IceServerConfig
-} from '$lib/types/signaling';
+} from '../types/signaling.ts';
 
 export interface SignalingClientOptions {
 	wsUrl?: string;
@@ -44,12 +44,12 @@ export class SignalingClient {
 
 		this.wsUrl =
 			options.wsUrl ||
-			(import.meta.env.PUBLIC_SIGNALING_WS_URL as string) ||
+			(typeof import.meta !== 'undefined' && (import.meta as any).env?.PUBLIC_SIGNALING_WS_URL) ||
 			defaultWs;
 
 		this.httpUrl =
 			options.httpUrl ||
-			(import.meta.env.PUBLIC_SIGNALING_HTTP_URL as string) ||
+			(typeof import.meta !== 'undefined' && (import.meta as any).env?.PUBLIC_SIGNALING_HTTP_URL) ||
 			defaultHttp;
 
 		this.heartbeatIntervalMs = options.heartbeatIntervalMs || 25000;

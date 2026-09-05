@@ -7,9 +7,9 @@ import type {
 } from './types.ts';
 
 /**
- * Manages an individual RTCPeerConnection and its associated binary RTCDataChannel.
- * Configures connection parameters with dynamic ICE servers and initializes an
- * ordered binary RTCDataChannel (binaryType = 'arraybuffer') for peer-to-peer data transfer.
+ * Encapsulates an individual RTCPeerConnection and its associated binary RTCDataChannel.
+ * Implements W3C Perfect Negotiation to reliably resolve offer/answer collisions (glare)
+ * and trickle ICE candidate queuing until remote descriptions are established.
  */
 export class PeerConnectionSession {
 	public readonly localPeerId: string;
@@ -24,6 +24,12 @@ export class PeerConnectionSession {
 	private connectionState: PeerConnectionState = 'connecting';
 	private connectionType: ConnectionType = 'unknown';
 	private dataChannelState: DataChannelState = 'closed';
+
+	private makingOffer = false;
+	private ignoreOffer = false;
+	private isSettingRemoteAnswerPending = false;
+	private bufferedIceCandidates: RTCIceCandidateInit[] = [];
+	private hasCreatedOffer = false;
 	private isClosed = false;
 
 	constructor(options: PeerConnectionSessionOptions) {
@@ -34,6 +40,7 @@ export class PeerConnectionSession {
 			? options.isInitiator
 			: this.localPeerId.localeCompare(this.remotePeerId) < 0;
 
+		// Deterministic politeness tie-breaker: impolite peer initiates, polite peer responds
 		this.isPolite = !this.isInitiator;
 
 		const rtcConfig: RTCConfiguration = {
@@ -117,6 +124,11 @@ export class PeerConnectionSession {
 			if (this.isClosed) return;
 			this.setupDataChannel(event.channel);
 		};
+
+		this.pc.onnegotiationneeded = async () => {
+			if (this.isClosed) return;
+			this.options.onNegotiationNeeded?.();
+		};
 	}
 
 	private setupDataChannel(dc: RTCDataChannel): void {
@@ -139,6 +151,124 @@ export class PeerConnectionSession {
 			console.warn(`[PeerSession:${this.remotePeerId}] DataChannel error:`, ev);
 			this.options.onError?.(new Error('RTCDataChannel error'));
 		};
+	}
+
+	/**
+	 * Generates and applies the initial local SDP offer.
+	 */
+	public async createInitialOffer(): Promise<RTCSessionDescriptionInit | null> {
+		if (this.isClosed || this.hasCreatedOffer) return null;
+		this.hasCreatedOffer = true;
+
+		try {
+			this.makingOffer = true;
+			const offer = await this.pc.createOffer();
+			await this.pc.setLocalDescription(offer);
+			return this.pc.localDescription || offer;
+		} catch (err) {
+			console.error(`[PeerSession:${this.remotePeerId}] Failed to create initial offer:`, err);
+			this.options.onError?.(err instanceof Error ? err : new Error(String(err)));
+			return null;
+		} finally {
+			this.makingOffer = false;
+		}
+	}
+
+	/**
+	 * Processes a remote SDP offer adhering to the W3C Perfect Negotiation pattern.
+	 */
+	public async handleRemoteOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit | null> {
+		if (this.isClosed) return null;
+
+		try {
+			const offerCollision =
+				this.makingOffer || this.pc.signalingState !== 'stable';
+
+			this.ignoreOffer = !this.isPolite && offerCollision;
+			if (this.ignoreOffer) {
+				console.warn(`[PeerSession:${this.remotePeerId}] Impolite peer ignoring colliding offer (glare)`);
+				return null;
+			}
+
+			if (offerCollision) {
+				await this.pc.setLocalDescription({ type: 'rollback' });
+			}
+
+			await this.pc.setRemoteDescription(offer);
+			await this.drainBufferedIceCandidates();
+
+			const answer = await this.pc.createAnswer();
+			await this.pc.setLocalDescription(answer);
+			return this.pc.localDescription || answer;
+		} catch (err) {
+			console.error(`[PeerSession:${this.remotePeerId}] Error handling remote offer:`, err);
+			this.options.onError?.(err instanceof Error ? err : new Error(String(err)));
+			return null;
+		}
+	}
+
+	/**
+	 * Processes a remote SDP answer completing the offer/answer handshake.
+	 */
+	public async handleRemoteAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
+		if (this.isClosed) return;
+
+		try {
+			this.isSettingRemoteAnswerPending = true;
+			await this.pc.setRemoteDescription(answer);
+			await this.drainBufferedIceCandidates();
+		} catch (err) {
+			console.error(`[PeerSession:${this.remotePeerId}] Error handling remote answer:`, err);
+			this.options.onError?.(err instanceof Error ? err : new Error(String(err)));
+		} finally {
+			this.isSettingRemoteAnswerPending = false;
+		}
+	}
+
+	/**
+	 * Buffers or adds an incoming remote trickle ICE candidate.
+	 */
+	public async addRemoteIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+		if (this.isClosed) return;
+
+		const candidateStr = candidate.candidate || '';
+		if (
+			candidateStr.includes(' 127.0.0.1 ') ||
+			candidateStr.includes(' ::1 ') ||
+			candidateStr.includes('.localhost ')
+		) {
+			return;
+		}
+
+		if (!this.pc.remoteDescription || this.isSettingRemoteAnswerPending) {
+			this.bufferedIceCandidates.push(candidate);
+			return;
+		}
+
+		try {
+			await this.pc.addIceCandidate(candidate);
+		} catch (err) {
+			if (!this.ignoreOffer) {
+				console.warn(`[PeerSession:${this.remotePeerId}] Error adding ICE candidate:`, err);
+			}
+		}
+	}
+
+	private async drainBufferedIceCandidates(): Promise<void> {
+		if (this.bufferedIceCandidates.length === 0 || !this.pc.remoteDescription) return;
+
+		const candidatesToDrain = [...this.bufferedIceCandidates];
+		this.bufferedIceCandidates = [];
+
+		for (const cand of candidatesToDrain) {
+			try {
+				await this.pc.addIceCandidate(cand);
+			} catch (err) {
+				if (!this.ignoreOffer) {
+					console.warn(`[PeerSession:${this.remotePeerId}] Error draining buffered ICE candidate:`, err);
+				}
+			}
+		}
 	}
 
 	public getPeerConnection(): RTCPeerConnection {
@@ -175,6 +305,7 @@ export class PeerConnectionSession {
 			this.pc.close();
 		} catch (_) {}
 
+		this.bufferedIceCandidates = [];
 		this.connectionState = 'closed';
 		this.dataChannelState = 'closed';
 	}

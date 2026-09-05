@@ -2,7 +2,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-	PeerConnectionSession
+	PeerConnectionSession,
+	WebRtcManager
 } from '../src/lib/webrtc/index.ts';
 import type { IceServerConfig } from '../src/lib/types/signaling.ts';
 
@@ -64,6 +65,7 @@ class MockRTCPeerConnection {
 	public ondatachannel: ((ev: any) => void) | null = null;
 
 	public localDataChannels: MockRTCDataChannel[] = [];
+	public remoteIceCandidates: RTCIceCandidateInit[] = [];
 	public isClosed = false;
 
 	constructor(configuration: RTCConfiguration = {}) {
@@ -74,6 +76,51 @@ class MockRTCPeerConnection {
 		const channel = new MockRTCDataChannel(label, options);
 		this.localDataChannels.push(channel);
 		return channel as unknown as RTCDataChannel;
+	}
+
+	public async createOffer(): Promise<RTCSessionDescriptionInit> {
+		return {
+			type: 'offer',
+			sdp: 'v=0\r\no=- 12345 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=application 9 DTLS/SCTP 5000\r\n'
+		};
+	}
+
+	public async createAnswer(): Promise<RTCSessionDescriptionInit> {
+		return {
+			type: 'answer',
+			sdp: 'v=0\r\no=- 67890 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=application 9 DTLS/SCTP 5000\r\n'
+		};
+	}
+
+	public async setLocalDescription(desc?: RTCSessionDescriptionInit): Promise<void> {
+		if (desc?.type === 'rollback') {
+			this.localDescription = null;
+			this.signalingState = 'stable';
+			return;
+		}
+
+		this.localDescription = desc || (await this.createOffer());
+		if (this.localDescription.type === 'offer') {
+			this.signalingState = 'have-local-offer';
+		} else if (this.localDescription.type === 'answer') {
+			this.signalingState = 'stable';
+		}
+	}
+
+	public async setRemoteDescription(desc: RTCSessionDescriptionInit): Promise<void> {
+		this.remoteDescription = desc;
+		if (desc.type === 'offer') {
+			this.signalingState = 'have-remote-offer';
+		} else if (desc.type === 'answer') {
+			this.signalingState = 'stable';
+		}
+	}
+
+	public async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+		if (this.signalingState === 'stable' && !this.remoteDescription) {
+			throw new Error('Failed to execute addIceCandidate: remoteDescription is not set');
+		}
+		this.remoteIceCandidates.push(candidate);
 	}
 
 	public close(): void {
@@ -151,6 +198,63 @@ describe('WebRTC Mesh & Secure DataChannel Subsystem (Phase 8)', () => {
 			assert.equal(session.getDataChannel(), dc as unknown as RTCDataChannel);
 
 			session.close();
+		});
+	});
+
+	describe('2. SDP Offer/Answer Negotiation & ICE Candidate Exchange', () => {
+		test('full negotiation handshake: offer -> answer -> candidate buffering and delivery', async () => {
+			let pcAlice: MockRTCPeerConnection | null = null;
+			let pcBob: MockRTCPeerConnection | null = null;
+
+			const alice = new PeerConnectionSession({
+				localPeerId: 'peer-alice',
+				remotePeerId: 'peer-bob',
+				isInitiator: true,
+				iceServers: [{ urls: ['stun:stun1.l.google.com:19302'] }],
+				onIceCandidate: () => {},
+				rtcPeerConnectionFactory: (cfg) => {
+					pcAlice = new MockRTCPeerConnection(cfg);
+					return pcAlice as unknown as RTCPeerConnection;
+				}
+			});
+
+			const bob = new PeerConnectionSession({
+				localPeerId: 'peer-bob',
+				remotePeerId: 'peer-alice',
+				isInitiator: false,
+				iceServers: [{ urls: ['stun:stun1.l.google.com:19302'] }],
+				onIceCandidate: () => {},
+				rtcPeerConnectionFactory: (cfg) => {
+					pcBob = new MockRTCPeerConnection(cfg);
+					return pcBob as unknown as RTCPeerConnection;
+				}
+			});
+
+			// 1. Alice creates offer
+			const offer = await alice.createInitialOffer();
+			assert.ok(offer);
+			assert.equal(offer.type, 'offer');
+
+			// 2. Bob ingests early ICE candidate BEFORE receiving offer (tests candidate queuing)
+			await bob.addRemoteIceCandidate({ candidate: 'candidate:early-cand-1', sdpMid: '0' });
+			// Candidate is buffered because remoteDescription is not yet set on Bob
+			assert.equal(pcBob!.remoteIceCandidates.length, 0);
+
+			// 3. Bob receives offer and produces answer
+			const answer = await bob.handleRemoteOffer(offer);
+			assert.ok(answer);
+			assert.equal(answer.type, 'answer');
+
+			// Bob drained early candidate after setting remote offer
+			assert.equal(pcBob!.remoteIceCandidates.length, 1);
+			assert.equal(pcBob!.remoteIceCandidates[0].candidate, 'candidate:early-cand-1');
+
+			// 4. Alice receives answer
+			await alice.handleRemoteAnswer(answer);
+			assert.equal(pcAlice!.signalingState, 'stable');
+
+			alice.close();
+			bob.close();
 		});
 	});
 });
