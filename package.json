@@ -8,6 +8,8 @@
     "build:landing": "npm --prefix apps/landing run build",
     "build:room": "npm --prefix apps/room run build",
     "build:pages": "node scripts/build-pages.mjs",
-    "test:room": "npm --prefix apps/room test"
+    "test:room": "npm --prefix apps/room test",
+    "test:deploy": "node --test tests/deployment.test.mjs",
+    "test": "npm run test:room && npm run test:deploy"
   }
 }

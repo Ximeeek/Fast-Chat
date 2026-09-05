@@ -1,6 +1,6 @@
 User-agent: *
+Allow: /
 Disallow: /room/
 Disallow: /create
 
 Sitemap: https://fastchat.room/sitemap.xml
-
