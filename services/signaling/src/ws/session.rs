@@ -4,10 +4,35 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
-/// In-memory registry of active WebSocket peer outbound channels mapped by room.
+use rand::Rng;
+use std::fmt;
+
+/// Ephemeral in-memory identifier uniquely distinguishing a single WebSocket connection instance.
+/// Lives strictly in RAM for the lifetime of the socket; completely independent from IP or rate keys.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConnectionId(pub String);
+
+impl ConnectionId {
+    /// Generates a random 16-byte hex connection identifier.
+    pub fn generate() -> Self {
+        let mut rng = rand::thread_rng();
+        let mut bytes = [0u8; 16];
+        rng.fill(&mut bytes);
+        Self(crate::ws::protocol::format_hex(&bytes))
+    }
+}
+
+impl fmt::Display for ConnectionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// In-memory registry of active WebSocket peer outbound channels and per-connection room mappings.
 #[derive(Debug, Clone, Default)]
 pub struct PeerSessionRegistry {
     rooms: Arc<DashMap<RoomCode, DashMap<String, UnboundedSender<ServerMessage>>>>,
+    connection_rooms: Arc<DashMap<ConnectionId, (RoomCode, String)>>,
 }
 
 impl PeerSessionRegistry {
@@ -15,6 +40,42 @@ impl PeerSessionRegistry {
     pub fn new() -> Self {
         Self {
             rooms: Arc::new(DashMap::new()),
+            connection_rooms: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Checks if a given WebSocket connection is currently registered in any room.
+    pub fn is_connection_in_room(&self, conn_id: &ConnectionId) -> bool {
+        self.connection_rooms.contains_key(conn_id)
+    }
+
+    /// Retrieves the current room code and peer ID registered to a connection, if any.
+    pub fn get_connection_session(&self, conn_id: &ConnectionId) -> Option<(RoomCode, String)> {
+        self.connection_rooms.get(conn_id).map(|r| r.value().clone())
+    }
+
+    /// Registers a connection to a specific room and peer ID, and saves its outbound channel.
+    pub fn register_connection(
+        &self,
+        conn_id: ConnectionId,
+        code: RoomCode,
+        peer_id: String,
+        tx: UnboundedSender<ServerMessage>,
+    ) {
+        self.connection_rooms.insert(conn_id, (code.clone(), peer_id.clone()));
+        self.register(&code, peer_id, tx);
+    }
+
+    /// Unregisters a connection and removes its outbound channel from the associated room.
+    pub fn unregister_connection(
+        &self,
+        conn_id: &ConnectionId,
+    ) -> Option<(RoomCode, String, Option<UnboundedSender<ServerMessage>>)> {
+        if let Some((_, (code, peer_id))) = self.connection_rooms.remove(conn_id) {
+            let tx = self.unregister(&code, &peer_id);
+            Some((code, peer_id, tx))
+        } else {
+            None
         }
     }
 
@@ -148,4 +209,41 @@ mod tests {
         registry.unregister(&code, "bob");
         assert_eq!(registry.room_count(), 0);
     }
+
+    #[tokio::test]
+    async fn test_connection_registry_lifecycle() {
+        let registry = PeerSessionRegistry::new();
+        let code = RoomCode::new("5555-6666-7777").unwrap();
+        let conn_a = ConnectionId::generate();
+        let conn_b = ConnectionId::generate();
+        assert_ne!(conn_a, conn_b);
+
+        let (tx_a, _rx_a) = mpsc::unbounded_channel();
+        let (tx_b, _rx_b) = mpsc::unbounded_channel();
+
+        assert!(!registry.is_connection_in_room(&conn_a));
+        assert!(!registry.is_connection_in_room(&conn_b));
+
+        registry.register_connection(conn_a.clone(), code.clone(), "alice".to_string(), tx_a);
+        assert!(registry.is_connection_in_room(&conn_a));
+        assert_eq!(
+            registry.get_connection_session(&conn_a),
+            Some((code.clone(), "alice".to_string()))
+        );
+        assert!(!registry.is_connection_in_room(&conn_b));
+
+        registry.register_connection(conn_b.clone(), code.clone(), "bob".to_string(), tx_b);
+        assert!(registry.is_connection_in_room(&conn_b));
+
+        let unreg_a = registry.unregister_connection(&conn_a);
+        assert!(unreg_a.is_some());
+        assert!(!registry.is_connection_in_room(&conn_a));
+        assert!(registry.is_connection_in_room(&conn_b));
+
+        let unreg_b = registry.unregister_connection(&conn_b);
+        assert!(unreg_b.is_some());
+        assert!(!registry.is_connection_in_room(&conn_b));
+        assert_eq!(registry.room_count(), 0);
+    }
 }
+

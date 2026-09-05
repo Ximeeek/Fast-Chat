@@ -358,6 +358,8 @@
 
 	onDestroy(() => {
 		webRtcManager.disconnectAll();
+		signalingClient.disconnect();
+		roomStore.reset();
 		chatStore.reset();
 		transferStore.reset();
 		if (unsubWebRtcMessage) {

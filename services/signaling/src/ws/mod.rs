@@ -22,8 +22,10 @@ pub async fn ws_handler(
     client_ip: crate::limiter::ClientIp,
     State(state): State<AppState>,
 ) -> axum::response::Response {
+    let connection_id = session::ConnectionId::generate();
     info!(
         event = "WS_CONNECT_ATTEMPT",
+        connection_id = %connection_id,
         client_ip = %client_ip.0,
         "Incoming WebSocket connection attempt"
     );
@@ -34,6 +36,7 @@ pub async fn ws_handler(
         Err(msg) => {
             warn!(
                 event = "LIMITER_REJECTED",
+                connection_id = %connection_id,
                 limiter = "ceiling_connection",
                 message = %msg,
                 "WebSocket connection rejected by global ceiling"
@@ -55,6 +58,7 @@ pub async fn ws_handler(
     if let Err(retry_after) = state.limiter.connection.check_and_record(&rate_key) {
         warn!(
             event = "LIMITER_REJECTED",
+            connection_id = %connection_id,
             limiter = "connection_rate_limit",
             retry_after = retry_after,
             "WebSocket connection rejected by connection rate limiter"
@@ -72,7 +76,7 @@ pub async fn ws_handler(
         )
             .into_response();
     }
-    ws.on_upgrade(move |socket| handle_socket(socket, state, rate_key, connection_guard))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, rate_key, connection_id, connection_guard))
         .into_response()
 }
 
@@ -89,9 +93,10 @@ pub async fn handle_socket(
     mut socket: WebSocket,
     state: AppState,
     rate_key: crate::limiter::RateKey,
+    connection_id: session::ConnectionId,
     _connection_guard: crate::limiter::ConnectionGuard,
 ) {
-    debug!("Incoming WebSocket connection accepted");
+    debug!(connection_id = %connection_id, "Incoming WebSocket connection accepted");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut current_session: Option<(RoomCode, String, bool)> = None;
@@ -127,6 +132,7 @@ pub async fn handle_socket(
                         if !flood_bucket.try_acquire(1.0) {
                             warn!(
                                 event = "LIMITER_REJECTED",
+                                connection_id = %connection_id,
                                 limiter = "flood_control",
                                 "Signaling message rate limit exceeded by flood control"
                             );
@@ -135,7 +141,14 @@ pub async fn handle_socket(
                                 "Signaling message rate limit exceeded. Slow down.",
                             ));
                         } else {
-                            handle_client_message(&text, &mut current_session, &tx, &state, &rate_key).await;
+                            handle_client_message(
+                                &text,
+                                &mut current_session,
+                                &connection_id,
+                                &tx,
+                                &state,
+                                &rate_key,
+                            ).await;
                         }
                     }
                     Some(Ok(Message::Ping(payload))) => {
@@ -153,9 +166,29 @@ pub async fn handle_socket(
     }
 
     // Unregister session and notify remaining room participants on disconnect
+    let unreg_result = state.sessions.unregister_connection(&connection_id);
     if let Some((code, peer_id, _)) = current_session {
-        debug!(room = %code, peer = %peer_id, "WebSocket peer disconnected; cleaning up session");
-        state.sessions.unregister(&code, &peer_id);
+        debug!(
+            connection_id = %connection_id,
+            room = %code,
+            peer = %peer_id,
+            "WebSocket peer disconnected; cleaning up session"
+        );
+        if let Some(mut room_entry) = state.room_manager.rooms.get_mut(&code) {
+            let _ = room_entry.remove_peer(&peer_id);
+        }
+        state.sessions.broadcast(
+            &code,
+            ServerMessage::peer_left(peer_id),
+            None,
+        );
+    } else if let Some((code, peer_id, _)) = unreg_result {
+        debug!(
+            connection_id = %connection_id,
+            room = %code,
+            peer = %peer_id,
+            "Cleaned up orphaned connection registry session on disconnect"
+        );
         if let Some(mut room_entry) = state.room_manager.rooms.get_mut(&code) {
             let _ = room_entry.remove_peer(&peer_id);
         }
@@ -171,6 +204,7 @@ pub async fn handle_socket(
 async fn handle_client_message(
     raw_text: &str,
     current_session: &mut Option<(RoomCode, String, bool)>,
+    connection_id: &session::ConnectionId,
     tx: &mpsc::UnboundedSender<ServerMessage>,
     state: &AppState,
     rate_key: &crate::limiter::RateKey,
@@ -197,11 +231,17 @@ async fn handle_client_message(
         } => {
             info!(
                 event = "CREATE_ROOM",
+                connection_id = %connection_id,
                 peer = ?peer_id,
                 "Received CREATE_ROOM message"
             );
 
-            if current_session.is_some() {
+            if current_session.is_some() || state.sessions.is_connection_in_room(connection_id) {
+                warn!(
+                    event = "ALREADY_IN_ROOM",
+                    connection_id = %connection_id,
+                    "Socket connection is already registered in a room"
+                );
                 let _ = tx.send(ServerMessage::error(
                     "ALREADY_IN_ROOM",
                     "Socket is already registered in a room",
@@ -213,6 +253,7 @@ async fn handle_client_message(
             if let Err(msg) = state.limiter.ceiling.check_room_capacity(current_rooms) {
                 warn!(
                     event = "LIMITER_REJECTED",
+                    connection_id = %connection_id,
                     limiter = "ceiling_room",
                     current_rooms = current_rooms,
                     message = %msg,
@@ -225,6 +266,7 @@ async fn handle_client_message(
             if let Err(retry_after) = state.limiter.room_creation.check_and_record(rate_key) {
                 warn!(
                     event = "LIMITER_REJECTED",
+                    connection_id = %connection_id,
                     limiter = "room_creation",
                     retry_after = retry_after,
                     "Room creation rejected by rate limiter"
@@ -277,10 +319,11 @@ async fn handle_client_message(
             let salt_hex = format_hex(&room_snapshot.crypto_salt);
             state
                 .sessions
-                .register(&code, assigned_peer_id.clone(), tx.clone());
+                .register_connection(connection_id.clone(), code.clone(), assigned_peer_id.clone(), tx.clone());
             *current_session = Some((code.clone(), assigned_peer_id.clone(), true));
 
             info!(
+                connection_id = %connection_id,
                 room = %code,
                 peer = %assigned_peer_id,
                 event = "ROOM_CREATED",
@@ -300,13 +343,19 @@ async fn handle_client_message(
             password,
         } => {
             info!(
+                connection_id = %connection_id,
                 room = %code_str,
                 peer = ?peer_id,
                 event = "JOIN_ROOM",
                 "Received JOIN_ROOM message"
             );
 
-            if current_session.is_some() {
+            if current_session.is_some() || state.sessions.is_connection_in_room(connection_id) {
+                warn!(
+                    event = "ALREADY_IN_ROOM",
+                    connection_id = %connection_id,
+                    "Socket connection is already registered in a room"
+                );
                 let _ = tx.send(ServerMessage::error(
                     "ALREADY_IN_ROOM",
                     "Socket is already registered in a room",
@@ -319,6 +368,7 @@ async fn handle_client_message(
                 Err(ref err) => {
                     warn!(
                         event = "LIMITER_REJECTED",
+                        connection_id = %connection_id,
                         limiter = "join_limiter",
                         reason = ?err,
                         "Join attempt rejected by join limiter"
@@ -400,10 +450,11 @@ async fn handle_client_message(
                     let salt_hex = format_hex(&room_snapshot.crypto_salt);
                     state
                         .sessions
-                        .register(&code, assigned_peer_id.clone(), tx.clone());
+                        .register_connection(connection_id.clone(), code.clone(), assigned_peer_id.clone(), tx.clone());
                     *current_session = Some((code.clone(), assigned_peer_id.clone(), false));
 
                     info!(
+                        connection_id = %connection_id,
                         room = %code,
                         peer = %assigned_peer_id,
                         event = "JOIN_OK",
@@ -422,6 +473,7 @@ async fn handle_client_message(
 
                     // Broadcast PEER_JOINED to existing peers
                     info!(
+                        connection_id = %connection_id,
                         room = %code,
                         peer = %assigned_peer_id,
                         event = "PEER_JOINED",
@@ -470,6 +522,7 @@ async fn handle_client_message(
             };
 
             info!(
+                connection_id = %connection_id,
                 room = %code,
                 from = %sender_id,
                 to = %target_peer_id,
@@ -503,6 +556,7 @@ async fn handle_client_message(
             };
 
             info!(
+                connection_id = %connection_id,
                 room = %code,
                 from = %sender_id,
                 to = %target_peer_id,
@@ -540,6 +594,7 @@ async fn handle_client_message(
             };
 
             info!(
+                connection_id = %connection_id,
                 room = %code,
                 from = %sender_id,
                 to = %target_peer_id,
@@ -603,6 +658,7 @@ async fn handle_client_message(
                 Ok(status) => {
                     let salt_hex = status.salt.map(|s| format_hex(&s)).unwrap_or_default();
                     info!(
+                        connection_id = %connection_id,
                         room = %code,
                         peer = %sender_id,
                         event = "REKEY",
