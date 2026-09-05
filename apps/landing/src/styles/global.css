@@ -1,0 +1,49 @@
+@import 'tailwindcss';
+
+@theme {
+	--font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+	--color-bg-base: #0a0a0a;
+	--color-surface-panel: #121212;
+	--color-surface-raised: #18181b;
+	--color-border-dark: #262626;
+	--color-border-subtle: #1f1f23;
+	--color-border-strong: #3f3f46;
+	--color-accent: #ccff00;
+	--color-accent-dim: rgba(204, 255, 0, 0.12);
+	--color-accent-hover: #b8e600;
+}
+
+/* Force sharp rectangular shapes - zero border-radius across entire application */
+*, *::before, *::after {
+	border-radius: 0 !important;
+}
+
+/* Tabular figures for stable alignment */
+html, body {
+	font-family: var(--font-mono);
+	background-color: #0a0a0a;
+	color: #f4f4f5;
+	font-feature-settings: "tnum" 1, "zero" 1;
+	font-variant-numeric: tabular-nums;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+/* Functional micro-transitions */
+.transition-micro {
+	transition-property: color, background-color, border-color, opacity, transform;
+	transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+	transition-duration: 180ms;
+}
+
+/* Strict prefers-reduced-motion compliance */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
