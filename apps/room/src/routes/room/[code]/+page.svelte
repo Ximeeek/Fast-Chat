@@ -23,8 +23,11 @@
 		SUPPORTED_LANGUAGES,
 		CodeMessageBlock,
 		createPastedBlock,
+		updatePastedBlockContent,
+		setPastedBlockLanguageMode,
 		buildMessageSegments,
 		type PastedBlock,
+		type ComposerBlock,
 		type SupportedLanguage,
 		type MessageSegment
 	} from '$lib/chat';
@@ -62,7 +65,7 @@
 	let retryingPeers = $state<Record<string, boolean>>({});
 	let ownerPromotionBanner = $state(false);
 
-	let pastedBlocks = $state<PastedBlock[]>([]);
+	let composerBlocks = $state<ComposerBlock[]>([]);
 	let isManualCodeMode = $state(false);
 	let manualLanguage = $state<SupportedLanguage | null>(null);
 
@@ -77,29 +80,22 @@
 	}
 
 	function updatePastedBlockMode(id: string, mode: string) {
-		const block = pastedBlocks.find((b) => b.id === id);
-		if (!block) return;
-		if (mode === 'text') {
-			block.contentType = 'text';
-			block.language = null;
-		} else if (mode === 'code') {
-			block.contentType = 'code';
-			block.language = null;
-		} else {
-			block.contentType = 'code';
-			block.language = mode as SupportedLanguage;
-		}
+		const block = composerBlocks.find((b) => b.kind === 'paste' && b.id === id);
+		if (!block || block.kind !== 'paste') return;
+		setPastedBlockLanguageMode(block, mode);
 	}
 
 	const isChatDisabled = $derived($hasFailedPeers && $openDataChannelsCount === 0);
-	const hasPastedContent = $derived(pastedBlocks.some((b) => b.content.trim().length > 0));
+	const hasComposerContent = $derived(
+		composerBlocks.some((b) => (b.kind === 'text' ? b.text.trim().length > 0 : b.content.trim().length > 0))
+	);
 	const canSend = $derived(
-		!isSending && !isChatDisabled && (messageInput.trim().length > 0 || hasPastedContent)
+		!isSending && !isChatDisabled && (messageInput.trim().length > 0 || hasComposerContent)
 	);
 	const chatPlaceholder = $derived(
 		isChatDisabled
 			? 'Type an encrypted message (No open WebRTC peer connections)...'
-			: pastedBlocks.length > 0
+			: composerBlocks.length > 0
 				? 'Add a companion message or click Send...'
 				: 'Type an encrypted message...'
 	);
@@ -170,41 +166,48 @@
 		const text = e.clipboardData?.getData('text') || '';
 		if (!text) return;
 
-		if (isLongPastedText(text)) {
+		if (isLongPastedText(text) || isCodeSnippet(text)) {
 			e.preventDefault();
-			pastedBlocks.push(createPastedBlock(text));
+			if (messageInput.trim().length > 0) {
+				composerBlocks.push({
+					kind: 'text',
+					id: `text-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+					text: messageInput.trim()
+				});
+				messageInput = '';
+			}
+			const block = createPastedBlock(text);
+			composerBlocks.push({
+				kind: 'paste',
+				...block
+			});
 		}
 	}
 
 	function togglePastedBlock(id: string) {
-		const block = pastedBlocks.find((b) => b.id === id);
-		if (block) {
+		const block = composerBlocks.find((b) => b.kind === 'paste' && b.id === id);
+		if (block && block.kind === 'paste') {
 			block.isExpanded = !block.isExpanded;
 		}
 	}
 
-	function removePastedBlock(id: string) {
-		pastedBlocks = pastedBlocks.filter((b) => b.id !== id);
+	function removeComposerBlock(id: string) {
+		composerBlocks = composerBlocks.filter((b) => b.id !== id);
 	}
 
-	function updatePastedBlockContent(id: string, newContent: string) {
-		const block = pastedBlocks.find((b) => b.id === id);
-		if (block) {
-			block.content = newContent;
-			block.lineCount = Math.max(countLines(newContent), 1);
-			if (block.contentType === 'code' && !block.language) {
-				const detected = detectLanguage(newContent);
-				if (detected) {
-					block.language = detected;
-				}
-			}
-		}
+	function onPastedBlockContentChange(id: string, newContent: string) {
+		const block = composerBlocks.find((b) => b.kind === 'paste' && b.id === id);
+		if (!block || block.kind !== 'paste') return;
+		updatePastedBlockContent(block, newContent);
 	}
 
 	async function handleSendMessage(e?: SubmitEvent) {
 		e?.preventDefault();
-		const trimmed = composeFinalMessage(messageInput, pastedBlocks);
-		if (!trimmed || isSending || isChatDisabled) return;
+		const segments = buildMessageSegments(composerBlocks, messageInput, {
+			isManualCodeMode,
+			manualLanguage
+		});
+		if (segments.length === 0 || isSending || isChatDisabled) return;
 
 		isSending = true;
 		const id = typeof crypto !== 'undefined' && crypto.randomUUID
@@ -212,22 +215,6 @@
 			: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 		const sender = $chatStore.username || 'anonymous';
 		const timestamp = Date.now();
-
-		// Determine contentType and language
-		let messageContentType: 'text' | 'code' = 'text';
-		let messageLanguage: string | null = null;
-
-		if (isManualCodeMode) {
-			messageContentType = 'code';
-			messageLanguage = manualLanguage || detectLanguage(trimmed);
-		} else if (pastedBlocks.some((b) => b.contentType === 'code')) {
-			messageContentType = 'code';
-			const codeBlock = pastedBlocks.find((b) => b.contentType === 'code');
-			messageLanguage = codeBlock?.language || detectLanguage(trimmed);
-		} else if (isCodeSnippet(trimmed)) {
-			messageContentType = 'code';
-			messageLanguage = detectLanguage(trimmed);
-		}
 
 		if (import.meta.env.DEV) {
 			const targetPeers = Array.from(
@@ -242,18 +229,11 @@
 			});
 			console.debug('[Chat:Sender:Trigger]', {
 				targetPeers,
-				contentLengthBytes: new TextEncoder().encode(trimmed).byteLength,
+				segmentsCount: segments.length,
 				peerStates,
-				contentType: messageContentType,
-				language: messageLanguage,
 				timestamp: Date.now()
 			});
 		}
-
-		const segments: MessageSegment[] =
-			messageContentType === 'code'
-				? [{ type: 'code', code: trimmed, language: messageLanguage }]
-				: [{ type: 'text', text: trimmed }];
 
 		// Optimistically append local message
 		chatStore.addMessage({
@@ -265,7 +245,7 @@
 		});
 
 		messageInput = '';
-		pastedBlocks = [];
+		composerBlocks = [];
 		isManualCodeMode = false;
 		manualLanguage = null;
 
@@ -346,7 +326,7 @@
 		chatStore.reset();
 		transferStore.reset();
 		messageInput = '';
-		pastedBlocks = [];
+		composerBlocks = [];
 		isManualCodeMode = false;
 		manualLanguage = null;
 		goto('/create');
@@ -953,10 +933,27 @@
 						</div>
 					{/if}
 					<form onsubmit={handleSendMessage} class="p-3 sm:p-3.5 border-t border-white/5 bg-[#080b12] flex flex-col gap-2.5">
-						{#if pastedBlocks.length > 0}
+						{#if composerBlocks.length > 0}
 							<div class="flex flex-col gap-2">
-								{#each pastedBlocks as block (block.id)}
-									{#if !block.isExpanded}
+								{#each composerBlocks as block (block.id)}
+									{#if block.kind === 'text'}
+										<!-- Preceding / Inline Free Text Block -->
+										<div class="flex items-center gap-2 flex-wrap">
+											<div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#06080e] border border-cyan-500/30 text-cyan-300 text-xs font-mono shadow-[0_0_12px_rgba(0,229,255,0.08)]">
+												<span class="text-[10px] font-bold uppercase tracking-wider text-cyan-400">Text</span>
+												<span class="text-zinc-200 truncate max-w-[200px] sm:max-w-[400px]">{block.text}</span>
+											</div>
+											<button
+												type="button"
+												onclick={() => removeComposerBlock(block.id)}
+												class="w-6 h-6 rounded-md bg-[#06080e] hover:bg-red-950/40 border border-white/10 hover:border-red-500/40 text-zinc-400 hover:text-red-300 flex items-center justify-center text-xs transition-colors cursor-pointer"
+												title="Discard text block"
+												aria-label="Remove text block"
+											>
+												✕
+											</button>
+										</div>
+									{:else if !block.isExpanded}
 										<!-- Collapsed Pasted Snippet Pill -->
 										<div class="flex items-center gap-2 flex-wrap">
 											<button
@@ -976,12 +973,13 @@
 												</span>
 											</button>
 											<select
-												value={block.contentType === 'code' ? (block.language || 'code') : 'text'}
+												value={block.languageMode === 'auto' ? 'auto' : (block.contentType === 'code' ? (block.language || 'code') : 'text')}
 												onchange={(e) => updatePastedBlockMode(block.id, e.currentTarget.value)}
 												class="text-[11px] font-mono py-1 px-2 rounded-lg bg-[#06080e] hover:bg-[#0c101c] border border-cyan-500/30 text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
 												aria-label="Snippet format and language"
 												title="Change format or language"
 											>
+												<option value="auto">Auto Detect{block.contentType === 'code' ? (block.language ? ` (${getLanguageDisplayName(block.language)})` : ' (Code)') : ' (Text)'}</option>
 												<option value="text">Plain Text</option>
 												<option value="code">Plain Code</option>
 												{#each SUPPORTED_LANGUAGES as lang}
@@ -990,7 +988,7 @@
 											</select>
 											<button
 												type="button"
-												onclick={() => removePastedBlock(block.id)}
+												onclick={() => removeComposerBlock(block.id)}
 												class="w-6 h-6 rounded-md bg-[#06080e] hover:bg-red-950/40 border border-white/10 hover:border-red-500/40 text-zinc-400 hover:text-red-300 flex items-center justify-center text-xs transition-colors cursor-pointer"
 												title="Discard pasted text"
 												aria-label="Remove pasted text snippet"
@@ -1009,11 +1007,12 @@
 													</svg>
 													<span class="text-xs font-mono font-bold text-cyan-300">{formatPastedLabel(block.lineCount, block.language, block.contentType === 'code')}</span>
 													<select
-														value={block.contentType === 'code' ? (block.language || 'code') : 'text'}
+														value={block.languageMode === 'auto' ? 'auto' : (block.contentType === 'code' ? (block.language || 'code') : 'text')}
 														onchange={(e) => updatePastedBlockMode(block.id, e.currentTarget.value)}
 														class="text-[10px] font-mono py-0.5 px-2 rounded-md bg-[#0b0f19] border border-cyan-500/30 text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
 														aria-label="Change snippet format and language"
 													>
+														<option value="auto">Auto Detect{block.contentType === 'code' ? (block.language ? ` (${getLanguageDisplayName(block.language)})` : ' (Code)') : ' (Text)'}</option>
 														<option value="text">Plain Text</option>
 														<option value="code">Plain Code</option>
 														{#each SUPPORTED_LANGUAGES as lang}
@@ -1033,7 +1032,7 @@
 													</button>
 													<button
 														type="button"
-														onclick={() => removePastedBlock(block.id)}
+														onclick={() => removeComposerBlock(block.id)}
 														class="w-6 h-6 rounded-md bg-[#111624] hover:bg-red-950/40 border border-white/10 hover:border-red-500/40 text-zinc-400 hover:text-red-300 flex items-center justify-center text-xs transition-colors cursor-pointer"
 														title="Discard pasted text"
 														aria-label="Remove pasted text snippet"
@@ -1044,7 +1043,7 @@
 											</div>
 											<textarea
 												value={block.content}
-												oninput={(e) => updatePastedBlockContent(block.id, (e.target as HTMLTextAreaElement).value)}
+												oninput={(e) => onPastedBlockContentChange(block.id, (e.target as HTMLTextAreaElement).value)}
 												onkeydown={(e) => {
 													if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
 														e.preventDefault();
