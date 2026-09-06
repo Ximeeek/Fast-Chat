@@ -28,6 +28,7 @@ export interface RoomState {
 	error: RoomError | null;
 	iceServers: IceServerConfig[];
 	quotaExhausted: boolean;
+	hasPassword: boolean;
 }
 
 const initialRoomState: RoomState = {
@@ -44,7 +45,8 @@ const initialRoomState: RoomState = {
 	closureReason: null,
 	error: null,
 	iceServers: [],
-	quotaExhausted: false
+	quotaExhausted: false,
+	hasPassword: false
 };
 
 function createRoomStore() {
@@ -64,6 +66,7 @@ function createRoomStore() {
 					ownerPeerId: currentPeerId,
 					salt: payload.salt || payload.crypto_salt || null,
 					expiresAt: payload.expires_at || payload.expiresAt || null,
+					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
 					lifecycle: 'joined',
 					error: null
 				};
@@ -83,10 +86,14 @@ function createRoomStore() {
 					salt: payload.salt,
 					expiresAt: payload.expires_at || payload.expiresAt || null,
 					peers: [...payload.peers],
+					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
 					lifecycle: 'joined',
 					error: null
 				};
 			});
+		},
+		setPasswordStatus: (hasPassword: boolean) => {
+			update((state) => ({ ...state, hasPassword }));
 		},
 		setOwner: (ownerPeerId: string) => {
 			update((state) => ({

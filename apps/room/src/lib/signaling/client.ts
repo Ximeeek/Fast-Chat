@@ -305,6 +305,44 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Sets or changes the room password after creation.
+	 * Can only be invoked by the current room owner.
+	 */
+	public setRoomPassword(password: string): void {
+		this.send({
+			type: 'SET_ROOM_PASSWORD',
+			password
+		});
+	}
+
+	/**
+	 * Verifies the room password for an active room session during rekey.
+	 */
+	public async verifyPassword(password: string): Promise<boolean> {
+		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+			throw new Error('Signaling connection is not open');
+		}
+
+		return new Promise<boolean>((resolve, reject) => {
+			const timeout = setTimeout(() => {
+				cleanup();
+				reject(new Error('Password verification timed out'));
+			}, 5000);
+
+			const cleanup = this.on('PASSWORD_VERIFIED', (msg) => {
+				clearTimeout(timeout);
+				cleanup();
+				resolve(Boolean(msg.valid));
+			});
+
+			this.send({
+				type: 'VERIFY_PASSWORD',
+				password
+			});
+		});
+	}
+
+	/**
 	 * Transmits a relayed TURN usage report to the signaling server.
 	 * Reports are sent strictly for relayed connections to track bandwidth consumption.
 	 */

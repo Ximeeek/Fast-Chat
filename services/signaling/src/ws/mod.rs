@@ -708,6 +708,84 @@ async fn handle_client_message(
                 }
             }
         }
+        ClientMessage::SetRoomPassword { password } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before setting room password",
+                    ));
+                    return;
+                }
+            };
+
+            let is_owner = state.room_manager.is_owner(code, sender_id);
+            if !is_owner {
+                let _ = tx.send(ServerMessage::error(
+                    "NOT_ROOM_OWNER",
+                    "Only the room owner can set or change the room password",
+                ));
+                return;
+            }
+
+            if password.trim().is_empty() {
+                let _ = tx.send(ServerMessage::error(
+                    "INVALID_PASSWORD",
+                    "Password cannot be empty",
+                ));
+                return;
+            }
+
+            match state.room_manager.rekey_room(code, sender_id, &password, None) {
+                Ok(status) => {
+                    let salt_hex = status.salt.map(|s| format_hex(&s)).unwrap_or_default();
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        peer = %sender_id,
+                        event = "SET_ROOM_PASSWORD",
+                        "Room password configured by owner; broadcasting REKEY event"
+                    );
+
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::rekey(code.to_string(), salt_hex),
+                        None,
+                    );
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_ROOM_OWNER",
+                        "Only the room owner can set or change the room password",
+                    ));
+                }
+                Err(RoomError::RoomTerminated) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "ROOM_TERMINATED",
+                        "Cannot set password on a closing or destroyed room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("SET_PASSWORD_FAILED", e.to_string()));
+                }
+            }
+        }
+        ClientMessage::VerifyPassword { password } => {
+            let (code, _, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before verifying password",
+                    ));
+                    return;
+                }
+            };
+
+            let is_valid = state.room_manager.verify_room_password(code, &password);
+            let _ = tx.send(ServerMessage::password_verified(is_valid));
+        }
         ClientMessage::RequestIceServers => {
             let default_stun = crate::turn::IceServerConfig::default_cloudflare_stun();
             let mut servers = vec![default_stun];

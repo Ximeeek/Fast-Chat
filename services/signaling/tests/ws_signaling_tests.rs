@@ -1079,3 +1079,285 @@ async fn test_ws_owner_departure_transfers_ownership_and_empty_room_auto_destroy
     }
 }
 
+#[tokio::test]
+async fn test_ws_set_room_password_owner_and_unauthorized_rejection() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Peer A (Alice) creates room without password
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: Some(false),
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated, got {resp_a:?}"),
+    };
+
+    // 2. Peer B (Bob) joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.expect("Failed to connect Bob");
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    assert!(matches!(resp_b, ServerMessage::JoinOk { .. }));
+    let _ = ws_a.next().await.unwrap(); // consume PEER_JOINED(bob) on Alice
+
+    // 3. Bob (non-owner) attempts SET_ROOM_PASSWORD -> rejected with NOT_ROOM_OWNER
+    let rogue_set_pw = ClientMessage::SetRoomPassword {
+        password: "rogue-secret".to_string(),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&rogue_set_pw).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err: ServerMessage = serde_json::from_str(&b_err_raw).unwrap();
+    match b_err {
+        ServerMessage::Error { code, message } => {
+            assert_eq!(code, "NOT_ROOM_OWNER");
+            assert!(message.contains("Only the room owner"));
+        }
+        _ => panic!("Expected Error(NOT_ROOM_OWNER) for Bob, got {b_err:?}"),
+    }
+
+    // 4. Alice (owner) sets room password
+    let owner_set_pw = ClientMessage::SetRoomPassword {
+        password: "owner-super-secret-123".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&owner_set_pw).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Alice and Bob both receive REKEY broadcast
+    let a_rekey_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_rekey: ServerMessage = serde_json::from_str(&a_rekey_raw).unwrap();
+    match a_rekey {
+        ServerMessage::Rekey { room_code: ref c, ref salt } => {
+            assert_eq!(c, &room_code);
+            assert_eq!(salt.len(), 32);
+        }
+        _ => panic!("Expected Rekey broadcast on Alice, got {a_rekey:?}"),
+    }
+
+    let b_rekey_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_rekey: ServerMessage = serde_json::from_str(&b_rekey_raw).unwrap();
+    match b_rekey {
+        ServerMessage::Rekey { room_code: ref c, ref salt } => {
+            assert_eq!(c, &room_code);
+            assert_eq!(salt.len(), 32);
+        }
+        _ => panic!("Expected Rekey broadcast on Bob, got {b_rekey:?}"),
+    }
+
+    // 5. Bob verifies password with wrong and correct password
+    let verify_wrong = ClientMessage::VerifyPassword {
+        password: "incorrect-password".to_string(),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&verify_wrong).unwrap().into()))
+        .await
+        .unwrap();
+    let b_verify_wrong_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_verify_wrong: ServerMessage = serde_json::from_str(&b_verify_wrong_raw).unwrap();
+    assert_eq!(b_verify_wrong, ServerMessage::PasswordVerified { valid: false });
+
+    let verify_correct = ClientMessage::VerifyPassword {
+        password: "owner-super-secret-123".to_string(),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&verify_correct).unwrap().into()))
+        .await
+        .unwrap();
+    let b_verify_correct_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_verify_correct: ServerMessage = serde_json::from_str(&b_verify_correct_raw).unwrap();
+    assert_eq!(b_verify_correct, ServerMessage::PasswordVerified { valid: true });
+
+    // 6. Late joiner Charlie tries to join without password -> rejected with INVALID_PASSWORD
+    let (mut ws_c, _) = connect_async(&ws_url).await.expect("Failed to connect Charlie");
+    let join_c_no_pw = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c_no_pw).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c_resp_err_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_resp_err: ServerMessage = serde_json::from_str(&c_resp_err_raw).unwrap();
+    match c_resp_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "INVALID_PASSWORD"),
+        _ => panic!("Expected INVALID_PASSWORD for Charlie without password"),
+    }
+
+    // 7. Charlie joins with correct password -> accepted
+    let (mut ws_c2, _) = connect_async(&ws_url).await.expect("Failed to reconnect Charlie");
+    let join_c_ok = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: Some("owner-super-secret-123".to_string()),
+    };
+    ws_c2.send(Message::Text(serde_json::to_string(&join_c_ok).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c_resp_ok_raw = ws_c2.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_resp_ok: ServerMessage = serde_json::from_str(&c_resp_ok_raw).unwrap();
+    assert!(matches!(c_resp_ok, ServerMessage::JoinOk { .. }));
+}
+
+#[tokio::test]
+async fn test_ws_set_room_password_after_ownership_transfer() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room without password
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // 2. Bob joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.expect("Failed to connect Bob");
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+    let _ = ws_b.next().await.unwrap(); // JOIN_OK on Bob
+    let _ = ws_a.next().await.unwrap(); // PEER_JOINED on Alice
+
+    // 3. Alice leaves room -> ownership transferred to Bob
+    drop(ws_a);
+
+    // Bob receives PeerLeft(alice) and RoomOwnerChanged(bob)
+    let mut bob_saw_transfer = false;
+    for _ in 0..2 {
+        let msg_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+        let msg: ServerMessage = serde_json::from_str(&msg_raw).unwrap();
+        if let ServerMessage::RoomOwnerChanged { owner_peer_id, .. } = msg {
+            assert_eq!(owner_peer_id, "bob");
+            bob_saw_transfer = true;
+        }
+    }
+    assert!(bob_saw_transfer);
+
+    // 4. Alice reconnects as a normal participant
+    let (mut ws_a2, _) = connect_async(&ws_url).await.expect("Failed to reconnect Alice");
+    let rejoin_a = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("alice".to_string()),
+        password: None,
+    };
+    ws_a2.send(Message::Text(serde_json::to_string(&rejoin_a).unwrap().into()))
+        .await
+        .unwrap();
+    let _ = ws_a2.next().await.unwrap(); // JOIN_OK on Alice
+    let _ = ws_b.next().await.unwrap(); // PEER_JOINED on Bob
+
+    // 5. Alice (former owner, now normal participant) tries SET_ROOM_PASSWORD -> rejected!
+    let alice_set_pw = ClientMessage::SetRoomPassword {
+        password: "alice-stolen-password".to_string(),
+    };
+    ws_a2.send(Message::Text(serde_json::to_string(&alice_set_pw).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_err_raw = ws_a2.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_err: ServerMessage = serde_json::from_str(&a_err_raw).unwrap();
+    match a_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "NOT_ROOM_OWNER"),
+        _ => panic!("Expected Error(NOT_ROOM_OWNER) for former owner Alice, got {a_err:?}"),
+    }
+
+    // 6. Bob (new owner) sets password -> accepted, broadcasts REKEY!
+    let bob_set_pw = ClientMessage::SetRoomPassword {
+        password: "bob-legitimate-password".to_string(),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&bob_set_pw).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_rekey_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_rekey: ServerMessage = serde_json::from_str(&b_rekey_raw).unwrap();
+    assert!(matches!(b_rekey, ServerMessage::Rekey { .. }));
+
+    let a_rekey_raw = ws_a2.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_rekey: ServerMessage = serde_json::from_str(&a_rekey_raw).unwrap();
+    assert!(matches!(a_rekey, ServerMessage::Rekey { .. }));
+}
+
+#[tokio::test]
+async fn test_ws_set_room_password_owner_alone() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room without password and is alone (0 other peers)
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // 2. Alice sets password alone in room -> succeeds without error and receives Rekey broadcast
+    let set_pw = ClientMessage::SetRoomPassword {
+        password: "alone-password-456".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&set_pw).unwrap().into()))
+        .await
+        .unwrap();
+
+    let rekey_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let rekey: ServerMessage = serde_json::from_str(&rekey_raw).unwrap();
+    match rekey {
+        ServerMessage::Rekey { room_code: c, salt } => {
+            assert_eq!(c, room_code);
+            assert_eq!(salt.len(), 32);
+        }
+        _ => panic!("Expected Rekey broadcast on Alice alone, got {rekey:?}"),
+    }
+}
+

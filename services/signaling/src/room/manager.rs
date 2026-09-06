@@ -179,6 +179,14 @@ impl RoomManager {
             .unwrap_or(false)
     }
 
+    /// Verifies whether the provided password matches the room's password requirement.
+    pub fn verify_room_password(&self, code: &RoomCode, password: &str) -> bool {
+        self.rooms
+            .get(code)
+            .map(|r| r.password_status.has_password && r.verify_password(Some(password)))
+            .unwrap_or(false)
+    }
+
     /// Handles peer departure from a room.
     ///
     /// - If the departing peer was the owner and other peers remain, ownership is

@@ -40,9 +40,11 @@
 	import RoomTimer from '$lib/room/RoomTimer.svelte';
 	import RoomClosingBanner from '$lib/room/RoomClosingBanner.svelte';
 	import SecurityInfoPanel from '$lib/room/SecurityInfoPanel.svelte';
+	import RekeyPromptModal from '$lib/room/RekeyPromptModal.svelte';
 	import ConnectionBadge from '$lib/room/ConnectionBadge.svelte';
 	import { completedFiles } from '$lib/stores/transfer';
 	import { downloadFiles } from '$lib/transfer/archive';
+	import { RekeyManager } from '$lib/crypto';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
 	const rawParam = $page.params.code || '';
@@ -68,6 +70,14 @@
 	let isZippingFiles = $state(false);
 	let retryingPeers = $state<Record<string, boolean>>({});
 	let ownerPromotionBanner = $state(false);
+
+	let rekeyManager = $state<RekeyManager | null>(null);
+	let stagedOwnerPassword = $state<string | null>(null);
+	let isRekeyPromptOpen = $state(false);
+	let rekeyTimeRemaining = $state(15);
+	let rekeyError = $state<string | null>(null);
+	let isRekeySubmitting = $state(false);
+	let rekeyCountdownInterval: ReturnType<typeof setInterval> | null = null;
 
 	const firstHistoricalMessageId = $derived(
 		$chatStore.messages.find((m) => m.isHistory)?.id
@@ -328,7 +338,101 @@
 		}
 	}
 
+	function handleOwnerSetPassword(newPassword: string): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			stagedOwnerPassword = newPassword;
+			const timeout = setTimeout(() => {
+				cleanup();
+				stagedOwnerPassword = null;
+				reject(new Error('Password update timed out'));
+			}, 10000);
+
+			const unsubRekey = signalingClient.on('REKEY', () => {
+				cleanup();
+				resolve();
+			});
+
+			const unsubError = signalingClient.on('ERROR', (msg) => {
+				if (
+					msg.code === 'NOT_ROOM_OWNER' ||
+					msg.code === 'INVALID_PASSWORD' ||
+					msg.code === 'SET_PASSWORD_FAILED' ||
+					msg.code === 'UNAUTHORIZED'
+				) {
+					cleanup();
+					stagedOwnerPassword = null;
+					reject(new Error(msg.message || msg.code));
+				}
+			});
+
+			function cleanup() {
+				clearTimeout(timeout);
+				unsubRekey();
+				unsubError();
+			}
+
+			signalingClient.setRoomPassword(newPassword);
+		});
+	}
+
+	async function handleParticipantRekeySubmit(enteredPassword: string) {
+		if (!rekeyManager || !rekeyManager.isPending()) return;
+		isRekeySubmitting = true;
+		rekeyError = null;
+
+		try {
+			const isValid = await signalingClient.verifyPassword(enteredPassword);
+			if (!isValid) {
+				rekeyError = 'Incorrect password. Disconnecting from room session...';
+				if (rekeyCountdownInterval) {
+					clearInterval(rekeyCountdownInterval);
+					rekeyCountdownInterval = null;
+				}
+				webRtcManager.disconnectAll();
+				rekeyManager.cancel();
+				chatStore.addSystemMessage('Rekey verification failed: incorrect password. Peer connections closed.');
+				setTimeout(() => {
+					isRekeyPromptOpen = false;
+				}, 1500);
+				return;
+			}
+
+			await rekeyManager.submitPassword(enteredPassword);
+			isRekeyPromptOpen = false;
+			if (rekeyCountdownInterval) {
+				clearInterval(rekeyCountdownInterval);
+				rekeyCountdownInterval = null;
+			}
+			chatStore.addSystemMessage('Room password verified. Encryption key updated to K1.');
+		} catch (err) {
+			rekeyError = err instanceof Error ? err.message : 'Password verification failed';
+		} finally {
+			isRekeySubmitting = false;
+		}
+	}
+
+	function handleParticipantRekeyLeave() {
+		if (rekeyCountdownInterval) {
+			clearInterval(rekeyCountdownInterval);
+			rekeyCountdownInterval = null;
+		}
+		if (rekeyManager) {
+			rekeyManager.cancel();
+		}
+		isRekeyPromptOpen = false;
+		leaveRoom();
+	}
+
 	function leaveRoom() {
+		if (rekeyCountdownInterval) {
+			clearInterval(rekeyCountdownInterval);
+			rekeyCountdownInterval = null;
+		}
+		if (rekeyManager) {
+			rekeyManager.cancel();
+		}
+		isRekeyPromptOpen = false;
+		stagedOwnerPassword = null;
 		chatHistorySync?.destroy();
 		chatHistorySync = null;
 		fileTransferSync?.destroy();
@@ -356,6 +460,18 @@
 			chatStore.addSystemMessage('Room created.');
 		}
 		webRtcManager.init();
+		rekeyManager = new RekeyManager({ timeoutMs: 15000 });
+		webRtcManager.bindRekeyManager(rekeyManager);
+
+		rekeyManager.onTimeout(() => {
+			isRekeyPromptOpen = false;
+			if (rekeyCountdownInterval) {
+				clearInterval(rekeyCountdownInterval);
+				rekeyCountdownInterval = null;
+			}
+			chatStore.addSystemMessage('Rekey grace period expired without valid password. Peer connections closed.');
+		});
+
 		chatHistorySync = new ChatHistorySyncManager(webRtcManager);
 		timerInterval = setInterval(() => {
 			now = Math.floor(Date.now() / 1000);
@@ -489,7 +605,7 @@
 		}
 
 		// Listen to incoming signaling messages for activity feed and WebRTC prep
-		unsubMessage = signalingClient.onAnyMessage((msg: ServerSignalingMessage) => {
+		unsubMessage = signalingClient.onAnyMessage(async (msg: ServerSignalingMessage) => {
 			const time = new Date().toLocaleTimeString();
 			let details = '';
 
@@ -539,9 +655,36 @@
 				case 'ICE_CANDIDATES':
 					details = `ICE candidates relayed from ${msg.sender_peer_id || msg.senderPeerId}`;
 					break;
-				case 'REKEY':
+				case 'REKEY': {
 					details = `Room rekeyed with new salt`;
+					roomStore.setPasswordStatus(true);
+					if (stagedOwnerPassword && rekeyManager) {
+						const ownerPassword = stagedOwnerPassword;
+						stagedOwnerPassword = null;
+						try {
+							await rekeyManager.submitPassword(ownerPassword);
+							chatStore.addSystemMessage('Room password configured. Rotated active encryption key to K1.');
+						} catch (err) {
+							console.error('Failed to auto-derive rekey key for owner:', err);
+						}
+					} else if (!$roomStore.isOwner) {
+						isRekeyPromptOpen = true;
+						rekeyTimeRemaining = 15;
+						rekeyError = null;
+						if (rekeyCountdownInterval) clearInterval(rekeyCountdownInterval);
+						rekeyCountdownInterval = setInterval(() => {
+							if (rekeyManager && rekeyManager.isPending()) {
+								rekeyTimeRemaining = Math.max(0, Math.ceil(rekeyManager.getRemainingTimeMs() / 1000));
+							} else {
+								if (rekeyCountdownInterval) {
+									clearInterval(rekeyCountdownInterval);
+									rekeyCountdownInterval = null;
+								}
+							}
+						}, 250);
+					}
 					break;
+				}
 				case 'ROOM_CLOSING':
 					details = `Room closing grace period started`;
 					chatStore.addSystemMessage('Room closing countdown started.');
@@ -589,6 +732,14 @@
 		}
 		if (timerInterval) {
 			clearInterval(timerInterval);
+		}
+		if (rekeyCountdownInterval) {
+			clearInterval(rekeyCountdownInterval);
+			rekeyCountdownInterval = null;
+		}
+		if (rekeyManager) {
+			rekeyManager.dispose();
+			rekeyManager = null;
 		}
 		if (unsubMessage) {
 			unsubMessage();
@@ -1197,7 +1348,20 @@
 		<!-- Security Specifications Modal -->
 		<SecurityInfoPanel
 			isOpen={isSecurityInfoOpen}
+			isOwner={$roomStore.isOwner}
+			hasPassword={$roomStore.hasPassword}
+			onSetPassword={handleOwnerSetPassword}
 			onClose={() => (isSecurityInfoOpen = false)}
+		/>
+
+		<!-- Rekey Password Prompt Modal for Participants -->
+		<RekeyPromptModal
+			isOpen={isRekeyPromptOpen}
+			timeRemaining={rekeyTimeRemaining}
+			errorMessage={rekeyError}
+			isSubmitting={isRekeySubmitting}
+			onSubmit={handleParticipantRekeySubmit}
+			onLeave={handleParticipantRekeyLeave}
 		/>
 	{/if}
 </main>

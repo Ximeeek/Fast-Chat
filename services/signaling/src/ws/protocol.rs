@@ -84,6 +84,18 @@ pub enum ClientMessage {
         salt: Option<String>,
     },
 
+    /// Request by room owner to set or change room password after room creation.
+    #[serde(alias = "SET_ROOM_PASSWORD")]
+    SetRoomPassword {
+        password: String,
+    },
+
+    /// Request by an active participant to verify the room password during rekey.
+    #[serde(alias = "VERIFY_PASSWORD", alias = "VERIFY_ROOM_PASSWORD")]
+    VerifyPassword {
+        password: String,
+    },
+
     /// Request ICE servers configuration (STUN/TURN) for WebRTC peer connection.
     #[serde(alias = "GET_ICE_SERVERS")]
     RequestIceServers,
@@ -230,9 +242,18 @@ pub enum ServerMessage {
         #[serde(rename = "turnIssuanceLimited")]
         turn_issuance_limited_camel: bool,
     },
+
+    /// Password verification outcome returned to the requesting participant.
+    PasswordVerified {
+        valid: bool,
+    },
 }
 
 impl ServerMessage {
+    pub fn password_verified(valid: bool) -> Self {
+        Self::PasswordVerified { valid }
+    }
+
     pub fn room_created(code: impl Into<String>, peer_id: impl Into<String>, salt_hex: impl Into<String>, expires_at: i64) -> Self {
         let code_str = code.into();
         let peer_str = peer_id.into();
@@ -549,5 +570,41 @@ mod tests {
         let json_data = r#"{"type":"TURN_USAGE_REPORT","bytes":1048576}"#;
         let msg: ClientMessage = serde_json::from_str(json_data).unwrap();
         assert_eq!(msg, ClientMessage::TurnUsageReport { bytes: 1048576 });
+    }
+
+    #[test]
+    fn test_client_message_set_room_password_deserialization() {
+        let json_data = r#"{"type":"SET_ROOM_PASSWORD","password":"secret-password-123"}"#;
+        let msg: ClientMessage = serde_json::from_str(json_data).unwrap();
+        assert_eq!(
+            msg,
+            ClientMessage::SetRoomPassword {
+                password: "secret-password-123".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_client_message_verify_password_deserialization() {
+        let json_data = r#"{"type":"VERIFY_PASSWORD","password":"secret-password-123"}"#;
+        let msg: ClientMessage = serde_json::from_str(json_data).unwrap();
+        assert_eq!(
+            msg,
+            ClientMessage::VerifyPassword {
+                password: "secret-password-123".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_server_message_password_verified_serialization() {
+        let msg_true = ServerMessage::password_verified(true);
+        let json_true = serde_json::to_string(&msg_true).unwrap();
+        assert!(json_true.contains(r#""type":"PASSWORD_VERIFIED""#));
+        assert!(json_true.contains(r#""valid":true"#));
+
+        let msg_false = ServerMessage::password_verified(false);
+        let json_false = serde_json::to_string(&msg_false).unwrap();
+        assert!(json_false.contains(r#""valid":false"#));
     }
 }

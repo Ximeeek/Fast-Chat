@@ -66,6 +66,14 @@ export type ClientSignalingMessage =
 			salt?: string;
 	  }
 	| {
+			type: 'SET_ROOM_PASSWORD';
+			password: string;
+	  }
+	| {
+			type: 'VERIFY_PASSWORD';
+			password: string;
+	  }
+	| {
 			type: 'REQUEST_ICE_SERVERS';
 	  }
 	| {
@@ -88,6 +96,8 @@ export interface RoomCreatedServerMessage {
 	crypto_salt?: string;
 	expires_at: number;
 	expiresAt?: number;
+	has_password?: boolean;
+	hasPassword?: boolean;
 }
 
 export interface JoinOkServerMessage {
@@ -103,6 +113,8 @@ export interface JoinOkServerMessage {
 	expires_at: number;
 	expiresAt?: number;
 	peers: string[];
+	has_password?: boolean;
+	hasPassword?: boolean;
 }
 
 export interface PeerJoinedServerMessage {
@@ -188,6 +200,11 @@ export interface RoomOwnerChangedServerMessage {
 	ownerPeerId?: string;
 }
 
+export interface PasswordVerifiedServerMessage {
+	type: 'PASSWORD_VERIFIED';
+	valid: boolean;
+}
+
 export type ServerSignalingMessage =
 	| RoomCreatedServerMessage
 	| JoinOkServerMessage
@@ -198,6 +215,7 @@ export type ServerSignalingMessage =
 	| SdpAnswerServerMessage
 	| IceCandidatesServerMessage
 	| RekeyServerMessage
+	| PasswordVerifiedServerMessage
 	| RoomClosingServerMessage
 	| RoomClosedServerMessage
 	| PongServerMessage
