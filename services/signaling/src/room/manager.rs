@@ -179,6 +179,28 @@ impl RoomManager {
             .unwrap_or(false)
     }
 
+    /// Evaluates whether a peer holds the specified permission within a room.
+    pub fn has_permission(
+        &self,
+        code: &RoomCode,
+        peer_id: &crate::room::permissions::PeerId,
+        permission: crate::room::permissions::Permission,
+    ) -> bool {
+        self.rooms
+            .get(code)
+            .map(|r| r.has_permission(peer_id, permission))
+            .unwrap_or(false)
+    }
+
+    /// Resolves the role assigned to a peer within a room, if the room exists.
+    pub fn get_role(
+        &self,
+        code: &RoomCode,
+        peer_id: &crate::room::permissions::PeerId,
+    ) -> Option<crate::room::permissions::Role> {
+        self.rooms.get(code).map(|r| r.get_role(peer_id))
+    }
+
     /// Verifies whether the provided password matches the room's password requirement.
     pub fn verify_room_password(&self, code: &RoomCode, password: &str) -> bool {
         self.rooms

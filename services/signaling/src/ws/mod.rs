@@ -720,8 +720,10 @@ async fn handle_client_message(
                 }
             };
 
-            let is_owner = state.room_manager.is_owner(code, sender_id);
-            if !is_owner {
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::SetRoomPassword)
+            {
                 let _ = tx.send(ServerMessage::error(
                     "NOT_ROOM_OWNER",
                     "Only the room owner can set or change the room password",

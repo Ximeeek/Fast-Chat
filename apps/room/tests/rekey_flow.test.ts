@@ -197,7 +197,7 @@ describe('Post-Creation Room Password Management & REKEY Flow', () => {
 
 		// Timeout fires -> triggers disconnectAll immediately
 		assert.ok(mockTimerCallback);
-		mockTimerCallback!();
+		(mockTimerCallback as () => void)();
 
 		assert.equal(rekeyManager.getStatus(), 'timed_out');
 		assert.equal(disconnectAllCalled, true);
@@ -206,7 +206,7 @@ describe('Post-Creation Room Password Management & REKEY Flow', () => {
 	});
 
 	test('SignalingClient setRoomPassword dispatches SET_ROOM_PASSWORD message', () => {
-		const client = new SignalingClient('ws://localhost:9999/ws');
+		const client = new SignalingClient({ wsUrl: 'ws://localhost:9999/ws' });
 		let sentMessage: any = null;
 
 		(client as any).send = (msg: any) => {
@@ -221,7 +221,7 @@ describe('Post-Creation Room Password Management & REKEY Flow', () => {
 	});
 
 	test('SignalingClient verifyPassword sends VERIFY_PASSWORD and resolves boolean', async () => {
-		const client = new SignalingClient('ws://localhost:9999/ws');
+		const client = new SignalingClient({ wsUrl: 'ws://localhost:9999/ws' });
 		let sentMessage: any = null;
 
 		// Mock open WebSocket

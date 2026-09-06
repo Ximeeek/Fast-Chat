@@ -1,4 +1,5 @@
 export * from './types/signaling';
+export * from './types/permissions';
 export * from './utils/roomCode';
 export * from './stores/room';
 export * from './signaling/client';

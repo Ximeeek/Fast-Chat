@@ -292,6 +292,28 @@ impl RoomState {
             .map(|p| p.id.clone())
     }
 
+    /// Returns a borrowed reference to the peer ID of the current room owner, if assigned.
+    pub fn owner_peer_id(&self) -> Option<&str> {
+        self.peers
+            .iter()
+            .find(|p| p.is_owner)
+            .map(|p| p.id.as_str())
+    }
+
+    /// Resolves the role assigned to the specified peer in this room.
+    pub fn get_role(&self, peer_id: &crate::room::permissions::PeerId) -> crate::room::permissions::Role {
+        crate::room::permissions::get_role(self, peer_id)
+    }
+
+    /// Checks whether the specified peer holds the requested permission in this room.
+    pub fn has_permission(
+        &self,
+        peer_id: &crate::room::permissions::PeerId,
+        permission: crate::room::permissions::Permission,
+    ) -> bool {
+        crate::room::permissions::has_permission(self, peer_id, permission)
+    }
+
     /// Sets the designated owner of this room to the specified peer ID.
     /// Resets owner status for all other peers and updates `owner_rate_key`.
     /// Returns true if the peer was found.
@@ -409,7 +431,7 @@ impl RoomState {
         password: &str,
         salt: Option<[u8; 16]>,
     ) -> Result<(), RoomError> {
-        if !self.is_owner(peer_id) {
+        if !self.has_permission(peer_id, crate::room::permissions::Permission::SetRoomPassword) {
             return Err(RoomError::Unauthorized);
         }
 
