@@ -370,6 +370,20 @@ describe('Search Engine Privacy & Zero Storage Policy Audit', () => {
 		);
 	});
 
+	test('/create page implements non-disruptive session hint and eliminates intrusive layout shift', () => {
+		const createPage = readFileSync(join(process.cwd(), 'src/routes/create/+page.svelte'), 'utf8');
+
+		assert.match(createPage, /showCodeHint/);
+		assert.match(createPage, /Numbers only • Format: 0000-0000-0000/);
+		assert.match(createPage, /hasShownRoomCodeHint/);
+		assert.match(createPage, /triggerCodeHint/);
+		assert.equal(
+			createPage.includes('Only numbers are allowed. Expected room code format: 0000-0000-0000'),
+			false,
+			'Intrusive layout-shifting error string should be removed'
+		);
+	});
+
 	test('formatChatLog correctly formats system announcements and peer messages', () => {
 		const log = formatChatLog('1234-5678-9012', [
 			{

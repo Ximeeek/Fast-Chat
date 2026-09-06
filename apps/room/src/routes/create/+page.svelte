@@ -1,4 +1,14 @@
+<script module lang="ts">
+	let hasShownRoomCodeHint = false;
+
+	export function resetRoomCodeHintSession() {
+		hasShownRoomCodeHint = false;
+	}
+</script>
+
 <script lang="ts">
+	import { onDestroy } from 'svelte';
+	import { fade, fly } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { signalingClient } from '$lib/signaling/client';
 	import { formatRoomCodeInput, validateRoomCode, encodeRoomToken } from '$lib/utils/roomCode';
@@ -13,10 +23,48 @@
 	let manualCode = $state('');
 	let joinError = $state<string | null>(null);
 	let isSecurityInfoOpen = $state(false);
+	let showCodeHint = $state(false);
+	let isInputShaking = $state(false);
+	let hintTimeout: ReturnType<typeof setTimeout> | null = null;
+	let shakeTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	const codePlaceholder = '0000-0000-0000';
 	const hasNonDigits = $derived(/[^\d-]/.test(manualCode));
 	const maskSuffix = $derived(!hasNonDigits ? codePlaceholder.slice(manualCode.length) : '');
+
+	function triggerCodeHint() {
+		// Subtle border highlight feedback on invalid keystroke
+		isInputShaking = true;
+		if (shakeTimeout) clearTimeout(shakeTimeout);
+		shakeTimeout = setTimeout(() => {
+			isInputShaking = false;
+			shakeTimeout = null;
+		}, 300);
+
+		// Show informative floating hint only once per session
+		if (hasShownRoomCodeHint) return;
+		hasShownRoomCodeHint = true;
+		showCodeHint = true;
+
+		if (hintTimeout) clearTimeout(hintTimeout);
+		hintTimeout = setTimeout(() => {
+			showCodeHint = false;
+			hintTimeout = null;
+		}, 3500);
+	}
+
+	function dismissCodeHint() {
+		showCodeHint = false;
+		if (hintTimeout) {
+			clearTimeout(hintTimeout);
+			hintTimeout = null;
+		}
+	}
+
+	onDestroy(() => {
+		if (hintTimeout) clearTimeout(hintTimeout);
+		if (shakeTimeout) clearTimeout(shakeTimeout);
+	});
 
 	function handleCodeKeyDown(e: KeyboardEvent) {
 		if (
@@ -28,7 +76,7 @@
 		}
 		if (!/^\d$/.test(e.key)) {
 			e.preventDefault();
-			joinError = 'Only numbers are allowed. Expected room code format: 0000-0000-0000';
+			triggerCodeHint();
 		}
 	}
 
@@ -36,21 +84,15 @@
 		const target = e.target as HTMLInputElement;
 		const raw = target.value.trim();
 		if (/[^\d-]/.test(raw)) {
-			manualCode = raw;
-			joinError = 'Only numbers are allowed. Expected room code format: 0000-0000-0000';
-		} else {
-			manualCode = formatRoomCodeInput(raw);
-			target.value = manualCode;
-			joinError = null;
+			triggerCodeHint();
 		}
+		manualCode = formatRoomCodeInput(raw);
+		target.value = manualCode;
+		joinError = null;
 	}
 
 	function handleJoinExisting(e: SubmitEvent) {
 		e.preventDefault();
-		if (/[^\d-]/.test(manualCode)) {
-			joinError = 'Only numbers are allowed. Expected room code format: 0000-0000-0000';
-			return;
-		}
 		if (!validateRoomCode(manualCode)) {
 			joinError = 'Invalid room code format. Expected: 0000-0000-0000';
 			return;
@@ -206,31 +248,60 @@
 				<label for="manual-code" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
 					Room Identifier
 				</label>
-				<!-- Fixed-position overlay input preventing text jumping and aligning over mask -->
-				<div class="relative flex items-center rounded-xl bg-[#06080e] border border-[#1e2538] focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400 transition-all overflow-hidden">
-					<!-- Visual placeholder mask layer for numeric codes -->
-					{#if !hasNonDigits}
-						<div
-							class="absolute inset-0 px-4 py-3 flex items-center font-['JetBrains_Mono',monospace] text-sm tracking-[0.22em] pointer-events-none select-none text-left"
-							aria-hidden="true"
+				<!-- Relative container anchoring the floating hint without shifting layout -->
+				<div class="relative">
+					<!-- Custom floating session hint (zero layout shift, auto-dismissing) -->
+					{#if showCodeHint}
+						<button
+							type="button"
+							in:fly={{ y: 6, duration: 240 }}
+							out:fade={{ duration: 180 }}
+							aria-label="Room code format hint: Numbers only, format 0000-0000-0000. Click to dismiss."
+							class="absolute -top-11 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center pointer-events-auto cursor-pointer select-none bg-transparent border-0 p-0 focus:outline-none"
+							onclick={dismissCodeHint}
 						>
-							<span class="opacity-0">{manualCode}</span><span class="text-zinc-600">{maskSuffix}</span>
-						</div>
+							<div
+								role="status"
+								aria-live="polite"
+								class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0b101c]/95 border border-cyan-400/50 text-cyan-300 text-xs font-mono shadow-[0_4px_24px_rgba(0,0,0,0.85),0_0_15px_rgba(6,182,212,0.3)] backdrop-blur-md whitespace-nowrap"
+							>
+								<span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+								<span>Numbers only • Format: 0000-0000-0000</span>
+							</div>
+							<div class="w-2 h-2 bg-[#0b101c] border-r border-b border-cyan-400/50 rotate-45 -mt-1"></div>
+						</button>
 					{/if}
-					<!-- Real input on top with exact matching typography -->
-					<input
-						id="manual-code"
-						type="text"
-						inputmode="numeric"
-						placeholder={hasNonDigits ? '' : '0000-0000-0000'}
-						value={manualCode}
-						onkeydown={handleCodeKeyDown}
-						oninput={handleCodeInput}
-						maxlength={60}
-						autocomplete="off"
-						spellcheck="false"
-						class="w-full px-4 py-3 bg-transparent text-cyan-300 text-sm font-['JetBrains_Mono',monospace] {!hasNonDigits ? 'tracking-[0.22em]' : 'tracking-normal'} text-left focus:outline-none relative z-10"
-					/>
+
+					<!-- Fixed-position overlay input preventing text jumping and aligning over mask -->
+					<div
+						class="relative flex items-center rounded-xl bg-[#06080e] border {isInputShaking
+							? 'border-cyan-400/80 ring-1 ring-cyan-400/40'
+							: 'border-[#1e2538]'} focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400 transition-all overflow-hidden"
+					>
+						<!-- Visual placeholder mask layer for numeric codes -->
+						{#if !hasNonDigits}
+							<div
+								class="absolute inset-0 px-4 py-3 flex items-center font-['JetBrains_Mono',monospace] text-sm tracking-[0.22em] pointer-events-none select-none text-left"
+								aria-hidden="true"
+							>
+								<span class="opacity-0">{manualCode}</span><span class="text-zinc-600">{maskSuffix}</span>
+							</div>
+						{/if}
+						<!-- Real input on top with exact matching typography -->
+						<input
+							id="manual-code"
+							type="text"
+							inputmode="numeric"
+							placeholder={hasNonDigits ? '' : '0000-0000-0000'}
+							value={manualCode}
+							onkeydown={handleCodeKeyDown}
+							oninput={handleCodeInput}
+							maxlength={60}
+							autocomplete="off"
+							spellcheck="false"
+							class="w-full px-4 py-3 bg-transparent text-cyan-300 text-sm font-['JetBrains_Mono',monospace] {!hasNonDigits ? 'tracking-[0.22em]' : 'tracking-normal'} text-left focus:outline-none relative z-10"
+						/>
+					</div>
 				</div>
 			</div>
 			<button
