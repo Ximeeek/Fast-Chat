@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { signalingClient } from '$lib/signaling/client';
-	import { formatRoomCodeInput, validateRoomCode } from '$lib/utils/roomCode';
+	import { formatRoomCodeInput, validateRoomCode, resolveRoomIdentifier, encodeRoomToken } from '$lib/utils/roomCode';
 	import SecurityInfoPanel from '$lib/room/SecurityInfoPanel.svelte';
 
 	let enablePassword = $state(false);
@@ -15,7 +15,8 @@
 	let isSecurityInfoOpen = $state(false);
 
 	const codePlaceholder = '0000-0000-0000';
-	const maskSuffix = $derived(codePlaceholder.slice(manualCode.length));
+	const isRawDigits = $derived(!/[a-zA-Z]/.test(manualCode) && !manualCode.includes('/'));
+	const maskSuffix = $derived(isRawDigits ? codePlaceholder.slice(manualCode.length) : '');
 
 	function handleCodeKeyDown(e: KeyboardEvent) {
 		if (
@@ -25,25 +26,31 @@
 		) {
 			return;
 		}
-		if (!/^\d$/.test(e.key)) {
+		if (!/^[0-9a-zA-Z\-_/.:]$/.test(e.key)) {
 			e.preventDefault();
 		}
 	}
 
 	function handleCodeInput(e: Event) {
 		const target = e.target as HTMLInputElement;
-		manualCode = formatRoomCodeInput(target.value);
+		const raw = target.value.trim();
+		if (!/[a-zA-Z]/.test(raw) && !raw.includes('/')) {
+			manualCode = formatRoomCodeInput(raw);
+		} else {
+			manualCode = raw;
+		}
 		target.value = manualCode;
 		joinError = null;
 	}
 
 	function handleJoinExisting(e: SubmitEvent) {
 		e.preventDefault();
-		if (!validateRoomCode(manualCode)) {
-			joinError = 'Invalid room code format. Expected: 0000-0000-0000';
+		const resolved = resolveRoomIdentifier(manualCode);
+		if (!resolved) {
+			joinError = 'Invalid room identifier. Enter a 12-digit code (0000-0000-0000) or encrypted room token.';
 			return;
 		}
-		goto(`/room/${manualCode}`);
+		goto(`/room/${resolved.token}`);
 	}
 
 	async function handleCreateRoom(e: SubmitEvent) {
@@ -55,7 +62,8 @@
 			const res = await signalingClient.createRoom({
 				password: enablePassword && password.trim() ? password.trim() : undefined
 			});
-			goto(`/room/${res.code}`);
+			const token = encodeRoomToken(res.code);
+			goto(`/room/${token}`);
 		} catch (err) {
 			errorMessage = err instanceof Error ? err.message : 'Failed to create room';
 		} finally {
@@ -190,29 +198,32 @@
 			{/if}
 			<div>
 				<label for="manual-code" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
-					Room Identifier
+					Room Identifier or Token
 				</label>
 				<!-- Fixed-position overlay input preventing text jumping and aligning over mask -->
 				<div class="relative flex items-center rounded-xl bg-[#06080e] border border-[#1e2538] focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400 transition-all overflow-hidden">
-					<!-- Visual placeholder mask layer -->
-					<div
-						class="absolute inset-0 px-4 py-3 flex items-center font-['JetBrains_Mono',monospace] text-sm tracking-[0.22em] pointer-events-none select-none text-left"
-						aria-hidden="true"
-					>
-						<span class="opacity-0">{manualCode}</span><span class="text-zinc-600">{maskSuffix}</span>
-					</div>
+					<!-- Visual placeholder mask layer for numeric codes -->
+					{#if isRawDigits}
+						<div
+							class="absolute inset-0 px-4 py-3 flex items-center font-['JetBrains_Mono',monospace] text-sm tracking-[0.22em] pointer-events-none select-none text-left"
+							aria-hidden="true"
+						>
+							<span class="opacity-0">{manualCode}</span><span class="text-zinc-600">{maskSuffix}</span>
+						</div>
+					{/if}
 					<!-- Real input on top with exact matching typography -->
 					<input
 						id="manual-code"
 						type="text"
-						inputmode="numeric"
+						inputmode={isRawDigits ? 'numeric' : 'text'}
+						placeholder={isRawDigits ? '' : 'Enter 12-digit code or encrypted token'}
 						value={manualCode}
 						onkeydown={handleCodeKeyDown}
 						oninput={handleCodeInput}
-						maxlength={14}
+						maxlength={120}
 						autocomplete="off"
 						spellcheck="false"
-						class="w-full px-4 py-3 bg-transparent text-cyan-300 text-sm font-['JetBrains_Mono',monospace] tracking-[0.22em] text-left focus:outline-none relative z-10"
+						class="w-full px-4 py-3 bg-transparent text-cyan-300 text-sm font-['JetBrains_Mono',monospace] {isRawDigits ? 'tracking-[0.22em]' : 'tracking-normal'} text-left focus:outline-none relative z-10"
 					/>
 				</div>
 			</div>

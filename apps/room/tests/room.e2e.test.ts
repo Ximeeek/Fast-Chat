@@ -99,20 +99,21 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 			await page1.waitForSelector('button:has-text("Create New Room")', { timeout: 10000 });
 			await page1.click('button:has-text("Create New Room")');
 
-			// Wait for navigation to /room/[code]
-			await page1.waitForURL(/\/room\/\d{4}-\d{4}-\d{4}/, { timeout: 10000 });
+			// Wait for navigation to /room/[token]
+			await page1.waitForURL(/\/room\/[0-9a-fA-F]{16}/, { timeout: 10000 });
 			const page1Url = page1.url();
-			const roomCodeMatch = page1Url.match(/\d{4}-\d{4}-\d{4}/);
-			assert.ok(roomCodeMatch, 'Expected room code in URL');
-			const roomCode = roomCodeMatch[0];
+			const tokenMatch = page1Url.match(/\/room\/([0-9a-fA-F]{16})/);
+			assert.ok(tokenMatch, 'Expected encrypted room token in URL');
+			const roomToken = tokenMatch[1];
+			assert.equal(/\d{4}-\d{4}-\d{4}/.test(page1Url), false, 'Raw room numbers must not be exposed in browser URL');
 
 			// Wait for Page 1 active room interface
 			await page1.waitForSelector('input[placeholder*="Type an encrypted message"]', {
 				timeout: 10000
 			});
 
-			// 2. Page 2 opens the room directly: /room/[code]
-			await page2.goto(`${APP_URL}/room/${roomCode}`);
+			// 2. Page 2 opens the room directly using the encrypted token: /room/[token]
+			await page2.goto(`${APP_URL}/room/${roomToken}`);
 
 			// Verify Symptom 1 is resolved: Page 2 must NOT show "Unable to Join Session" or "WebSocket is not connected"
 			const joinError = await page2

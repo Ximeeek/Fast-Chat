@@ -41,3 +41,18 @@ export function formatRoomCodeInput(raw: string): string {
 
 	return parts.join('-');
 }
+
+export * from './token.ts';
+import { resolveRoomIdentifier } from './token.ts';
+
+/**
+ * Validates whether the given string is either a valid room code, an encrypted token, or a room link.
+ */
+export function isValidRoomIdentifier(input: string): boolean {
+	if (!input || typeof input !== 'string') {
+		return false;
+	}
+	const trimmed = input.trim();
+	return validateRoomCode(trimmed) || Boolean(resolveRoomIdentifier(trimmed));
+}
+

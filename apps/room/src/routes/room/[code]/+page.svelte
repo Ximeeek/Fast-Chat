@@ -6,12 +6,22 @@
 	import { webRtcManager } from '$lib/webrtc';
 	import { roomStore, isRoomActive, peerCount } from '$lib/stores/room';
 	import { webrtcPeers, openDataChannelsCount, hasFailedPeers } from '$lib/stores/webrtc';
-	import { chatStore } from '$lib/stores/chat';
-	import { serializeChatMessage, deserializeChatMessage, formatChatLog, downloadChatLog } from '$lib/chat';
-	import { FileSender, FileReceiver, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
 	import { transferStore } from '$lib/stores/transfer';
+	import { chatStore } from '$lib/stores/chat';
+	import {
+		serializeChatMessage,
+		deserializeChatMessage,
+		formatChatLog,
+		downloadChatLog,
+		countLines,
+		isLongPastedText,
+		formatPastedLabel,
+		composeFinalMessage,
+		type PastedBlock
+	} from '$lib/chat';
+	import { FileSender, FileReceiver, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
-	import { validateRoomCode } from '$lib/utils/roomCode';
+	import { validateRoomCode, resolveRoomIdentifier } from '$lib/utils/roomCode';
 	import RoomCodeHero from '$lib/room/RoomCodeHero.svelte';
 	import RoomTimer from '$lib/room/RoomTimer.svelte';
 	import RoomClosingBanner from '$lib/room/RoomClosingBanner.svelte';
@@ -21,8 +31,11 @@
 	import { downloadFiles } from '$lib/transfer/archive';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
-	const roomCode = $page.params.code || '';
-	const isValidCode = validateRoomCode(roomCode);
+	const rawParam = $page.params.code || '';
+	const resolved = resolveRoomIdentifier(rawParam);
+	const roomCode = resolved ? resolved.code : '';
+	const roomToken = resolved ? resolved.token : '';
+	const isValidCode = Boolean(resolved && validateRoomCode(roomCode));
 
 	let password = $state('');
 	let isJoining = $state(false);
@@ -38,12 +51,21 @@
 	let isSecurityInfoOpen = $state(false);
 	let isZippingFiles = $state(false);
 	let retryingPeers = $state<Record<string, boolean>>({});
+	let ownerPromotionBanner = $state(false);
+
+	let pastedBlocks = $state<PastedBlock[]>([]);
 
 	const isChatDisabled = $derived($hasFailedPeers && $openDataChannelsCount === 0);
+	const hasPastedContent = $derived(pastedBlocks.some((b) => b.content.trim().length > 0));
+	const canSend = $derived(
+		!isSending && !isChatDisabled && (messageInput.trim().length > 0 || hasPastedContent)
+	);
 	const chatPlaceholder = $derived(
 		isChatDisabled
 			? 'Type an encrypted message (No open WebRTC peer connections)...'
-			: 'Type an encrypted message...'
+			: pastedBlocks.length > 0
+				? 'Add a companion message or click Send...'
+				: 'Type an encrypted message...'
 	);
 
 	// Expiration countdown
@@ -108,9 +130,44 @@
 		}
 	}
 
+	function handlePaste(e: ClipboardEvent) {
+		const text = e.clipboardData?.getData('text') || '';
+		if (!text) return;
+
+		if (isLongPastedText(text)) {
+			e.preventDefault();
+			const lines = countLines(text);
+			pastedBlocks.push({
+				id: `paste-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+				content: text,
+				lineCount: Math.max(lines, 1),
+				isExpanded: false
+			});
+		}
+	}
+
+	function togglePastedBlock(id: string) {
+		const block = pastedBlocks.find((b) => b.id === id);
+		if (block) {
+			block.isExpanded = !block.isExpanded;
+		}
+	}
+
+	function removePastedBlock(id: string) {
+		pastedBlocks = pastedBlocks.filter((b) => b.id !== id);
+	}
+
+	function updatePastedBlockContent(id: string, newContent: string) {
+		const block = pastedBlocks.find((b) => b.id === id);
+		if (block) {
+			block.content = newContent;
+			block.lineCount = Math.max(countLines(newContent), 1);
+		}
+	}
+
 	async function handleSendMessage(e?: SubmitEvent) {
 		e?.preventDefault();
-		const trimmed = messageInput.trim();
+		const trimmed = composeFinalMessage(messageInput, pastedBlocks);
 		if (!trimmed || isSending || isChatDisabled) return;
 
 		isSending = true;
@@ -149,6 +206,7 @@
 		});
 
 		messageInput = '';
+		pastedBlocks = [];
 
 		try {
 			const payload = serializeChatMessage({
@@ -196,13 +254,16 @@
 
 	async function copyRoomCode() {
 		try {
-			await navigator.clipboard.writeText(roomCode);
+			const shareTarget = typeof window !== 'undefined' && roomToken
+				? `${window.location.origin}/room/${roomToken}`
+				: roomCode;
+			await navigator.clipboard.writeText(shareTarget);
 			copySuccess = true;
 			setTimeout(() => {
 				copySuccess = false;
 			}, 2000);
 		} catch (err) {
-			console.error('Failed to copy room code:', err);
+			console.error('Failed to copy room link:', err);
 		}
 	}
 
@@ -226,10 +287,15 @@
 		roomStore.reset();
 		chatStore.reset();
 		transferStore.reset();
+		messageInput = '';
+		pastedBlocks = [];
 		goto('/create');
 	}
 
 	onMount(() => {
+		if (typeof window !== 'undefined' && roomToken && rawParam !== roomToken) {
+			window.history.replaceState(window.history.state, '', `/room/${roomToken}${window.location.hash}`);
+		}
 		chatStore.initUsername();
 		webRtcManager.init();
 		timerInterval = setInterval(() => {
@@ -341,6 +407,25 @@
 				case 'PEER_LEFT':
 					details = `Peer disconnected: ${msg.peer_id || msg.peerId}`;
 					break;
+				case 'ROOM_OWNER_CHANGED': {
+					const newOwner = msg.owner_peer_id || msg.ownerPeerId || '';
+					details = `Room ownership transferred to ${newOwner}`;
+					const isLocal = Boolean($roomStore.peerId && newOwner === $roomStore.peerId);
+					chatStore.addMessage({
+						id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+						sender: 'System',
+						content: isLocal
+							? 'Room owner disconnected. You are now the room owner.'
+							: `Room owner disconnected. Ownership transferred to ${newOwner}.`,
+						timestamp: Date.now(),
+						isSelf: false,
+						isSystem: true
+					});
+					if (isLocal) {
+						ownerPromotionBanner = true;
+					}
+					break;
+				}
 				case 'SDP_OFFER':
 					details = `SDP offer relayed from ${msg.sender_peer_id || msg.senderPeerId}`;
 					break;
@@ -397,7 +482,7 @@
 </script>
 
 <svelte:head>
-	<title>Room {roomCode} - FastChat</title>
+	<title>Room {roomToken ? roomToken.slice(0, 8) : (roomCode || 'Session')} - FastChat</title>
 	<meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
@@ -414,10 +499,10 @@
 					<line x1="9" y1="9" x2="15" y2="15"/>
 				</svg>
 			</div>
-			<h1 class="text-xl font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Invalid Room Code</h1>
+			<h1 class="text-xl font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Invalid Room Link</h1>
 			<p class="text-xs text-zinc-400 mb-6 font-mono leading-relaxed">
-				The room identifier <code class="bg-[#06080e] px-2.5 py-1 rounded text-red-300 border border-white/5">{roomCode}</code>
-				does not conform to the required <code class="text-zinc-200">0000-0000-0000</code> format.
+				The room link or identifier <code class="bg-[#06080e] px-2.5 py-1 rounded text-red-300 border border-white/5">{rawParam}</code>
+				is invalid, corrupted, or expired.
 			</p>
 			<a
 				href="/create"
@@ -454,7 +539,7 @@
 				Password Required
 			</h1>
 			<p class="text-xs text-zinc-400 mb-6 text-center">
-				Room <span class="text-cyan-300 font-mono font-bold">{roomCode}</span> is protected by an encryption key.
+				Room <span class="text-cyan-300 font-mono font-bold">{roomToken ? roomToken.slice(0, 8) + '...' : roomCode}</span> is protected by an encryption key.
 			</p>
 
 			{#if joinError}
@@ -520,7 +605,7 @@
 			{:else}
 				<div class="inline-block w-9 h-9 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin mb-4 shadow-[0_0_15px_rgba(0,229,255,0.3)]"></div>
 				<h2 class="text-lg font-bold uppercase tracking-tight text-white font-['Orbitron',sans-serif]">Connecting to Mesh...</h2>
-				<p class="text-xs text-zinc-500 font-mono mt-1.5">{roomCode}</p>
+				<p class="text-xs text-zinc-500 font-mono mt-1.5">{roomToken || roomCode}</p>
 			{/if}
 		</div>
 	{:else}
@@ -541,8 +626,19 @@
 					</div>
 
 					{#if $roomStore.isOwner}
-						<span class="inline-flex items-center px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold uppercase font-mono">
-							OWNER
+						<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold uppercase font-mono shadow-[0_0_10px_rgba(0,229,255,0.2)]">
+							<svg class="w-3 h-3 text-cyan-300 fill-current" viewBox="0 0 24 24">
+								<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
+							</svg>
+							OWNER (YOU)
+						</span>
+					{:else if $roomStore.ownerPeerId}
+						<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#0a0d16] text-zinc-300 border border-white/10 text-[10px] font-medium uppercase font-mono">
+							<svg class="w-3 h-3 text-amber-400 fill-current" viewBox="0 0 24 24">
+								<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
+							</svg>
+							<span class="text-zinc-500">OWNER:</span>
+							<strong class="text-amber-300">{$roomStore.ownerPeerId}</strong>
 						</span>
 					{/if}
 				</div>
@@ -619,10 +715,30 @@
 				</div>
 			{/if}
 
+			<!-- Owner Promotion Notification Banner -->
+			{#if ownerPromotionBanner}
+				<div role="alert" class="p-3 sm:p-3.5 border-b border-cyan-500/30 bg-cyan-950/40 text-cyan-200 text-xs font-mono flex items-center justify-between gap-3 px-4">
+					<div class="flex items-center gap-2.5">
+						<svg class="w-4 h-4 text-cyan-300 shrink-0 fill-current" viewBox="0 0 24 24">
+							<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
+						</svg>
+						<span><strong>Room Ownership Transferred:</strong> The previous room owner departed. You are now the room owner with privileges to manage and extend this session.</span>
+					</div>
+					<button
+						type="button"
+						onclick={() => (ownerPromotionBanner = false)}
+						class="text-cyan-400 hover:text-white text-xs uppercase font-bold cursor-pointer transition-colors shrink-0 px-2 py-1 rounded bg-white/5 hover:bg-white/10"
+						aria-label="Dismiss owner promotion notification"
+					>
+						Dismiss
+					</button>
+				</div>
+			{/if}
+
 			<!-- Room Content Section -->
 			<div class="p-4 sm:p-6 space-y-6">
 				<!-- Hero Room Code Element -->
-				<RoomCodeHero {roomCode} />
+				<RoomCodeHero {roomCode} {roomToken} />
 
 				<!-- Participants -->
 				<div>
@@ -638,7 +754,10 @@
 								</span>
 							</div>
 							{#if $roomStore.isOwner}
-								<span class="text-[10px] rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 uppercase font-bold font-mono">
+								<span class="text-[10px] rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1 shadow-[0_0_8px_rgba(0,229,255,0.2)]">
+									<svg class="w-2.5 h-2.5 text-cyan-300 fill-current" viewBox="0 0 24 24">
+										<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
+									</svg>
 									Owner
 								</span>
 							{/if}
@@ -652,6 +771,14 @@
 									<div class="flex items-center space-x-2">
 										<span class="w-2 h-2 rounded-full {isConnected ? 'bg-cyan-400 shadow-[0_0_8px_#00e5ff]' : isFailed ? 'bg-red-500 shadow-[0_0_8px_#ef4444]' : 'bg-amber-400 animate-pulse'}"></span>
 										<span class="font-mono text-zinc-300">{peer}</span>
+										{#if peer === $roomStore.ownerPeerId}
+											<span class="text-[10px] rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1 shadow-[0_0_8px_rgba(245,158,11,0.2)]">
+												<svg class="w-2.5 h-2.5 text-amber-300 fill-current" viewBox="0 0 24 24">
+													<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
+												</svg>
+												Owner
+											</span>
+										{/if}
 									</div>
 									<div class="flex items-center gap-2">
 										{#if isConnected}
@@ -720,18 +847,29 @@
 							</div>
 						{:else}
 							{#each $chatStore.messages as msg (msg.id)}
-								<div class="flex flex-col {msg.isSelf ? 'items-end' : 'items-start'}">
-									<div class="flex items-center space-x-1.5 mb-1.5 text-[10px] text-zinc-500 font-mono">
-										<span class="font-bold {msg.isSelf ? 'text-cyan-300' : 'text-zinc-400'}">
-											{msg.isSelf ? `${msg.sender} (You)` : msg.sender}
-										</span>
-										<span>•</span>
-										<span class="tabular-nums">{formatMessageTime(msg.timestamp)}</span>
+								{#if msg.isSystem}
+									<div class="flex items-center justify-center my-2">
+										<div class="px-3.5 py-1.5 rounded-full bg-cyan-950/40 border border-cyan-500/30 text-cyan-300 text-[11px] font-mono flex items-center gap-2 shadow-[0_0_15px_rgba(0,229,255,0.1)] max-w-[90%] text-center">
+											<svg class="w-3.5 h-3.5 text-cyan-400 shrink-0 fill-current" viewBox="0 0 24 24">
+												<path d="M12 2l3 7h7l-5.5 4.5 2 7.5L12 17l-6.5 4 2-7.5L2 9h7z"/>
+											</svg>
+											<span>{msg.content}</span>
+										</div>
 									</div>
-									<div class="max-w-[85%] sm:max-w-[75%] p-3.5 text-xs sm:text-sm leading-relaxed break-words rounded-2xl {msg.isSelf ? 'rounded-tr-sm bg-blue-600/20 text-white border border-blue-500/30 shadow-[0_2px_15px_rgba(0,102,255,0.1)]' : 'rounded-tl-sm bg-[#0c101c] text-zinc-200 border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]'}">
-										{msg.content}
+								{:else}
+									<div class="flex flex-col {msg.isSelf ? 'items-end' : 'items-start'}">
+										<div class="flex items-center space-x-1.5 mb-1.5 text-[10px] text-zinc-500 font-mono">
+											<span class="font-bold {msg.isSelf ? 'text-cyan-300' : 'text-zinc-400'}">
+												{msg.isSelf ? `${msg.sender} (You)` : msg.sender}
+											</span>
+											<span>•</span>
+											<span class="tabular-nums">{formatMessageTime(msg.timestamp)}</span>
+										</div>
+										<div class="max-w-[85%] sm:max-w-[75%] p-3.5 text-xs sm:text-sm leading-relaxed break-words whitespace-pre-wrap rounded-2xl {msg.isSelf ? 'rounded-tr-sm bg-blue-600/20 text-white border border-blue-500/30 shadow-[0_2px_15px_rgba(0,102,255,0.1)]' : 'rounded-tl-sm bg-[#0c101c] text-zinc-200 border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]'}">
+											{msg.content}
+										</div>
 									</div>
-								</div>
+								{/if}
 							{/each}
 						{/if}
 					</div>
@@ -747,22 +885,108 @@
 							<span>No open WebRTC peer connections available for chat</span>
 						</div>
 					{/if}
-					<form onsubmit={handleSendMessage} class="p-3 sm:p-3.5 border-t border-white/5 bg-[#080b12] flex items-center space-x-2.5">
-						<input
-							type="text"
-							bind:value={messageInput}
-							disabled={isChatDisabled}
-							placeholder={chatPlaceholder}
-							class="flex-1 px-4 py-2.5 rounded-full bg-[#05070c] border border-[#1e2538] text-zinc-100 text-xs sm:text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all placeholder:text-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed"
-							maxlength="4000"
-						/>
-						<button
-							type="submit"
-							disabled={!messageInput.trim() || isSending || isChatDisabled}
-							class="min-h-[40px] px-6 py-2 rounded-full bg-white hover:bg-zinc-200 disabled:opacity-40 text-black text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)] cursor-pointer disabled:cursor-not-allowed"
-						>
-							Send
-						</button>
+					<form onsubmit={handleSendMessage} class="p-3 sm:p-3.5 border-t border-white/5 bg-[#080b12] flex flex-col gap-2.5">
+						{#if pastedBlocks.length > 0}
+							<div class="flex flex-col gap-2">
+								{#each pastedBlocks as block (block.id)}
+									{#if !block.isExpanded}
+										<!-- Collapsed Pasted Snippet Pill -->
+										<div class="flex items-center gap-2">
+											<button
+												type="button"
+												onclick={() => togglePastedBlock(block.id)}
+												class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#06080e] hover:bg-[#0c101c] border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 hover:text-cyan-200 text-xs font-mono transition-all cursor-pointer shadow-[0_0_12px_rgba(0,229,255,0.08)] group"
+												title="Click to view full message"
+												aria-label="Expand pasted text snippet"
+											>
+												<svg class="w-3.5 h-3.5 text-cyan-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+													<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+													<rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+												</svg>
+												<span class="font-semibold">{formatPastedLabel(block.lineCount)}</span>
+												<span class="text-[10px] text-zinc-400 group-hover:text-zinc-300 flex items-center gap-0.5">
+													▾ Expand
+												</span>
+											</button>
+											<button
+												type="button"
+												onclick={() => removePastedBlock(block.id)}
+												class="w-6 h-6 rounded-md bg-[#06080e] hover:bg-red-950/40 border border-white/10 hover:border-red-500/40 text-zinc-400 hover:text-red-300 flex items-center justify-center text-xs transition-colors cursor-pointer"
+												title="Discard pasted text"
+												aria-label="Remove pasted text snippet"
+											>
+												✕
+											</button>
+										</div>
+									{:else}
+										<!-- Expanded Full View Card -->
+										<div class="p-3 rounded-xl bg-[#06080e] border border-cyan-500/30 shadow-[0_0_15px_rgba(0,229,255,0.08)] flex flex-col gap-2">
+											<div class="flex items-center justify-between gap-2 border-b border-white/5 pb-2">
+												<div class="flex items-center gap-2">
+													<svg class="w-3.5 h-3.5 text-cyan-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+														<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+														<rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+													</svg>
+													<span class="text-xs font-mono font-bold text-cyan-300">{formatPastedLabel(block.lineCount)}</span>
+												</div>
+												<div class="flex items-center gap-1.5">
+													<button
+														type="button"
+														onclick={() => togglePastedBlock(block.id)}
+														class="px-2.5 py-1 rounded-md bg-[#111624] hover:bg-[#182033] border border-white/10 text-zinc-300 hover:text-white text-[11px] font-mono uppercase tracking-wide transition-colors cursor-pointer flex items-center gap-1"
+														title="Collapse full message"
+														aria-label="Collapse pasted text snippet"
+													>
+														<span>▴ Collapse</span>
+													</button>
+													<button
+														type="button"
+														onclick={() => removePastedBlock(block.id)}
+														class="w-6 h-6 rounded-md bg-[#111624] hover:bg-red-950/40 border border-white/10 hover:border-red-500/40 text-zinc-400 hover:text-red-300 flex items-center justify-center text-xs transition-colors cursor-pointer"
+														title="Discard pasted text"
+														aria-label="Remove pasted text snippet"
+													>
+														✕
+													</button>
+												</div>
+											</div>
+											<textarea
+												value={block.content}
+												oninput={(e) => updatePastedBlockContent(block.id, (e.target as HTMLTextAreaElement).value)}
+												onkeydown={(e) => {
+													if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+														e.preventDefault();
+														handleSendMessage();
+													}
+												}}
+												placeholder="Pasted snippet content..."
+												rows={Math.min(Math.max(block.lineCount, 3), 8)}
+												class="w-full px-3 py-2 rounded-lg bg-[#030407] border border-white/10 text-zinc-200 font-mono text-xs leading-relaxed focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all resize-y"
+											></textarea>
+										</div>
+									{/if}
+								{/each}
+							</div>
+						{/if}
+
+						<div class="flex items-center space-x-2.5">
+							<input
+								type="text"
+								bind:value={messageInput}
+								onpaste={handlePaste}
+								disabled={isChatDisabled}
+								placeholder={chatPlaceholder}
+								class="flex-1 px-4 py-2.5 rounded-full bg-[#05070c] border border-[#1e2538] text-zinc-100 text-xs sm:text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all placeholder:text-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed"
+								maxlength="4000"
+							/>
+							<button
+								type="submit"
+								disabled={!canSend}
+								class="min-h-[40px] px-6 py-2 rounded-full bg-white hover:bg-zinc-200 disabled:opacity-40 text-black text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)] cursor-pointer disabled:cursor-not-allowed shrink-0"
+							>
+								Send
+							</button>
+						</div>
 					</form>
 				</section>
 

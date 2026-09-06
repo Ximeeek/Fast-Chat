@@ -3,9 +3,10 @@
 
 	interface Props {
 		roomCode: string;
+		roomToken?: string;
 	}
 
-	let { roomCode }: Props = $props();
+	let { roomCode, roomToken }: Props = $props();
 
 	let copied = $state(false);
 	let displayCode = $state('');
@@ -61,14 +62,17 @@
 	async function copyToClipboard() {
 		if (!roomCode) return;
 		try {
-			await navigator.clipboard.writeText(roomCode);
+			const shareTarget = typeof window !== 'undefined' && roomToken
+				? `${window.location.origin}/room/${roomToken}`
+				: roomCode;
+			await navigator.clipboard.writeText(shareTarget);
 			copied = true;
 			if (timeoutId) clearTimeout(timeoutId);
 			timeoutId = setTimeout(() => {
 				copied = false;
 			}, 2000);
 		} catch (err) {
-			console.error('Failed to copy room code:', err);
+			console.error('Failed to copy room link:', err);
 		}
 	}
 </script>
@@ -80,8 +84,8 @@
 		class="w-full p-5 sm:p-6 rounded-2xl bg-[#0a0d16]/95 backdrop-blur-md border transition-all text-left cursor-pointer group select-none relative overflow-hidden shadow-[0_4px_25px_rgba(0,0,0,0.5)] {copied
 			? 'border-cyan-400 shadow-[0_0_30px_rgba(0,229,255,0.25)] bg-[#0c1322]'
 			: 'border-[#1a2233] hover:border-cyan-500/50 hover:bg-[#0c101c]'}"
-		aria-label="Room code {roomCode}. Click to copy to clipboard."
-		title="Click to copy room code"
+		aria-label="Room code {roomCode}. Click to copy encrypted invite link."
+		title="Click to copy encrypted room invite link"
 	>
 		<!-- Symmetric hover glow bar across full top border -->
 		<div class="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
@@ -95,6 +99,11 @@
 				<span class="text-[10px] px-2.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30 uppercase font-semibold font-mono">
 					SECURE ROOM
 				</span>
+				{#if roomToken}
+					<span class="text-[10px] px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/25 uppercase font-mono hidden md:inline">
+						TOKEN: {roomToken.slice(0, 8)}...
+					</span>
+				{/if}
 			</div>
 
 			<div class="flex items-center space-x-1.5 font-mono">
@@ -107,11 +116,11 @@
 						<svg class="w-3 h-3 stroke-[2.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
 							<polyline points="20 6 9 17 4 12"/>
 						</svg>
-						<span>COPIED TO CLIPBOARD</span>
+						<span>LINK COPIED</span>
 					</span>
 				{:else}
 					<span class="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 group-hover:text-cyan-400 transition-colors">
-						[ CLICK TO COPY ]
+						[ COPY ENCRYPTED LINK ]
 					</span>
 				{/if}
 			</div>
