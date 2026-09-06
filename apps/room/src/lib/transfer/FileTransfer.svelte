@@ -20,9 +20,10 @@
 		fileReceiver?: FileReceiver | null;
 		fileTransferSync?: FileTransferSyncManager | null;
 		username?: string;
+		isMuted?: boolean;
 	}
 
-	let { fileSender, fileReceiver, fileTransferSync, username = 'anonymous' }: Props = $props();
+	let { fileSender, fileReceiver, fileTransferSync, username = 'anonymous', isMuted = false }: Props = $props();
 
 	let fileInput: HTMLInputElement | null = null;
 	let selectedFiles = $state<File[]>([]);
@@ -34,7 +35,7 @@
 	const fsSupported = isFileSystemAccessSupported();
 	const openChannels = $derived($openDataChannelsCount);
 	const hasFailed = $derived($hasFailedPeers);
-	const canSendFiles = $derived(openChannels > 0 && !isUploadActive);
+	const canSendFiles = $derived(openChannels > 0 && !isUploadActive && !isMuted);
 
 	function handleFileSelect(e: Event) {
 		const target = e.target as HTMLInputElement;
@@ -148,12 +149,21 @@
 
 	<!-- Send Files Input Zone -->
 	<div class="space-y-3">
+		{#if isMuted}
+			<div role="alert" class="p-3 rounded-xl text-xs bg-amber-950/40 border border-amber-500/40 text-amber-300 flex items-center gap-2">
+				<svg class="w-4 h-4 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+				</svg>
+				<span>Jesteś wyciszony. Przesyłanie plików jest zablokowane.</span>
+			</div>
+		{/if}
+
 		<div class="flex flex-wrap items-center gap-3">
 			<input
 				type="file"
 				bind:this={fileInput}
 				multiple
-				disabled={isUploadActive}
+				disabled={isUploadActive || isMuted}
 				onchange={handleFileSelect}
 				class="text-xs text-zinc-400 file:mr-3 file:py-2 file:px-4 file:rounded-full file:border file:border-white/10 file:bg-[#111624] file:text-zinc-200 hover:file:border-cyan-400 file:text-xs file:font-semibold file:cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
 			/>

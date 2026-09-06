@@ -45,6 +45,7 @@
 	import { completedFiles } from '$lib/stores/transfer';
 	import { downloadFiles } from '$lib/transfer/archive';
 	import { RekeyManager } from '$lib/crypto';
+	import { Role, Permission, hasPermission } from '$lib/types/permissions';
 	import type { ServerSignalingMessage } from '$lib/types/signaling';
 
 	const rawParam = $page.params.code || '';
@@ -104,7 +105,60 @@
 		setPastedBlockLanguageMode(block, mode);
 	}
 
-	const isChatDisabled = $derived($hasFailedPeers && $openDataChannelsCount === 0);
+	const currentUserRole = $derived($roomStore.isOwner ? Role.Owner : Role.Participant);
+	const canKickPeer = $derived(hasPermission(currentUserRole, Permission.KickPeer));
+	const canMutePeer = $derived(hasPermission(currentUserRole, Permission.MutePeer));
+	const canTransferOwnership = $derived(hasPermission(currentUserRole, Permission.TransferOwnership));
+	const canLockRoom = $derived(hasPermission(currentUserRole, Permission.LockRoom));
+
+	const isLocalMuted = $derived(
+		Boolean($roomStore.peerId && $roomStore.mutedPeers[$roomStore.peerId] !== undefined)
+	);
+	const localMutedUntil = $derived(
+		$roomStore.peerId ? ($roomStore.mutedPeers[$roomStore.peerId] ?? null) : null
+	);
+
+	// Expiration countdown
+	let now = $state(Math.floor(Date.now() / 1000));
+	let timerInterval: ReturnType<typeof setInterval> | null = null;
+
+	const muteCountdownSec = $derived(
+		localMutedUntil ? Math.max(0, localMutedUntil - now) : null
+	);
+
+	let activeActionMenuPeer = $state<string | null>(null);
+
+	function toggleActionMenu(peer: string) {
+		activeActionMenuPeer = activeActionMenuPeer === peer ? null : peer;
+	}
+
+	function handleKickPeer(targetPeer: string) {
+		activeActionMenuPeer = null;
+		signalingClient.kickPeer(targetPeer);
+	}
+
+	function handleMutePeer(targetPeer: string, durationSeconds: number | null) {
+		activeActionMenuPeer = null;
+		signalingClient.mutePeer(targetPeer, durationSeconds);
+	}
+
+	function handleUnmutePeer(targetPeer: string) {
+		activeActionMenuPeer = null;
+		signalingClient.unmutePeer(targetPeer);
+	}
+
+	function handleTransferOwnership(targetPeer: string) {
+		activeActionMenuPeer = null;
+		signalingClient.transferOwnership(targetPeer);
+	}
+
+	function handleToggleRoomLock() {
+		signalingClient.setRoomLocked(!$roomStore.isLocked);
+	}
+
+	const isChatDisabled = $derived(
+		($hasFailedPeers && $openDataChannelsCount === 0) || isLocalMuted
+	);
 	const hasComposerContent = $derived(
 		composerBlocks.some((b) => (b.kind === 'text' ? b.text.trim().length > 0 : b.content.trim().length > 0))
 	);
@@ -112,16 +166,14 @@
 		!isSending && !isChatDisabled && (messageInput.trim().length > 0 || hasComposerContent)
 	);
 	const chatPlaceholder = $derived(
-		isChatDisabled
-			? 'Type an encrypted message (No open WebRTC peer connections)...'
-			: composerBlocks.length > 0
-				? 'Add a companion message or click Send...'
-				: 'Type an encrypted message...'
+		isLocalMuted
+			? (localMutedUntil ? `Jesteś wyciszony (pozostało: ${formatSeconds(muteCountdownSec ?? 0)})` : 'Jesteś wyciszony na tym kanale')
+			: isChatDisabled
+				? 'Type an encrypted message (No open WebRTC peer connections)...'
+				: composerBlocks.length > 0
+					? 'Add a companion message or click Send...'
+					: 'Type an encrypted message...'
 	);
-
-	// Expiration countdown
-	let now = $state(Math.floor(Date.now() / 1000));
-	let timerInterval: ReturnType<typeof setInterval> | null = null;
 
 	let remainingSeconds = $derived.by(() => {
 		if (!$roomStore.expiresAt) return null;
@@ -505,6 +557,11 @@
 		});
 
 		unsubWebRtcMessage = webRtcManager.onMessage((peerId, payload) => {
+			// Receiver enforcement: silently discard incoming messages and files from muted peers
+			if ($roomStore.mutedPeers[peerId] !== undefined) {
+				return;
+			}
+
 			if (isFileChunkPacket(payload)) {
 				const chunk = parseFileChunkPacket(payload);
 				if (chunk && fileReceiver) {
@@ -685,6 +742,38 @@
 					}
 					break;
 				}
+				case 'PEER_MUTED': {
+					const peer = msg.peer_id || msg.peerId || '';
+					const isLocal = Boolean($roomStore.peerId && peer === $roomStore.peerId);
+					details = `Peer muted: ${peer}`;
+					chatStore.addSystemMessage(
+						isLocal
+							? 'Zostałeś wyciszony przez moderatora.'
+							: `Uczestnik ${peer} został wyciszony.`
+					);
+					break;
+				}
+				case 'PEER_UNMUTED': {
+					const peer = msg.peer_id || msg.peerId || '';
+					const isLocal = Boolean($roomStore.peerId && peer === $roomStore.peerId);
+					details = `Peer unmuted: ${peer}`;
+					chatStore.addSystemMessage(
+						isLocal
+							? 'Twoje wyciszenie zostało wyłączone.'
+							: `Wyciszenie uczestnika ${peer} zostało wyłączone.`
+					);
+					break;
+				}
+				case 'ROOM_LOCKED': {
+					const locked = msg.locked ?? (msg as any).isLocked ?? (msg as any).is_locked ?? false;
+					details = `Room lock status: ${locked ? 'LOCKED' : 'UNLOCKED'}`;
+					chatStore.addSystemMessage(
+						locked
+							? 'Właściciel zablokował pokój przed nowymi uczestnikami.'
+							: 'Właściciel odblokował dołączanie do pokoju.'
+					);
+					break;
+				}
 				case 'ROOM_CLOSING':
 					details = `Room closing grace period started`;
 					chatStore.addSystemMessage('Room closing countdown started.');
@@ -694,6 +783,11 @@
 					break;
 				case 'ERROR':
 					details = `Error: [${msg.code}] ${msg.message}`;
+					if (msg.code === 'KICKED_FROM_ROOM') {
+						joinError = 'KICKED_FROM_ROOM';
+					} else if (msg.code === 'ROOM_LOCKED') {
+						joinError = 'ROOM_LOCKED';
+					}
 					break;
 				default:
 					details = msg.type;
@@ -845,7 +939,48 @@
 		</div>
 	{:else if !$isRoomActive}
 		<div class="w-full max-w-md bg-[#0a0d16]/95 backdrop-blur-xl p-8 sm:p-10 rounded-2xl border border-[#1a2233] text-center shadow-[0_0_60px_rgba(0,0,0,0.85)] relative z-10">
-			{#if joinError}
+			{#if $roomStore.closureReason === 'KICKED_FROM_ROOM' || (joinError && joinError.includes('KICKED_FROM_ROOM'))}
+				<div class="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mx-auto mb-4">
+					<svg class="w-6 h-6 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="12" cy="12" r="10"/>
+						<line x1="15" y1="9" x2="9" y2="15"/>
+						<line x1="9" y1="9" x2="15" y2="15"/>
+					</svg>
+				</div>
+				<h2 class="text-lg font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Zostałeś wyrzucony z pokoju</h2>
+				<p class="text-xs text-red-300 mb-6">Zostałeś usunięty z tego pokoju przez moderatora. Ponowne dołączenie jest zablokowane.</p>
+				<div class="flex items-center justify-center gap-2.5">
+					<a
+						href="/create"
+						class="min-h-[40px] py-2 px-6 rounded-full bg-white hover:bg-zinc-200 text-black text-xs font-bold uppercase transition-all shadow-sm flex items-center"
+					>
+						Wróć do strony głównej
+					</a>
+				</div>
+			{:else if joinError && joinError.includes('ROOM_LOCKED')}
+				<div class="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mx-auto mb-4">
+					<svg class="w-6 h-6 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+						<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+					</svg>
+				</div>
+				<h2 class="text-lg font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Pokój jest zablokowany</h2>
+				<p class="text-xs text-amber-300 mb-6">Właściciel zablokował dołączanie nowych uczestników do tego pokoju.</p>
+				<div class="flex items-center justify-center gap-2.5">
+					<button
+						onclick={() => performJoin(password)}
+						class="min-h-[40px] py-2 px-5 rounded-full bg-white hover:bg-zinc-200 text-black text-xs font-bold uppercase transition-all shadow-sm cursor-pointer"
+					>
+						Spróbuj ponownie
+					</button>
+					<a
+						href="/create"
+						class="min-h-[40px] py-2 px-5 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs uppercase flex items-center transition-all"
+					>
+						Wróć do strony głównej
+					</a>
+				</div>
+			{:else if joinError}
 				<div class="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mx-auto mb-4">
 					<svg class="w-6 h-6 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 						<circle cx="12" cy="12" r="10"/>
@@ -884,6 +1019,16 @@
 					<div class="inline-flex items-center px-3 py-1 rounded-full bg-blue-500/15 border border-blue-500/30 text-[10px] uppercase font-bold text-white tracking-widest font-['Orbitron',sans-serif]">
 						FASTCHAT
 					</div>
+
+					{#if $roomStore.isLocked}
+						<div class="inline-flex items-center space-x-1 px-3 py-1 rounded-full bg-red-500/15 border border-red-500/30 text-[10px] text-red-300 uppercase font-bold font-mono">
+							<svg class="w-3 h-3 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+								<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+							</svg>
+							<span>Zablokowany</span>
+						</div>
+					{/if}
 
 					<ConnectionBadge />
 
@@ -997,11 +1142,23 @@
 					</h2>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
 						<div class="p-3.5 rounded-xl bg-[#06080e] border border-white/5 text-xs flex items-center justify-between">
-							<div class="flex items-center space-x-2">
+							<div class="flex items-center space-x-2 flex-wrap gap-y-1">
 								<span class="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#00e5ff]"></span>
 								<span class="font-mono text-zinc-200">
 									{$roomStore.peerId} (You)
 								</span>
+								{#if isLocalMuted}
+									<span class="text-[10px] rounded-full bg-red-500/15 text-red-300 border border-red-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1">
+										<svg class="w-2.5 h-2.5 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<line x1="1" y1="1" x2="23" y2="23"/>
+											<path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
+											<path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
+											<line x1="12" y1="19" x2="12" y2="23"/>
+											<line x1="8" y1="23" x2="16" y2="23"/>
+										</svg>
+										Wyciszony{localMutedUntil ? ` (${formatSeconds(muteCountdownSec ?? 0)})` : ''}
+									</span>
+								{/if}
 							</div>
 							{#if $roomStore.isOwner}
 								<span class="text-[10px] rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1 shadow-[0_0_8px_rgba(0,229,255,0.2)]">
@@ -1016,9 +1173,13 @@
 							{@const peerInfo = $webrtcPeers[peer]}
 							{@const isConnected = peerInfo?.dataChannelState === 'open'}
 							{@const isFailed = peerInfo?.connectionState === 'failed'}
-							<div class="p-3.5 rounded-xl bg-[#06080e] border border-white/5 text-xs flex flex-col gap-2.5">
+							{@const isPeerMuted = $roomStore.mutedPeers[peer] !== undefined}
+							{@const peerMutedUntil = $roomStore.mutedPeers[peer]}
+							{@const peerCountdown = peerMutedUntil ? Math.max(0, peerMutedUntil - now) : null}
+							{@const canManageThisPeer = canKickPeer || canMutePeer || canTransferOwnership}
+							<div class="p-3.5 rounded-xl bg-[#06080e] border border-white/5 text-xs flex flex-col gap-2.5 relative">
 								<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-									<div class="flex items-center space-x-2">
+									<div class="flex items-center space-x-2 flex-wrap gap-y-1">
 										<span class="w-2 h-2 rounded-full {isConnected ? 'bg-cyan-400 shadow-[0_0_8px_#00e5ff]' : isFailed ? 'bg-red-500 shadow-[0_0_8px_#ef4444]' : 'bg-amber-400 animate-pulse'}"></span>
 										<span class="font-mono text-zinc-300">{peer}</span>
 										{#if peer === $roomStore.ownerPeerId}
@@ -1027,6 +1188,18 @@
 													<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
 												</svg>
 												Owner
+											</span>
+										{/if}
+										{#if isPeerMuted}
+											<span class="text-[10px] rounded-full bg-red-500/15 text-red-300 border border-red-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1">
+												<svg class="w-2.5 h-2.5 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+													<line x1="1" y1="1" x2="23" y2="23"/>
+													<path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
+													<path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
+													<line x1="12" y1="19" x2="12" y2="23"/>
+													<line x1="8" y1="23" x2="16" y2="23"/>
+												</svg>
+												Wyciszony{peerMutedUntil ? ` (${formatSeconds(peerCountdown ?? 0)})` : ''}
 											</span>
 										{/if}
 									</div>
@@ -1047,6 +1220,119 @@
 											{/if}
 										{:else}
 											<span class="text-[10px] text-amber-400 uppercase font-bold animate-pulse font-mono">Connecting...</span>
+										{/if}
+
+										{#if canManageThisPeer}
+											<div class="relative">
+												<button
+													type="button"
+													onclick={() => toggleActionMenu(peer)}
+													class="px-2 py-0.5 text-[10px] rounded bg-[#111624] hover:bg-[#182033] text-zinc-300 hover:text-white border border-white/10 uppercase font-semibold transition-all cursor-pointer font-mono flex items-center gap-1"
+													aria-label="Akcje dla uczestnika {peer}"
+													aria-expanded={activeActionMenuPeer === peer}
+												>
+													<span>Akcje</span>
+													<svg class="w-3 h-3 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+														<polyline points="6 9 12 15 18 9"/>
+													</svg>
+												</button>
+
+												{#if activeActionMenuPeer === peer}
+													<div
+														class="absolute right-0 top-full mt-1.5 w-48 rounded-xl bg-[#0d121f] border border-[#1e2538] shadow-[0_10px_30px_rgba(0,0,0,0.8)] py-1.5 z-50 flex flex-col font-mono text-xs"
+													>
+														{#if canMutePeer}
+															{#if isPeerMuted}
+																<button
+																	type="button"
+																	onclick={() => handleUnmutePeer(peer)}
+																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-2 cursor-pointer"
+																>
+																	<svg class="w-3.5 h-3.5 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+																		<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+																		<path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+																		<line x1="12" y1="19" x2="12" y2="23"/>
+																		<line x1="8" y1="23" x2="16" y2="23"/>
+																	</svg>
+																	<span>Wyłącz wyciszenie</span>
+																</button>
+															{:else}
+																<div class="px-3 py-1 text-[10px] text-zinc-500 uppercase font-bold border-b border-white/5">
+																	Wycisz uczestnika
+																</div>
+																<button
+																	type="button"
+																	onclick={() => handleMutePeer(peer, 60)}
+																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer"
+																>
+																	<span>Na 1 minutę</span>
+																	<span class="text-[10px] text-zinc-500">1m</span>
+																</button>
+																<button
+																	type="button"
+																	onclick={() => handleMutePeer(peer, 300)}
+																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer"
+																>
+																	<span>Na 5 minut</span>
+																	<span class="text-[10px] text-zinc-500">5m</span>
+																</button>
+																<button
+																	type="button"
+																	onclick={() => handleMutePeer(peer, 900)}
+																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer"
+																>
+																	<span>Na 15 minut</span>
+																	<span class="text-[10px] text-zinc-500">15m</span>
+																</button>
+																<button
+																	type="button"
+																	onclick={() => handleMutePeer(peer, 3600)}
+																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer"
+																>
+																	<span>Na 1 godzinę</span>
+																	<span class="text-[10px] text-zinc-500">1h</span>
+																</button>
+																<button
+																	type="button"
+																	onclick={() => handleMutePeer(peer, null)}
+																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer border-b border-white/5"
+																>
+																	<span>Na stałe</span>
+																	<span class="text-[10px] text-zinc-500">∞</span>
+																</button>
+															{/if}
+														{/if}
+
+														{#if canTransferOwnership}
+															<button
+																type="button"
+																onclick={() => handleTransferOwnership(peer)}
+																class="w-full px-3 py-1.5 text-left text-amber-300 hover:text-amber-200 hover:bg-amber-500/10 transition-colors flex items-center gap-2 cursor-pointer"
+															>
+																<svg class="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
+																	<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
+																</svg>
+																<span>Przekaż własność</span>
+															</button>
+														{/if}
+
+														{#if canKickPeer}
+															<button
+																type="button"
+																onclick={() => handleKickPeer(peer)}
+																class="w-full px-3 py-1.5 text-left text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors flex items-center gap-2 cursor-pointer"
+															>
+																<svg class="w-3.5 h-3.5 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+																	<circle cx="12" cy="12" r="10"/>
+																	<line x1="15" y1="9" x2="9" y2="15"/>
+																	<line x1="9" y1="9" x2="15" y2="15"/>
+																</svg>
+																<span>Wyrzuć z pokoju</span>
+															</button>
+														{/if}
+													</div>
+												{/if}
+											</div>
 										{/if}
 									</div>
 								</div>
@@ -1149,7 +1435,18 @@
 					</div>
 
 					<!-- Chat Input Form -->
-					{#if isChatDisabled}
+					{#if isLocalMuted}
+						<div role="alert" class="p-2.5 bg-red-950/30 border-t border-red-500/30 text-red-300 font-mono text-[11px] flex items-center gap-2">
+							<svg class="w-3.5 h-3.5 text-red-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<line x1="1" y1="1" x2="23" y2="23"/>
+								<path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
+								<path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
+								<line x1="12" y1="19" x2="12" y2="23"/>
+								<line x1="8" y1="23" x2="16" y2="23"/>
+							</svg>
+							<span>Zostałeś wyciszony przez moderatora. Wysyłanie wiadomości i plików jest zablokowane.{localMutedUntil ? ` Pozostały czas: ${formatSeconds(muteCountdownSec ?? 0)}` : ''}</span>
+						</div>
+					{:else if isChatDisabled}
 						<div role="alert" class="p-2.5 bg-red-950/20 border-t border-red-500/20 text-red-300 font-mono text-[11px] flex items-center gap-2">
 							<svg class="w-3.5 h-3.5 text-red-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 								<circle cx="12" cy="12" r="10"/>
@@ -1340,7 +1637,13 @@
 
 				<!-- End-to-End Encrypted File Transfer -->
 				{#if fileSender && fileReceiver}
-					<FileTransfer {fileSender} {fileReceiver} {fileTransferSync} username={$chatStore.username || 'anonymous'} />
+					<FileTransfer
+						{fileSender}
+						{fileReceiver}
+						{fileTransferSync}
+						username={$chatStore.username || 'anonymous'}
+						isMuted={isLocalMuted}
+					/>
 				{/if}
 			</div>
 		</div>
@@ -1352,6 +1655,9 @@
 			hasPassword={$roomStore.hasPassword}
 			onSetPassword={handleOwnerSetPassword}
 			onClose={() => (isSecurityInfoOpen = false)}
+			canLockRoom={canLockRoom}
+			isLocked={$roomStore.isLocked}
+			onToggleLock={handleToggleRoomLock}
 		/>
 
 		<!-- Rekey Password Prompt Modal for Participants -->

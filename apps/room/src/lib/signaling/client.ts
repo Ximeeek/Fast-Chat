@@ -604,8 +604,8 @@ export class SignalingClient {
 						this.ws.close();
 						this.ws = null;
 					}
+					roomStore.setClosed('KICKED_FROM_ROOM');
 					roomStore.setError(msg.code, msg.message);
-					roomStore.setConnectionState('closed');
 				} else {
 					roomStore.setError(msg.code, msg.message);
 				}
