@@ -327,6 +327,29 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Requests to mute a peer in the room.
+	 * Can only be invoked by a participant holding MutePeer permission.
+	 */
+	public mutePeer(peerId: string, durationSeconds?: number | null): void {
+		this.send({
+			type: 'MUTE_PEER',
+			peer_id: peerId,
+			duration_seconds: durationSeconds ?? null
+		});
+	}
+
+	/**
+	 * Requests to unmute a peer in the room.
+	 * Can only be invoked by a participant holding MutePeer permission.
+	 */
+	public unmutePeer(peerId: string): void {
+		this.send({
+			type: 'UNMUTE_PEER',
+			peer_id: peerId
+		});
+	}
+
+	/**
 	 * Verifies the room password for an active room session during rekey.
 	 */
 	public async verifyPassword(password: string): Promise<boolean> {
@@ -506,6 +529,21 @@ export class SignalingClient {
 				const peerId = msg.peer_id || msg.peerId;
 				if (peerId) {
 					roomStore.removePeer(peerId);
+				}
+				break;
+			}
+			case 'PEER_MUTED': {
+				const peerId = msg.peer_id || msg.peerId;
+				if (peerId) {
+					const until = msg.muted_until ?? msg.mutedUntil ?? null;
+					roomStore.mutePeer(peerId, until);
+				}
+				break;
+			}
+			case 'PEER_UNMUTED': {
+				const peerId = msg.peer_id || msg.peerId;
+				if (peerId) {
+					roomStore.unmutePeer(peerId);
 				}
 				break;
 			}

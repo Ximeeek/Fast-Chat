@@ -13,6 +13,9 @@ pub trait RoomBroadcaster: Send + Sync + Debug {
 
     /// Broadcast a room lifecycle state change (e.g. entering ExtendableWindow or Closing).
     fn broadcast_state_changed(&self, code: &RoomCode, new_state: RoomLifecycleState);
+
+    /// Broadcast that a peer's mute has expired or been lifted.
+    fn broadcast_peer_unmuted(&self, _code: &RoomCode, _peer_id: &str) {}
 }
 
 /// WebSocket-aware broadcaster dispatching structured events to active sessions.
@@ -55,6 +58,17 @@ impl RoomBroadcaster for WebSocketBroadcaster {
             self.sessions.broadcast(code, msg, None);
         }
     }
+
+    fn broadcast_peer_unmuted(&self, code: &RoomCode, peer_id: &str) {
+        info!(
+            room = %code,
+            peer = %peer_id,
+            event = "PEER_UNMUTED",
+            "Broadcasting PEER_UNMUTED event to room participants over WebSocket"
+        );
+        let msg = ServerMessage::peer_unmuted(peer_id);
+        self.sessions.broadcast(code, msg, None);
+    }
 }
 
 /// Default logger-backed broadcaster for standard runtime operation.
@@ -77,6 +91,15 @@ impl RoomBroadcaster for LoggingBroadcaster {
             new_state = ?new_state,
             event = "ROOM_STATE_CHANGED",
             "Broadcasting room lifecycle state change"
+        );
+    }
+
+    fn broadcast_peer_unmuted(&self, code: &RoomCode, peer_id: &str) {
+        info!(
+            room = %code,
+            peer = %peer_id,
+            event = "PEER_UNMUTED",
+            "Broadcasting PEER_UNMUTED event"
         );
     }
 }

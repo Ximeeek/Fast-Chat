@@ -301,6 +301,44 @@ describe('In-Memory Room Store Lifecycle', () => {
 		assert.deepEqual(state.peers, ['peer-bob']);
 	});
 
+	test('peer muting and unmuting updates mutedPeers map', () => {
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: false,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-owner', 'peer-bob'],
+			muted_peers: [{ peer_id: 'peer-bob', muted_until: 1800000060 }]
+		});
+
+		let state!: RoomState;
+		const unsub1 = roomStore.subscribe((s) => {
+			state = s;
+		});
+		unsub1();
+		assert.equal(state.mutedPeers['peer-bob'], 1800000060);
+
+		// Mute another peer permanently (null)
+		roomStore.mutePeer('peer-owner', null);
+		const unsub2 = roomStore.subscribe((s) => {
+			state = s;
+		});
+		unsub2();
+		assert.equal(state.mutedPeers['peer-owner'], null);
+
+		// Unmute peer-bob
+		roomStore.unmutePeer('peer-bob');
+		const unsub3 = roomStore.subscribe((s) => {
+			state = s;
+		});
+		unsub3();
+		assert.equal(state.mutedPeers['peer-bob'], undefined);
+		assert.equal(state.mutedPeers['peer-owner'], null);
+	});
+
 	test('room lifecycle transitions: closing and closed', () => {
 		roomStore.setClosing(1800000010, 1800000000);
 

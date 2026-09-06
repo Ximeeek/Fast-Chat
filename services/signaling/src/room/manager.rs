@@ -248,6 +248,61 @@ impl RoomManager {
             .unwrap_or(false)
     }
 
+    /// Mutes a peer in the room if the operator holds `Permission::MutePeer`.
+    pub fn mute_peer(
+        &self,
+        code: &RoomCode,
+        operator_peer_id: &str,
+        target_peer_id: &str,
+        duration_secs: Option<u64>,
+    ) -> Result<Option<i64>, RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(code)
+            .ok_or_else(|| RoomError::PeerNotFound(target_peer_id.to_string()))?;
+
+        if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::MutePeer) {
+            return Err(RoomError::Unauthorized);
+        }
+
+        let now_ts = chrono::Utc::now().timestamp();
+        let until = room.mute_peer(target_peer_id, duration_secs, now_ts)?;
+        info!(
+            room = %code,
+            operator = %operator_peer_id,
+            target = %target_peer_id,
+            muted_until = ?until,
+            "Peer muted in room"
+        );
+        Ok(until)
+    }
+
+    /// Unmutes a peer in the room if the operator holds `Permission::MutePeer`.
+    pub fn unmute_peer(
+        &self,
+        code: &RoomCode,
+        operator_peer_id: &str,
+        target_peer_id: &str,
+    ) -> Result<(), RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(code)
+            .ok_or_else(|| RoomError::PeerNotFound(target_peer_id.to_string()))?;
+
+        if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::MutePeer) {
+            return Err(RoomError::Unauthorized);
+        }
+
+        room.unmute_peer(target_peer_id)?;
+        info!(
+            room = %code,
+            operator = %operator_peer_id,
+            target = %target_peer_id,
+            "Peer unmuted in room"
+        );
+        Ok(())
+    }
+
     /// Handles peer departure from a room.
     ///
     /// - If the departing peer was the owner and other peers remain, ownership is
@@ -295,15 +350,22 @@ impl RoomManager {
     /// Evaluates lifecycle across all rooms at a specific timestamp.
     /// Acts as the single source of truth for expiration timers:
     /// - Advances states to ExtendableWindow or Closing
-    /// - Purges Destroyed rooms from memory and triggers ROOM_CLOSED broadcast.
+    /// - Purges Destroyed rooms from memory and triggers ROOM_CLOSED broadcast
+    /// - Automatically expires temporary mutes and triggers PEER_UNMUTED broadcast.
     pub fn tick_lifecycle(&self, now_ts: i64) -> Vec<(RoomCode, LifecycleAction)> {
         let mut actions = Vec::new();
+        let mut unmuted_peers = Vec::new();
 
-        // Pass 1: Evaluate state under mutable reference and collect actions
+        // Pass 1: Evaluate state under mutable reference and collect actions & expired mutes
         for mut entry in self.rooms.iter_mut() {
             let action = entry.value_mut().evaluate_lifecycle(now_ts, &self.config);
             if action != LifecycleAction::None {
                 actions.push((entry.key().clone(), action));
+            }
+
+            let unmuted = entry.value_mut().check_expired_mutes(now_ts);
+            for peer_id in unmuted {
+                unmuted_peers.push((entry.key().clone(), peer_id));
             }
         }
 
@@ -321,6 +383,11 @@ impl RoomManager {
                 }
                 LifecycleAction::None => {}
             }
+        }
+
+        // Pass 3: Broadcast expired mutes
+        for (code, peer_id) in unmuted_peers {
+            self.broadcaster.broadcast_peer_unmuted(&code, &peer_id);
         }
 
         actions
@@ -359,6 +426,7 @@ mod tests {
     struct MockBroadcaster {
         closed_count: AtomicUsize,
         state_changes: AtomicUsize,
+        unmuted_count: AtomicUsize,
     }
 
     impl RoomBroadcaster for MockBroadcaster {
@@ -368,6 +436,10 @@ mod tests {
 
         fn broadcast_state_changed(&self, _code: &RoomCode, _new_state: RoomLifecycleState) {
             self.state_changes.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn broadcast_peer_unmuted(&self, _code: &RoomCode, _peer_id: &str) {
+            self.unmuted_count.fetch_add(1, Ordering::SeqCst);
         }
     }
 

@@ -87,6 +87,18 @@ export type ClientSignalingMessage =
 			type: 'KICK_PEER';
 			peer_id?: string;
 			peerId?: string;
+	  }
+	| {
+			type: 'MUTE_PEER';
+			peer_id?: string;
+			peerId?: string;
+			duration_seconds?: number | null;
+			durationSeconds?: number | null;
+	  }
+	| {
+			type: 'UNMUTE_PEER';
+			peer_id?: string;
+			peerId?: string;
 	  };
 
 /**
@@ -105,6 +117,13 @@ export interface RoomCreatedServerMessage {
 	hasPassword?: boolean;
 }
 
+export interface MutedPeerInfo {
+	peer_id: string;
+	peerId?: string;
+	muted_until?: number | null;
+	mutedUntil?: number | null;
+}
+
 export interface JoinOkServerMessage {
 	type: 'JOIN_OK';
 	status: string;
@@ -118,8 +137,24 @@ export interface JoinOkServerMessage {
 	expires_at: number;
 	expiresAt?: number;
 	peers: string[];
+	muted_peers?: MutedPeerInfo[];
+	mutedPeers?: MutedPeerInfo[];
 	has_password?: boolean;
 	hasPassword?: boolean;
+}
+
+export interface PeerMutedServerMessage {
+	type: 'PEER_MUTED';
+	peer_id: string;
+	peerId?: string;
+	muted_until?: number | null;
+	mutedUntil?: number | null;
+}
+
+export interface PeerUnmutedServerMessage {
+	type: 'PEER_UNMUTED';
+	peer_id: string;
+	peerId?: string;
 }
 
 export interface PeerJoinedServerMessage {
@@ -225,4 +260,6 @@ export type ServerSignalingMessage =
 	| RoomClosedServerMessage
 	| PongServerMessage
 	| ErrorServerMessage
-	| IceServersServerMessage;
+	| IceServersServerMessage
+	| PeerMutedServerMessage
+	| PeerUnmutedServerMessage;

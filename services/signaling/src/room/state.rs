@@ -30,6 +30,10 @@ pub struct Peer {
     pub joined_at: i64,
     #[serde(skip)]
     pub rate_key: Option<RateKey>,
+    #[serde(default)]
+    pub is_muted: bool,
+    #[serde(default)]
+    pub muted_until: Option<i64>,
 }
 
 /// Optional password protection metadata for the room.
@@ -158,6 +162,8 @@ impl RoomState {
                 is_owner: true,
                 joined_at: now_ts,
                 rate_key: owner_rate_key,
+                is_muted: false,
+                muted_until: None,
             });
         }
 
@@ -226,6 +232,8 @@ impl RoomState {
             is_owner,
             joined_at: now_ts,
             rate_key,
+            is_muted: false,
+            muted_until: None,
         });
 
         if is_owner {
@@ -292,6 +300,78 @@ impl RoomState {
     /// Checks if a rate key has been kicked from this room session.
     pub fn is_rate_key_kicked(&self, rate_key: &RateKey) -> bool {
         self.kicked_rate_keys.contains(rate_key)
+    }
+
+    /// Mutes a peer either permanently (duration_secs = None) or temporarily until now_ts + duration_secs.
+    pub fn mute_peer(
+        &mut self,
+        target_peer_id: &str,
+        duration_secs: Option<u64>,
+        now_ts: i64,
+    ) -> Result<Option<i64>, RoomError> {
+        let peer = self
+            .peers
+            .iter_mut()
+            .find(|p| p.id == target_peer_id)
+            .ok_or_else(|| RoomError::PeerNotFound(target_peer_id.to_string()))?;
+
+        peer.is_muted = true;
+        let until = duration_secs.map(|d| now_ts + d as i64);
+        peer.muted_until = until;
+        Ok(until)
+    }
+
+    /// Unmutes a peer and clears any mute expiration timestamp.
+    pub fn unmute_peer(&mut self, target_peer_id: &str) -> Result<(), RoomError> {
+        let peer = self
+            .peers
+            .iter_mut()
+            .find(|p| p.id == target_peer_id)
+            .ok_or_else(|| RoomError::PeerNotFound(target_peer_id.to_string()))?;
+
+        peer.is_muted = false;
+        peer.muted_until = None;
+        Ok(())
+    }
+
+    /// Checks for expired temporary mutes, clears them, and returns the list of unmuted peer IDs.
+    pub fn check_expired_mutes(&mut self, now_ts: i64) -> Vec<String> {
+        let mut unmuted = Vec::new();
+        for peer in &mut self.peers {
+            if peer.is_muted {
+                if let Some(until) = peer.muted_until {
+                    if now_ts >= until {
+                        peer.is_muted = false;
+                        peer.muted_until = None;
+                        unmuted.push(peer.id.clone());
+                    }
+                }
+            }
+        }
+        unmuted
+    }
+
+    /// Returns the list of currently active muted peers and their expiration timestamps.
+    pub fn get_muted_peers(&self, now_ts: i64) -> Vec<crate::ws::protocol::MutedPeerInfo> {
+        self.peers
+            .iter()
+            .filter(|p| {
+                if !p.is_muted {
+                    return false;
+                }
+                if let Some(until) = p.muted_until {
+                    now_ts < until
+                } else {
+                    true
+                }
+            })
+            .map(|p| crate::ws::protocol::MutedPeerInfo {
+                peer_id: p.id.clone(),
+                peer_id_camel: p.id.clone(),
+                muted_until: p.muted_until,
+                muted_until_camel: p.muted_until,
+            })
+            .collect()
     }
 
     /// Checks if a given peer is the designated owner of this room.
@@ -739,6 +819,48 @@ mod tests {
 
         // Kicking non-existent peer returns error
         assert_eq!(room.kick_peer("unknown"), Err(RoomError::PeerNotFound("unknown".to_string())));
+    }
+
+    #[test]
+    fn test_mute_peer_temporary_and_permanent_flow() {
+        let config = Config::default();
+        let mut room = RoomState::new(
+            sample_code(),
+            Some("alice".to_string()),
+            None,
+            PasswordStatus::none(),
+            &config,
+            1000,
+        );
+        room.add_peer("bob".to_string(), false, 1001, &config, None).unwrap();
+
+        // 1. Temporary mute for 60s
+        let until = room.mute_peer("bob", Some(60), 1000).unwrap();
+        assert_eq!(until, Some(1060));
+        let muted_list = room.get_muted_peers(1000);
+        assert_eq!(muted_list.len(), 1);
+        assert_eq!(muted_list[0].peer_id, "bob");
+        assert_eq!(muted_list[0].muted_until, Some(1060));
+
+        // 2. Before expiration, check_expired_mutes returns empty
+        assert!(room.check_expired_mutes(1059).is_empty());
+        assert_eq!(room.get_muted_peers(1059).len(), 1);
+
+        // 3. At or after expiration, check_expired_mutes returns bob and unsets mute
+        let unmuted = room.check_expired_mutes(1060);
+        assert_eq!(unmuted, vec!["bob".to_string()]);
+        assert!(room.get_muted_peers(1060).is_empty());
+
+        // 4. Permanent mute (duration = None)
+        let until_perm = room.mute_peer("bob", None, 1060).unwrap();
+        assert_eq!(until_perm, None);
+        assert_eq!(room.get_muted_peers(2000).len(), 1);
+        // Permanent mute does not expire in check_expired_mutes
+        assert!(room.check_expired_mutes(99999).is_empty());
+
+        // 5. Manual unmute
+        assert!(room.unmute_peer("bob").is_ok());
+        assert!(room.get_muted_peers(2000).is_empty());
     }
 }
 

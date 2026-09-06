@@ -1475,4 +1475,182 @@ async fn test_ws_kick_peer_and_reentry_blocked() {
     }
 }
 
+#[tokio::test]
+async fn test_ws_mute_and_sweeper_auto_unmute() {
+    let config = Config {
+        sweeper_interval_secs: 1,
+        ..Default::default()
+    };
+    let (addr, state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // 2. Bob joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    assert!(matches!(resp_b, ServerMessage::JoinOk { .. }));
+
+    // Alice consumes PeerJoined(bob)
+    let _ = ws_a.next().await.unwrap().unwrap();
+
+    // 3. Bob (non-owner) tries to mute Alice -> UNAUTHORIZED
+    let mute_alice = ClientMessage::MutePeer {
+        peer_id: "alice".to_string(),
+        duration_seconds: Some(10),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&mute_alice).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err: ServerMessage = serde_json::from_str(&b_err_raw).unwrap();
+    match b_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected UNAUTHORIZED for non-owner mute, got {b_err:?}"),
+    }
+
+    // 4. Alice mutes Bob temporarily for 2 seconds
+    let mute_bob = ClientMessage::MutePeer {
+        peer_id: "bob".to_string(),
+        duration_seconds: Some(2),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&mute_bob).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Alice and Bob both receive PEER_MUTED
+    let a_muted_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_muted: ServerMessage = serde_json::from_str(&a_muted_raw).unwrap();
+    match a_muted {
+        ServerMessage::PeerMuted { peer_id, muted_until, .. } => {
+            assert_eq!(peer_id, "bob");
+            assert!(muted_until.is_some());
+        }
+        _ => panic!("Expected PeerMuted on Alice, got {a_muted:?}"),
+    }
+
+    let b_muted_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_muted: ServerMessage = serde_json::from_str(&b_muted_raw).unwrap();
+    match b_muted {
+        ServerMessage::PeerMuted { peer_id, muted_until, .. } => {
+            assert_eq!(peer_id, "bob");
+            assert!(muted_until.is_some());
+        }
+        _ => panic!("Expected PeerMuted on Bob, got {b_muted:?}"),
+    }
+
+    // 5. Charlie joins while Bob is muted -> JOIN_OK includes Bob in muted_peers
+    let (mut ws_c, _) = connect_async(&ws_url).await.unwrap();
+    let join_c = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_c_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_c: ServerMessage = serde_json::from_str(&resp_c_raw).unwrap();
+    match resp_c {
+        ServerMessage::JoinOk { muted_peers, .. } => {
+            let m = muted_peers.expect("Charlie should receive muted_peers in JOIN_OK");
+            assert!(m.iter().any(|info| info.peer_id == "bob"));
+        }
+        _ => panic!("Expected JoinOk for Charlie, got {resp_c:?}"),
+    }
+
+    // Consume PeerJoined(charlie) for Alice and Bob
+    let _ = ws_a.next().await.unwrap().unwrap();
+    let _ = ws_b.next().await.unwrap().unwrap();
+
+    // 6. Advance time past 2 seconds: sweeper tick_lifecycle auto-unmutes Bob and broadcasts PEER_UNMUTED
+    let now = chrono::Utc::now().timestamp() + 5;
+    state.room_manager.tick_lifecycle(now);
+
+    // Alice, Bob, and Charlie should all receive PEER_UNMUTED for Bob
+    let a_unmuted_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_unmuted: ServerMessage = serde_json::from_str(&a_unmuted_raw).unwrap();
+    match a_unmuted {
+        ServerMessage::PeerUnmuted { peer_id, .. } => assert_eq!(peer_id, "bob"),
+        _ => panic!("Expected PeerUnmuted for bob on Alice, got {a_unmuted:?}"),
+    }
+
+    let b_unmuted_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_unmuted: ServerMessage = serde_json::from_str(&b_unmuted_raw).unwrap();
+    match b_unmuted {
+        ServerMessage::PeerUnmuted { peer_id, .. } => assert_eq!(peer_id, "bob"),
+        _ => panic!("Expected PeerUnmuted for bob on Bob, got {b_unmuted:?}"),
+    }
+
+    let c_unmuted_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_unmuted: ServerMessage = serde_json::from_str(&c_unmuted_raw).unwrap();
+    match c_unmuted {
+        ServerMessage::PeerUnmuted { peer_id, .. } => assert_eq!(peer_id, "bob"),
+        _ => panic!("Expected PeerUnmuted for bob on Charlie, got {c_unmuted:?}"),
+    }
+
+    // 7. Alice permanently mutes Bob (duration_seconds = None)
+    let mute_perm = ClientMessage::MutePeer {
+        peer_id: "bob".to_string(),
+        duration_seconds: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&mute_perm).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_perm_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_perm: ServerMessage = serde_json::from_str(&a_perm_raw).unwrap();
+    match a_perm {
+        ServerMessage::PeerMuted { peer_id, muted_until, .. } => {
+            assert_eq!(peer_id, "bob");
+            assert!(muted_until.is_none());
+        }
+        _ => panic!("Expected PeerMuted permanent on Alice, got {a_perm:?}"),
+    }
+
+    // 8. Alice unmutes Bob manually
+    let unmute_bob = ClientMessage::UnmutePeer {
+        peer_id: "bob".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&unmute_bob).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_manual_unmute_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_manual_unmute: ServerMessage = serde_json::from_str(&a_manual_unmute_raw).unwrap();
+    match a_manual_unmute {
+        ServerMessage::PeerUnmuted { peer_id, .. } => assert_eq!(peer_id, "bob"),
+        _ => panic!("Expected PeerUnmuted on Alice, got {a_manual_unmute:?}"),
+    }
+}
+
+
 

@@ -29,6 +29,7 @@ export interface RoomState {
 	iceServers: IceServerConfig[];
 	quotaExhausted: boolean;
 	hasPassword: boolean;
+	mutedPeers: Record<string, number | null>;
 }
 
 const initialRoomState: RoomState = {
@@ -46,7 +47,8 @@ const initialRoomState: RoomState = {
 	error: null,
 	iceServers: [],
 	quotaExhausted: false,
-	hasPassword: false
+	hasPassword: false,
+	mutedPeers: {}
 };
 
 function createRoomStore() {
@@ -77,6 +79,14 @@ function createRoomStore() {
 			update((state) => {
 				const currentPeerId = peerId || state.peerId;
 				const ownerId = payload.owner_peer_id || payload.ownerPeerId || (payload.is_owner ? currentPeerId : null);
+				const mutedMap: Record<string, number | null> = {};
+				const rawMuted = payload.muted_peers || payload.mutedPeers || [];
+				for (const m of rawMuted) {
+					const mId = m.peer_id || m.peerId;
+					if (mId) {
+						mutedMap[mId] = m.muted_until ?? m.mutedUntil ?? null;
+					}
+				}
 				return {
 					...state,
 					code: payload.code,
@@ -87,6 +97,7 @@ function createRoomStore() {
 					expiresAt: payload.expires_at || payload.expiresAt || null,
 					peers: [...payload.peers],
 					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
+					mutedPeers: mutedMap,
 					lifecycle: 'joined',
 					error: null
 				};
@@ -102,6 +113,25 @@ function createRoomStore() {
 				isOwner: state.peerId === ownerPeerId
 			}));
 		},
+		mutePeer: (peerId: string, mutedUntil: number | null) => {
+			update((state) => ({
+				...state,
+				mutedPeers: {
+					...state.mutedPeers,
+					[peerId]: mutedUntil
+				}
+			}));
+		},
+		unmutePeer: (peerId: string) => {
+			update((state) => {
+				const next = { ...state.mutedPeers };
+				delete next[peerId];
+				return {
+					...state,
+					mutedPeers: next
+				};
+			});
+		},
 		addPeer: (newPeerId: string) => {
 			update((state) => {
 				if (state.peers.includes(newPeerId)) {
@@ -114,10 +144,15 @@ function createRoomStore() {
 			});
 		},
 		removePeer: (peerId: string) => {
-			update((state) => ({
-				...state,
-				peers: state.peers.filter((id) => id !== peerId)
-			}));
+			update((state) => {
+				const nextMuted = { ...state.mutedPeers };
+				delete nextMuted[peerId];
+				return {
+					...state,
+					peers: state.peers.filter((id) => id !== peerId),
+					mutedPeers: nextMuted
+				};
+			});
 		},
 		setClosing: (closingDeadline: number, expiresAt: number) => {
 			update((state) => ({

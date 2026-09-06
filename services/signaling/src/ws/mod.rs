@@ -497,7 +497,9 @@ async fn handle_client_message(
 
                     // Send JOIN_OK to joining peer
                     let owner_id = room_snapshot.get_owner_id();
-                    let _ = tx.send(ServerMessage::join_ok(
+                    let now_ts = chrono::Utc::now().timestamp();
+                    let muted_peers = room_snapshot.get_muted_peers(now_ts);
+                    let _ = tx.send(ServerMessage::join_ok_full(
                         code.to_string(),
                         assigned_peer_id.clone(),
                         false,
@@ -505,6 +507,7 @@ async fn handle_client_message(
                         salt_hex,
                         room_snapshot.expires_at,
                         existing_peers,
+                        Some(muted_peers),
                     ));
 
                     // Broadcast PEER_JOINED to existing peers
@@ -921,6 +924,129 @@ async fn handle_client_message(
                 }
                 Err(e) => {
                     let _ = tx.send(ServerMessage::error("KICK_FAILED", e.to_string()));
+                }
+            }
+        }
+        ClientMessage::MutePeer {
+            peer_id: target_peer_id,
+            duration_seconds,
+        } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before muting peers",
+                    ));
+                    return;
+                }
+            };
+
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::MutePeer)
+            {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Unauthorized to mute peers in this room",
+                ));
+                return;
+            }
+
+            match state
+                .room_manager
+                .mute_peer(code, sender_id, &target_peer_id, duration_seconds)
+            {
+                Ok(muted_until) => {
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        operator = %sender_id,
+                        target = %target_peer_id,
+                        muted_until = ?muted_until,
+                        event = "MUTE_PEER",
+                        "Peer muted in room; broadcasting PEER_MUTED to participants"
+                    );
+
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::peer_muted(target_peer_id, muted_until),
+                        None,
+                    );
+                }
+                Err(RoomError::PeerNotFound(p)) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "PEER_NOT_FOUND",
+                        format!("Target peer '{p}' not found in room"),
+                    ));
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Unauthorized to mute peers in this room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("MUTE_FAILED", e.to_string()));
+                }
+            }
+        }
+        ClientMessage::UnmutePeer {
+            peer_id: target_peer_id,
+        } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before unmuting peers",
+                    ));
+                    return;
+                }
+            };
+
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::MutePeer)
+            {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Unauthorized to unmute peers in this room",
+                ));
+                return;
+            }
+
+            match state.room_manager.unmute_peer(code, sender_id, &target_peer_id) {
+                Ok(()) => {
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        operator = %sender_id,
+                        target = %target_peer_id,
+                        event = "UNMUTE_PEER",
+                        "Peer unmuted in room; broadcasting PEER_UNMUTED to participants"
+                    );
+
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::peer_unmuted(target_peer_id),
+                        None,
+                    );
+                }
+                Err(RoomError::PeerNotFound(p)) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "PEER_NOT_FOUND",
+                        format!("Target peer '{p}' not found in room"),
+                    ));
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Unauthorized to unmute peers in this room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("UNMUTE_FAILED", e.to_string()));
                 }
             }
         }

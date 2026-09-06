@@ -114,6 +114,34 @@ pub enum ClientMessage {
         #[serde(alias = "peerId")]
         peer_id: String,
     },
+
+    /// Request by an authorized participant to mute a peer in the room.
+    #[serde(alias = "MUTE_PEER")]
+    MutePeer {
+        #[serde(alias = "peerId")]
+        peer_id: String,
+        #[serde(default, alias = "durationSeconds")]
+        duration_seconds: Option<u64>,
+    },
+
+    /// Request by an authorized participant to unmute a peer in the room.
+    #[serde(alias = "UNMUTE_PEER")]
+    UnmutePeer {
+        #[serde(alias = "peerId")]
+        peer_id: String,
+    },
+}
+
+/// Muted status metadata for a participant in a room session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MutedPeerInfo {
+    pub peer_id: String,
+    #[serde(rename = "peerId")]
+    pub peer_id_camel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muted_until: Option<i64>,
+    #[serde(default, rename = "mutedUntil", skip_serializing_if = "Option::is_none")]
+    pub muted_until_camel: Option<i64>,
 }
 
 /// Outgoing server signaling messages sent to WebSocket peers.
@@ -151,6 +179,28 @@ pub enum ServerMessage {
         #[serde(rename = "expiresAt")]
         expires_at_camel: i64,
         peers: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        muted_peers: Option<Vec<MutedPeerInfo>>,
+        #[serde(default, rename = "mutedPeers", skip_serializing_if = "Option::is_none")]
+        muted_peers_camel: Option<Vec<MutedPeerInfo>>,
+    },
+
+    /// Broadcast notification informing active participants that a peer was muted.
+    PeerMuted {
+        peer_id: String,
+        #[serde(rename = "peerId")]
+        peer_id_camel: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        muted_until: Option<i64>,
+        #[serde(default, rename = "mutedUntil", skip_serializing_if = "Option::is_none")]
+        muted_until_camel: Option<i64>,
+    },
+
+    /// Broadcast notification informing active participants that a peer was unmuted.
+    PeerUnmuted {
+        peer_id: String,
+        #[serde(rename = "peerId")]
+        peer_id_camel: String,
     },
 
     /// Broadcast notification informing active participants that room ownership transferred.
@@ -276,6 +326,24 @@ impl ServerMessage {
         }
     }
 
+    pub fn peer_muted(peer_id: impl Into<String>, muted_until: Option<i64>) -> Self {
+        let id = peer_id.into();
+        Self::PeerMuted {
+            peer_id: id.clone(),
+            peer_id_camel: id,
+            muted_until,
+            muted_until_camel: muted_until,
+        }
+    }
+
+    pub fn peer_unmuted(peer_id: impl Into<String>) -> Self {
+        let id = peer_id.into();
+        Self::PeerUnmuted {
+            peer_id: id.clone(),
+            peer_id_camel: id,
+        }
+    }
+
     pub fn join_ok(
         code: impl Into<String>,
         peer_id: impl Into<String>,
@@ -285,9 +353,23 @@ impl ServerMessage {
         expires_at: i64,
         peers: Vec<String>,
     ) -> Self {
+        Self::join_ok_full(code, peer_id, is_owner, owner_peer_id, salt_hex, expires_at, peers, None)
+    }
+
+    pub fn join_ok_full(
+        code: impl Into<String>,
+        peer_id: impl Into<String>,
+        is_owner: bool,
+        owner_peer_id: Option<String>,
+        salt_hex: impl Into<String>,
+        expires_at: i64,
+        peers: Vec<String>,
+        muted_peers: Option<Vec<MutedPeerInfo>>,
+    ) -> Self {
         let code_str = code.into();
         let peer_str = peer_id.into();
         let owner_camel = owner_peer_id.clone();
+        let muted_camel = muted_peers.clone();
         Self::JoinOk {
             status: "OK".to_string(),
             code: code_str,
@@ -300,6 +382,8 @@ impl ServerMessage {
             expires_at,
             expires_at_camel: expires_at,
             peers,
+            muted_peers,
+            muted_peers_camel: muted_camel,
         }
     }
 
@@ -634,5 +718,74 @@ mod tests {
                 peer_id: "target-peer".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_client_message_mute_peer_deserialization() {
+        let json_temp = r#"{"type":"MUTE_PEER","peer_id":"bob","duration_seconds":300}"#;
+        let msg_temp: ClientMessage = serde_json::from_str(json_temp).unwrap();
+        assert_eq!(
+            msg_temp,
+            ClientMessage::MutePeer {
+                peer_id: "bob".to_string(),
+                duration_seconds: Some(300),
+            }
+        );
+
+        let json_perm = r#"{"type":"MUTE_PEER","peerId":"bob"}"#;
+        let msg_perm: ClientMessage = serde_json::from_str(json_perm).unwrap();
+        assert_eq!(
+            msg_perm,
+            ClientMessage::MutePeer {
+                peer_id: "bob".to_string(),
+                duration_seconds: None,
+            }
+        );
+
+        let json_unmute = r#"{"type":"UNMUTE_PEER","peerId":"bob"}"#;
+        let msg_unmute: ClientMessage = serde_json::from_str(json_unmute).unwrap();
+        assert_eq!(
+            msg_unmute,
+            ClientMessage::UnmutePeer {
+                peer_id: "bob".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_server_message_mute_events_serialization() {
+        let msg_muted = ServerMessage::peer_muted("bob", Some(12345));
+        let json_muted = serde_json::to_string(&msg_muted).unwrap();
+        assert!(json_muted.contains(r#""type":"PEER_MUTED""#));
+        assert!(json_muted.contains(r#""peer_id":"bob""#));
+        assert!(json_muted.contains(r#""peerId":"bob""#));
+        assert!(json_muted.contains(r#""muted_until":12345"#));
+        assert!(json_muted.contains(r#""mutedUntil":12345"#));
+
+        let msg_unmuted = ServerMessage::peer_unmuted("bob");
+        let json_unmuted = serde_json::to_string(&msg_unmuted).unwrap();
+        assert!(json_unmuted.contains(r#""type":"PEER_UNMUTED""#));
+        assert!(json_unmuted.contains(r#""peer_id":"bob""#));
+        assert!(json_unmuted.contains(r#""peerId":"bob""#));
+
+        let muted_info = MutedPeerInfo {
+            peer_id: "bob".to_string(),
+            peer_id_camel: "bob".to_string(),
+            muted_until: Some(12345),
+            muted_until_camel: Some(12345),
+        };
+        let join_ok = ServerMessage::join_ok_full(
+            "1234-5678-9012",
+            "alice",
+            true,
+            Some("alice".to_string()),
+            "001122",
+            1000,
+            vec!["bob".to_string()],
+            Some(vec![muted_info]),
+        );
+        let join_json = serde_json::to_string(&join_ok).unwrap();
+        assert!(join_json.contains(r#""muted_peers":[{""#));
+        assert!(join_json.contains(r#""mutedPeers":[{""#));
     }
 }
