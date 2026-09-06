@@ -1,4 +1,6 @@
-import { getLanguageDisplayName } from './languageDetection.ts';
+import { getLanguageDisplayName, detectLanguage } from './languageDetection.ts';
+import { isCodeSnippet } from './codeDetection.ts';
+import type { MessageSegment } from './types.ts';
 
 /**
  * Representation of a multi-line or long pasted text snippet
@@ -14,10 +16,23 @@ export interface PastedBlock {
 	/** Whether the snippet is currently expanded to show full text in the input */
 	isExpanded: boolean;
 	/** Content classification: standard text or source code */
-	contentType?: 'text' | 'code';
-	/** Detected or manually selected programming language */
-	language?: string | null;
+	contentType: 'text' | 'code';
+	/** Detected or manually selected programming language (null = plain code / plain text) */
+	language: string | null;
+	/** Selection mode: auto heuristic evaluation or manual user lock */
+	languageMode: 'auto' | 'manual';
 }
+
+/**
+ * Composer item representation: either freely typed text or a pasted snippet block.
+ */
+export type ComposerBlock =
+	| {
+			kind: 'text';
+			id: string;
+			text: string;
+	  }
+	| (PastedBlock & { kind: 'paste' });
 
 /**
  * Counts the total number of lines in a text string across CRLF, LF, and CR line breaks.
@@ -64,6 +79,118 @@ export function formatPastedLabel(
 		return `[ Pasted ${count} ${unit} · ${langDisplay} ]`;
 	}
 	return `[ Pasted ${count} ${unit} of Text ]`;
+}
+
+/**
+ * Creates a new independent PastedBlock, evaluating heuristics when in auto mode.
+ */
+export function createPastedBlock(
+	content: string,
+	options?: {
+		contentType?: 'text' | 'code';
+		language?: string | null;
+		languageMode?: 'auto' | 'manual';
+		id?: string;
+	}
+): PastedBlock {
+	const lines = countLines(content);
+	const isManual = options?.languageMode === 'manual';
+
+	let contentType: 'text' | 'code';
+	let language: string | null;
+
+	if (isManual) {
+		contentType = options?.contentType ?? (options?.language ? 'code' : 'text');
+		language = options?.language !== undefined ? options.language : null;
+	} else {
+		const isCode = isCodeSnippet(content);
+		contentType = options?.contentType ?? (isCode ? 'code' : 'text');
+		language = contentType === 'code' ? detectLanguage(content) : null;
+	}
+
+	return {
+		id: options?.id || `paste-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+		content,
+		lineCount: Math.max(lines, 1),
+		isExpanded: false,
+		contentType,
+		language,
+		languageMode: options?.languageMode || 'auto'
+	};
+}
+
+/**
+ * Iterates through the composer block sequence and companion input in exact chronological order
+ * to assemble the outbound MessageSegment array ready for transmission.
+ *
+ * @param blocks - Ordered sequence of text items and pasted snippet blocks.
+ * @param trailingInput - Optional companion text currently typed in the active input.
+ * @param trailingInputOptions - Optional formatting parameters for trailing input.
+ * @returns Ordered array of MessageSegment elements.
+ */
+export function buildMessageSegments(
+	blocks: ComposerBlock[],
+	trailingInput?: string,
+	trailingInputOptions?: {
+		isManualCodeMode?: boolean;
+		manualLanguage?: string | null;
+	}
+): MessageSegment[] {
+	const segments: MessageSegment[] = [];
+
+	for (const block of blocks) {
+		if (block.kind === 'text') {
+			const trimmed = block.text.trim();
+			if (trimmed.length > 0) {
+				segments.push({
+					type: 'text',
+					text: trimmed
+				});
+			}
+		} else if (block.kind === 'paste') {
+			const trimmed = block.content.trim();
+			if (trimmed.length > 0) {
+				if (block.contentType === 'code') {
+					segments.push({
+						type: 'code',
+						code: trimmed,
+						language: block.language
+					});
+				} else {
+					segments.push({
+						type: 'text',
+						text: trimmed
+					});
+				}
+			}
+		}
+	}
+
+	if (trailingInput) {
+		const trimmed = trailingInput.trim();
+		if (trimmed.length > 0) {
+			if (trailingInputOptions?.isManualCodeMode) {
+				segments.push({
+					type: 'code',
+					code: trimmed,
+					language: trailingInputOptions.manualLanguage || detectLanguage(trimmed)
+				});
+			} else if (isCodeSnippet(trimmed)) {
+				segments.push({
+					type: 'code',
+					code: trimmed,
+					language: detectLanguage(trimmed)
+				});
+			} else {
+				segments.push({
+					type: 'text',
+					text: trimmed
+				});
+			}
+		}
+	}
+
+	return segments;
 }
 
 /**

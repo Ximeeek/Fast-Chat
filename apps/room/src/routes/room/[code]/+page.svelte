@@ -22,6 +22,8 @@
 		getLanguageDisplayName,
 		SUPPORTED_LANGUAGES,
 		CodeMessageBlock,
+		createPastedBlock,
+		buildMessageSegments,
 		type PastedBlock,
 		type SupportedLanguage,
 		type MessageSegment
@@ -170,17 +172,7 @@
 
 		if (isLongPastedText(text)) {
 			e.preventDefault();
-			const lines = countLines(text);
-			const isCode = isCodeSnippet(text);
-			const detectedLang = isCode ? detectLanguage(text) : null;
-			pastedBlocks.push({
-				id: `paste-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-				content: text,
-				lineCount: Math.max(lines, 1),
-				isExpanded: false,
-				contentType: isCode ? 'code' : 'text',
-				language: detectedLang
-			});
+			pastedBlocks.push(createPastedBlock(text));
 		}
 	}
 

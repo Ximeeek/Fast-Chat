@@ -12,7 +12,10 @@ import {
 	isLongPastedText,
 	formatPastedLabel,
 	composeFinalMessage,
-	type PastedBlock
+	createPastedBlock,
+	buildMessageSegments,
+	type PastedBlock,
+	type ComposerBlock
 } from '../src/lib/chat/pastedSnippet.ts';
 import { isCodeSnippet } from '../src/lib/chat/codeDetection.ts';
 import {
@@ -665,8 +668,8 @@ describe('Pasted Snippet Drafting & Containment', () => {
 
 	test('composeFinalMessage joins input text and pasted snippet blocks cleanly', () => {
 		const blocks: PastedBlock[] = [
-			{ id: 'b1', content: 'const x = 1;\nconsole.log(x);', lineCount: 2, isExpanded: false },
-			{ id: 'b2', content: 'Some extra log line', lineCount: 1, isExpanded: false }
+			createPastedBlock('const x = 1;\nconsole.log(x);', { id: 'b1' }),
+			createPastedBlock('Some extra log line', { id: 'b2' })
 		];
 
 		// Both typed input and blocks
@@ -686,6 +689,75 @@ describe('Pasted Snippet Drafting & Containment', () => {
 
 		// Empty input and empty blocks
 		assert.equal(composeFinalMessage('', []), '');
+	});
+
+	test('buildMessageSegments creates separate segments for text preceding a pasted code block without gluing', () => {
+		const jsCode = 'const calculateTotal = (items) => {\n  return items.reduce((a, b) => a + b, 0);\n};';
+		const codeBlock = createPastedBlock(jsCode, { id: 'p1' });
+
+		const composerSequence: ComposerBlock[] = [
+			{ kind: 'text', id: 't1', text: 'Here is the helper function:' },
+			{ kind: 'paste', ...codeBlock }
+		];
+
+		const segments = buildMessageSegments(composerSequence);
+		assert.equal(segments.length, 2, 'Must yield exactly two segments');
+		assert.deepEqual(segments[0], {
+			type: 'text',
+			text: 'Here is the helper function:'
+		});
+		assert.deepEqual(segments[1], {
+			type: 'code',
+			code: jsCode,
+			language: 'javascript'
+		});
+	});
+
+	test('buildMessageSegments creates separate segments for companion text following a pasted code block without gluing', () => {
+		const rustCode = 'fn main() {\n    println!("WebRTC mesh running");\n}';
+		const codeBlock = createPastedBlock(rustCode, { id: 'p2' });
+
+		const composerSequence: ComposerBlock[] = [
+			{ kind: 'paste', ...codeBlock }
+		];
+
+		const segments = buildMessageSegments(composerSequence, 'What do you think of this Rust implementation?');
+		assert.equal(segments.length, 2, 'Must yield exactly two segments');
+		assert.deepEqual(segments[0], {
+			type: 'code',
+			code: rustCode,
+			language: 'rust'
+		});
+		assert.deepEqual(segments[1], {
+			type: 'text',
+			text: 'What do you think of this Rust implementation?'
+		});
+	});
+
+	test('buildMessageSegments preserves multiple independent code blocks with their individual detected languages', () => {
+		const jsCode = 'const sum = (a, b) => {\n  console.log(a, b);\n  return a + b;\n};';
+		const rustCode = 'fn compute() -> Result<u32, ()> {\n    let mut total = 0;\n    Ok(total)\n}';
+
+		const block1 = createPastedBlock(jsCode, { id: 'paste-js' });
+		const block2 = createPastedBlock(rustCode, { id: 'paste-rust' });
+
+		assert.equal(block1.language, 'javascript');
+		assert.equal(block2.language, 'rust');
+
+		const composerSequence: ComposerBlock[] = [
+			{ kind: 'text', id: 'intro', text: 'Comparing JS and Rust implementations:' },
+			{ kind: 'paste', ...block1 },
+			{ kind: 'text', id: 'mid', text: 'And the Rust equivalent:' },
+			{ kind: 'paste', ...block2 }
+		];
+
+		const segments = buildMessageSegments(composerSequence, 'Both handle summation correctly.');
+		assert.equal(segments.length, 5);
+		assert.deepEqual(segments[0], { type: 'text', text: 'Comparing JS and Rust implementations:' });
+		assert.deepEqual(segments[1], { type: 'code', code: jsCode, language: 'javascript' });
+		assert.deepEqual(segments[2], { type: 'text', text: 'And the Rust equivalent:' });
+		assert.deepEqual(segments[3], { type: 'code', code: rustCode, language: 'rust' });
+		assert.deepEqual(segments[4], { type: 'text', text: 'Both handle summation correctly.' });
 	});
 });
 
