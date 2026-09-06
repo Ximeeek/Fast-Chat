@@ -23,6 +23,8 @@ export interface ChatMessage {
 	isSystem?: boolean;
 	/** Remote WebRTC peer identifier if received from a remote participant */
 	senderPeerId?: string;
+	/** True if the message was received via historical peer synchronization */
+	isHistory?: boolean;
 }
 
 /**
@@ -40,3 +42,35 @@ export interface ChatWirePayload {
 	/** Dispatch timestamp */
 	timestamp: number;
 }
+
+/**
+ * Message category discriminator for WebRTC chat history synchronization frames.
+ */
+export const CHAT_HISTORY_SYNC_TYPE = 'CHAT_HISTORY_SYNC';
+
+/**
+ * Individual message record within a chat history synchronization wire payload.
+ */
+export interface ChatHistoryItem {
+	/** Unique message identifier */
+	id: string;
+	/** Sender cosmetic username */
+	sender: string;
+	/** Ordered list of text prose and code segments */
+	segments: MessageSegment[];
+	/** Dispatch timestamp */
+	timestamp: number;
+	/** Optional flag indicating system notification */
+	isSystem?: boolean;
+}
+
+/**
+ * Structured wire payload schema for peer-to-peer chat history synchronization.
+ */
+export interface ChatHistorySyncWirePayload {
+	/** Wire message type discriminator */
+	type: 'CHAT_HISTORY_SYNC';
+	/** Array of locally known messages */
+	messages: ChatHistoryItem[];
+}
+

@@ -6,4 +6,6 @@ export * from './pastedSnippet.ts';
 export * from './codeDetection.ts';
 export * from './languageDetection.ts';
 export * from './highlighter.ts';
+export * from './historySync.ts';
 export { default as CodeMessageBlock } from './CodeMessageBlock.svelte';
+

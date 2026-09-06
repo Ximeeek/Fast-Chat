@@ -25,7 +25,9 @@ export class WebRtcManager {
 	private iceServers: IceServerConfig[] = [];
 	private sessions: Map<string, PeerConnectionSession> = new Map();
 	private messageHandlers: Set<BinaryMessageHandler> = new Set();
+	private dataChannelOpenHandlers: Set<(peerId: string) => void> = new Set();
 	private signalingCleanups: (() => void)[] = [];
+
 	private rekeyCleanups: (() => void)[] = [];
 	private rtcFactory?: (config?: RTCConfiguration) => RTCPeerConnection;
 	private disconnectGracePeriodMs?: number;
@@ -293,6 +295,38 @@ export class WebRtcManager {
 	}
 
 	/**
+	 * Subscribes to RTCDataChannel open events across all connected peers.
+	 * Fires immediately for existing sessions whose channels are already in the 'open' state,
+	 * as well as dynamically upon any new peer's DataChannel transitioning to 'open'.
+	 */
+	public onDataChannelOpen(handler: (peerId: string) => void): () => void {
+		this.dataChannelOpenHandlers.add(handler);
+		for (const [peerId, session] of this.sessions.entries()) {
+			if (session.getSessionInfo().dataChannelState === 'open') {
+				try {
+					handler(peerId);
+				} catch (err) {
+					console.error('[WebRtcManager] Error in dataChannelOpen handler for existing session:', err);
+				}
+			}
+		}
+		return () => {
+			this.dataChannelOpenHandlers.delete(handler);
+		};
+	}
+
+	private dispatchDataChannelOpen(peerId: string): void {
+		for (const handler of this.dataChannelOpenHandlers) {
+			try {
+				handler(peerId);
+			} catch (err) {
+				console.error('[WebRtcManager] Error in dataChannelOpen handler:', err);
+			}
+		}
+	}
+
+
+	/**
 	 * Initiates an ICE restart for a specific remote peer without leaving or rejoining the room.
 	 * Generates an SDP offer with iceRestart: true and transmits it across the signaling channel.
 	 */
@@ -353,8 +387,10 @@ export class WebRtcManager {
 		for (const cleanup of this.rekeyCleanups) cleanup();
 		this.rekeyCleanups = [];
 		this.messageHandlers.clear();
+		this.dataChannelOpenHandlers.clear();
 		this.isInitialized = false;
 	}
+
 
 	/**
 	 * Gets an existing peer session or instantiates a new one configured with
@@ -412,11 +448,15 @@ export class WebRtcManager {
 							webrtcPeers.upsertPeer(session.getSessionInfo());
 						}
 					},
-					onDataChannelStateChange: () => {
+					onDataChannelStateChange: (state: DataChannelState) => {
 						if (session) {
 							webrtcPeers.upsertPeer(session.getSessionInfo());
 						}
+						if (state === 'open') {
+							this.dispatchDataChannelOpen(remotePeerId);
+						}
 					},
+
 					onError: () => {
 						if (session) {
 							webrtcPeers.upsertPeer(session.getSessionInfo());

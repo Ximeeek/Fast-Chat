@@ -922,7 +922,54 @@ describe('WebRTC Mesh & Secure DataChannel Subsystem (Phase 8)', () => {
 
 			manager.destroy();
 		});
+
+		test('onDataChannelOpen triggers callback for newly opened channels and existing open sessions', async () => {
+			let pcA: MockRTCPeerConnection | null = null;
+			let pcB: MockRTCPeerConnection | null = null;
+
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					const pc = new MockRTCPeerConnection(cfg);
+					if (!pcA) pcA = pc;
+					else pcB = pc;
+					return pc as unknown as RTCPeerConnection;
+				}
+			});
+
+			const openedPeers: string[] = [];
+			const unsub = manager.onDataChannelOpen((peerId) => {
+				openedPeers.push(peerId);
+			});
+
+			await manager.getOrCreateSession('peer-open-1', true);
+			const dc1 = pcA!.localDataChannels[0];
+			dc1.open();
+
+			assert.deepEqual(openedPeers, ['peer-open-1']);
+
+			// Late subscription gets existing open sessions immediately
+			const lateOpened: string[] = [];
+			const unsubLate = manager.onDataChannelOpen((peerId) => {
+				lateOpened.push(peerId);
+			});
+			assert.deepEqual(lateOpened, ['peer-open-1']);
+
+			// Opening peer 2 triggers both
+			await manager.getOrCreateSession('peer-open-2', true);
+			const dc2 = pcB!.localDataChannels[0];
+			dc2.open();
+
+			assert.deepEqual(openedPeers, ['peer-open-1', 'peer-open-2']);
+			assert.deepEqual(lateOpened, ['peer-open-1', 'peer-open-2']);
+
+			unsub();
+			unsubLate();
+			manager.destroy();
+		});
 	});
+
 
 	describe('7. WebRTC ICE Failure Handling, Disconnect Buffering & ICE Restart', () => {
 		test('RTCPeerConnection connectionState failed immediately propagates to session and store', async () => {

@@ -12,8 +12,9 @@ const initialChatState: ChatState = {
 	messages: []
 };
 
-function createChatStore() {
+export function createChatStore() {
 	const { subscribe, set, update } = writable<ChatState>({ ...initialChatState });
+
 
 	return {
 		subscribe,
@@ -42,19 +43,66 @@ function createChatStore() {
 		/**
 		 * Appends a verified message to the in-memory chat history.
 		 * De-duplicates incoming messages by their unique ID to prevent double-rendering
-		 * in multi-peer mesh networks.
+		 * in multi-peer mesh networks, and guarantees chronological order.
 		 */
 		addMessage: (message: ChatMessage): void => {
 			update((state) => {
 				if (state.messages.some((m) => m.id === message.id)) {
 					return state;
 				}
+				const messages = [...state.messages, message];
+				if (
+					state.messages.length > 0 &&
+					message.timestamp < state.messages[state.messages.length - 1].timestamp
+				) {
+					messages.sort((a, b) => {
+						if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+						return a.id.localeCompare(b.id);
+					});
+				}
 				return {
 					...state,
-					messages: [...state.messages, message]
+					messages
 				};
 			});
 		},
+
+		/**
+		 * Merges historical chat messages received from peers via WebRTC CHAT_HISTORY_SYNC.
+		 * Skips any message whose unique ID already exists in the local store (preventing
+		 * duplication across multi-peer mesh broadcasts and concurrent live messages),
+		 * and inserts new messages in strict chronological timestamp order.
+		 */
+		mergeHistory: (incomingMessages: ChatMessage[]): void => {
+			update((state) => {
+				const existingIds = new Set(state.messages.map((m) => m.id));
+				const newMessages: ChatMessage[] = [];
+
+				for (const msg of incomingMessages) {
+					if (!existingIds.has(msg.id)) {
+						existingIds.add(msg.id);
+						newMessages.push(msg);
+					}
+				}
+
+				if (newMessages.length === 0) {
+					return state;
+				}
+
+				const merged = [...state.messages, ...newMessages].sort((a, b) => {
+					if (a.timestamp !== b.timestamp) {
+						return a.timestamp - b.timestamp;
+					}
+					return a.id.localeCompare(b.id);
+				});
+
+				return {
+					...state,
+					messages: merged
+				};
+			});
+		},
+
 
 		/**
 		 * Appends an ephemeral system announcement/log to the in-memory chat history.

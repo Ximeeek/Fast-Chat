@@ -4,9 +4,24 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { generateUsername } from '../src/lib/chat/username.ts';
-import type { ChatMessage, ChatWirePayload, MessageSegment } from '../src/lib/chat/types.ts';
-import { serializeChatMessage, deserializeChatMessage } from '../src/lib/chat/transport.ts';
+import type {
+	ChatMessage,
+	ChatWirePayload,
+	MessageSegment,
+	ChatHistoryItem,
+	ChatHistorySyncWirePayload
+} from '../src/lib/chat/types.ts';
+import { CHAT_HISTORY_SYNC_TYPE } from '../src/lib/chat/types.ts';
+import {
+	serializeChatMessage,
+	deserializeChatMessage,
+	serializeChatHistorySync,
+	deserializeChatHistorySync,
+	MAX_HISTORY_SYNC_MESSAGES
+} from '../src/lib/chat/transport.ts';
+import { ChatHistorySyncManager } from '../src/lib/chat/historySync.ts';
 import { formatChatLog, downloadChatLog } from '../src/lib/chat/export.ts';
+
 import {
 	countLines,
 	isLongPastedText,
@@ -31,7 +46,8 @@ import {
 	escapeHtml,
 	loadLanguageGrammar
 } from '../src/lib/chat/highlighter.ts';
-import { chatStore, type ChatState } from '../src/lib/stores/chat.ts';
+import { chatStore, createChatStore, type ChatState } from '../src/lib/stores/chat.ts';
+
 import { WebRtcManager } from '../src/lib/webrtc/index.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
 
@@ -1075,12 +1091,15 @@ describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 			'src/lib/chat/codeDetection.ts',
 			'src/lib/chat/languageDetection.ts',
 			'src/lib/chat/highlighter.ts',
+			'src/lib/chat/historySync.ts',
 			'src/lib/stores/chat.ts'
 		];
 
+
 		for (const relPath of files) {
-			const fullPath = join(process.cwd(), relPath);
+			const fullPath = new URL(`../${relPath}`, import.meta.url);
 			const content = readFileSync(fullPath, 'utf8');
+
 			assert.equal(
 				content.includes('localStorage'),
 				false,
@@ -1094,4 +1113,611 @@ describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 		}
 	});
 });
+
+describe('P2P Chat History Synchronization Wire Protocol', () => {
+	test('successfully serializes and deserializes chat history payloads', () => {
+		const originalHistory: ChatMessage[] = [
+			{
+				id: 'hist-1',
+				sender: 'swift-fox-42',
+				timestamp: 1725555000000,
+				segments: [{ type: 'text', text: 'First historical message' }],
+				isSelf: true
+			},
+			{
+				id: 'hist-2',
+				sender: 'brave-badger-19',
+				timestamp: 1725555050000,
+				segments: [
+					{ type: 'text', text: 'Here is the helper function:' },
+					{ type: 'code', code: 'fn run() -> bool { true }', language: 'rust' }
+				],
+				isSelf: false
+			}
+		];
+
+		const serialized = serializeChatHistorySync(originalHistory);
+		assert.ok(serialized instanceof Uint8Array);
+		assert.ok(serialized.byteLength > 0);
+
+		const deserialized = deserializeChatHistorySync(serialized);
+		assert.ok(deserialized);
+		assert.equal(deserialized.type, CHAT_HISTORY_SYNC_TYPE);
+		assert.equal(deserialized.messages.length, 2);
+
+		assert.equal(deserialized.messages[0].id, 'hist-1');
+		assert.equal(deserialized.messages[0].sender, 'swift-fox-42');
+		assert.equal(deserialized.messages[0].timestamp, 1725555000000);
+		assert.deepEqual(deserialized.messages[0].segments, [{ type: 'text', text: 'First historical message' }]);
+
+		assert.equal(deserialized.messages[1].id, 'hist-2');
+		assert.equal(deserialized.messages[1].sender, 'brave-badger-19');
+		assert.equal(deserialized.messages[1].timestamp, 1725555050000);
+		assert.equal(deserialized.messages[1].segments.length, 2);
+		assert.deepEqual(deserialized.messages[1].segments[0], { type: 'text', text: 'Here is the helper function:' });
+		assert.deepEqual(deserialized.messages[1].segments[1], { type: 'code', code: 'fn run() -> bool { true }', language: 'rust' });
+	});
+
+	test('serializes empty chat history array to valid wire frame', () => {
+		const serialized = serializeChatHistorySync([]);
+		assert.ok(serialized instanceof Uint8Array);
+
+		const deserialized = deserializeChatHistorySync(serialized);
+		assert.ok(deserialized);
+		assert.equal(deserialized.type, CHAT_HISTORY_SYNC_TYPE);
+		assert.deepEqual(deserialized.messages, []);
+	});
+
+	test('rejects corrupt, incomplete, or malformed history sync payloads', () => {
+		const invalidPayloads: (Uint8Array | string)[] = [
+			new Uint8Array([]),
+			new Uint8Array([1, 2, 3]),
+			new TextEncoder().encode('not-json'),
+			new TextEncoder().encode('{"type":"wrong_type","messages":[]}'),
+			new TextEncoder().encode('{"type":"CHAT_HISTORY_SYNC"}'),
+			new TextEncoder().encode('{"type":"CHAT_HISTORY_SYNC","messages":"not-array"}'),
+			new TextEncoder().encode('{"type":"CHAT_HISTORY_SYNC","messages":null}')
+		];
+
+		for (const payload of invalidPayloads) {
+			const bytes = payload instanceof Uint8Array ? payload : new TextEncoder().encode(payload);
+			const res = deserializeChatHistorySync(bytes);
+			assert.equal(res, null);
+		}
+	});
+
+	test('deserializes lowercase type chat_history_sync safely', () => {
+		const wire = {
+			type: 'chat_history_sync',
+			messages: [
+				{
+					id: 'm1',
+					sender: 'alice',
+					timestamp: 1000,
+					segments: [{ type: 'text', text: 'hello' }]
+				}
+			]
+		};
+		const bytes = new TextEncoder().encode(JSON.stringify(wire));
+		const res = deserializeChatHistorySync(bytes);
+		assert.ok(res);
+		assert.equal(res.messages.length, 1);
+		assert.equal(res.messages[0].id, 'm1');
+	});
+
+	test('safely skips malformed items inside messages array while keeping valid ones', () => {
+		const wire = {
+			type: 'CHAT_HISTORY_SYNC',
+			messages: [
+				{ id: '', sender: 'alice', timestamp: 1000, segments: [{ type: 'text', text: 'skip: empty id' }] },
+				{ id: 'valid-1', sender: 'bob', timestamp: 2000, segments: [{ type: 'text', text: 'keep: valid' }] },
+				{ id: 'bad-2', sender: 'bob', timestamp: 3000, segments: [] },
+				{ id: 'bad-3', sender: 'bob', timestamp: 4000, segments: [{ type: 'unknown' }] }
+			]
+		};
+		const bytes = new TextEncoder().encode(JSON.stringify(wire));
+		const res = deserializeChatHistorySync(bytes);
+		assert.ok(res);
+		assert.equal(res.messages.length, 1);
+		assert.equal(res.messages[0].id, 'valid-1');
+	});
+});
+
+describe('Chat Store mergeHistory Deduplication & Chronological Ordering', () => {
+	let store: ReturnType<typeof createChatStore>;
+
+	beforeEach(() => {
+		store = createChatStore();
+	});
+
+	test('merges historical messages into empty store in chronological order', () => {
+		const history: ChatMessage[] = [
+			{ id: 'm2', sender: 'bob', timestamp: 2000, segments: [{ type: 'text', text: 'Second' }], isSelf: false, isHistory: true },
+			{ id: 'm1', sender: 'alice', timestamp: 1000, segments: [{ type: 'text', text: 'First' }], isSelf: false, isHistory: true },
+			{ id: 'm3', sender: 'alice', timestamp: 3000, segments: [{ type: 'text', text: 'Third' }], isSelf: false, isHistory: true }
+		];
+
+		store.mergeHistory(history);
+
+		let state!: ChatState;
+		store.subscribe((s) => (state = s))();
+
+		assert.equal(state.messages.length, 3);
+		assert.equal(state.messages[0].id, 'm1');
+		assert.equal(state.messages[1].id, 'm2');
+		assert.equal(state.messages[2].id, 'm3');
+	});
+
+	test('deduplicates identical message IDs across multiple sync payloads', () => {
+		const payload1: ChatMessage[] = [
+			{ id: 'm1', sender: 'alice', timestamp: 1000, segments: [{ type: 'text', text: 'Hi' }], isSelf: false, isHistory: true },
+			{ id: 'm2', sender: 'bob', timestamp: 2000, segments: [{ type: 'text', text: 'Hey' }], isSelf: false, isHistory: true }
+		];
+
+		const payload2: ChatMessage[] = [
+			{ id: 'm2', sender: 'bob', timestamp: 2000, segments: [{ type: 'text', text: 'Hey' }], isSelf: false, isHistory: true },
+			{ id: 'm3', sender: 'carol', timestamp: 3000, segments: [{ type: 'text', text: 'Welcome' }], isSelf: false, isHistory: true }
+		];
+
+		store.mergeHistory(payload1);
+		store.mergeHistory(payload2);
+
+		let state!: ChatState;
+		store.subscribe((s) => (state = s))();
+
+		assert.equal(state.messages.length, 3);
+		assert.equal(state.messages[0].id, 'm1');
+		assert.equal(state.messages[1].id, 'm2');
+		assert.equal(state.messages[2].id, 'm3');
+	});
+
+	test('interleaves historical messages with existing local live messages chronologically', () => {
+		store.addMessage({
+			id: 'live-1',
+			sender: 'self',
+			timestamp: 2500,
+			segments: [{ type: 'text', text: 'Live message sent earlier' }],
+			isSelf: true
+		});
+
+		const history: ChatMessage[] = [
+			{ id: 'h1', sender: 'alice', timestamp: 1000, segments: [{ type: 'text', text: 'Past message 1' }], isSelf: false, isHistory: true },
+			{ id: 'h2', sender: 'bob', timestamp: 2000, segments: [{ type: 'text', text: 'Past message 2' }], isSelf: false, isHistory: true },
+			{ id: 'h3', sender: 'alice', timestamp: 3000, segments: [{ type: 'text', text: 'Past message 3' }], isSelf: false, isHistory: true }
+		];
+
+		store.mergeHistory(history);
+
+		let state!: ChatState;
+		store.subscribe((s) => (state = s))();
+
+		assert.equal(state.messages.length, 4);
+		assert.equal(state.messages[0].id, 'h1');
+		assert.equal(state.messages[1].id, 'h2');
+		assert.equal(state.messages[2].id, 'live-1');
+		assert.equal(state.messages[3].id, 'h3');
+	});
+
+	test('handles duplicate message IDs within the incoming batch itself', () => {
+		const batchWithInternalDuplicates: ChatMessage[] = [
+			{ id: 'dup-1', sender: 'alice', timestamp: 1000, segments: [{ type: 'text', text: 'First instance' }], isSelf: false, isHistory: true },
+			{ id: 'dup-1', sender: 'alice', timestamp: 1000, segments: [{ type: 'text', text: 'Second instance' }], isSelf: false, isHistory: true },
+			{ id: 'm-2', sender: 'bob', timestamp: 2000, segments: [{ type: 'text', text: 'Second message' }], isSelf: false, isHistory: true }
+		];
+
+		store.mergeHistory(batchWithInternalDuplicates);
+
+		let state!: ChatState;
+		store.subscribe((s) => (state = s))();
+
+		assert.equal(state.messages.length, 2);
+		assert.equal(state.messages[0].id, 'dup-1');
+		assert.equal(state.messages[1].id, 'm-2');
+	});
+
+	test('deterministic tie-breaker sorts by ID when timestamps are identical', () => {
+		const sameTimestamp: ChatMessage[] = [
+			{ id: 'b-id', sender: 'bob', timestamp: 5000, segments: [{ type: 'text', text: 'B' }], isSelf: false, isHistory: true },
+			{ id: 'a-id', sender: 'alice', timestamp: 5000, segments: [{ type: 'text', text: 'A' }], isSelf: false, isHistory: true }
+		];
+
+		store.mergeHistory(sameTimestamp);
+
+		let state!: ChatState;
+		store.subscribe((s) => (state = s))();
+
+		assert.equal(state.messages.length, 2);
+		assert.equal(state.messages[0].id, 'a-id');
+		assert.equal(state.messages[1].id, 'b-id');
+	});
+});
+
+describe('WebRTC P2P Chat History Synchronization (2 Peers: A -> B)', () => {
+	test('Peer A sends messages, Peer B connects later and receives full encrypted history', async () => {
+		const roomKey = await deriveInitialKey('1234-5678-9012', 'history-test-salt');
+
+		let pcAlice: MockRTCPeerConnection | null = null;
+		let pcBob: MockRTCPeerConnection | null = null;
+
+		const storeAlice = createChatStore();
+		const storeBob = createChatStore();
+
+		// Peer A sends two messages while alone in the room
+		storeAlice.addMessage({
+			id: 'msg-alice-1',
+			sender: 'swift-fox-42',
+			timestamp: 1000,
+			segments: [{ type: 'text', text: 'Hello, room created!' }],
+			isSelf: true
+		});
+		storeAlice.addMessage({
+			id: 'msg-alice-2',
+			sender: 'swift-fox-42',
+			timestamp: 2000,
+			segments: [{ type: 'code', code: 'const x = 42;', language: 'javascript' }],
+			isSelf: true
+		});
+
+		const managerAlice = new WebRtcManager({
+			activeKey: roomKey,
+			iceServers: [],
+			rtcPeerConnectionFactory: (cfg) => {
+				pcAlice = new MockRTCPeerConnection(cfg);
+				return pcAlice as unknown as RTCPeerConnection;
+			}
+		});
+
+		const managerBob = new WebRtcManager({
+			activeKey: roomKey,
+			iceServers: [],
+			rtcPeerConnectionFactory: (cfg) => {
+				pcBob = new MockRTCPeerConnection(cfg);
+				return pcBob as unknown as RTCPeerConnection;
+			}
+		});
+
+		const syncAlice = new ChatHistorySyncManager(managerAlice, {
+			autoListen: true,
+			chatStore: storeAlice
+		});
+		const syncBob = new ChatHistorySyncManager(managerBob, {
+			autoListen: true,
+			chatStore: storeBob
+		});
+
+		// Sessions created
+		await managerAlice.getOrCreateSession('bob', true);
+		await managerBob.getOrCreateSession('alice', false);
+
+		// Link data channels
+		const aliceDc = pcAlice!.localDataChannels[0];
+		const bobDc = new MockRTCDataChannel('fastchat-data');
+		aliceDc.peerChannel = bobDc;
+		bobDc.peerChannel = aliceDc;
+		pcBob!.ondatachannel?.({ channel: bobDc });
+
+		// Open data channels -> triggers onDataChannelOpen on both peers
+		aliceDc.open();
+		bobDc.open();
+
+		// Wait for microtask delivery and cryptographic decryption
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Verify Peer B received the complete earlier history from Peer A
+		let stateBob!: ChatState;
+		storeBob.subscribe((s) => (stateBob = s))();
+
+		assert.equal(stateBob.messages.length, 2, 'Peer B must receive exactly 2 historical messages');
+		assert.equal(stateBob.messages[0].id, 'msg-alice-1');
+		assert.equal(stateBob.messages[0].sender, 'swift-fox-42');
+		assert.equal(stateBob.messages[0].isSelf, false);
+		assert.equal(stateBob.messages[0].isHistory, true);
+		assert.deepEqual(stateBob.messages[0].segments, [{ type: 'text', text: 'Hello, room created!' }]);
+
+		assert.equal(stateBob.messages[1].id, 'msg-alice-2');
+		assert.equal(stateBob.messages[1].isSelf, false);
+		assert.equal(stateBob.messages[1].isHistory, true);
+		assert.deepEqual(stateBob.messages[1].segments, [{ type: 'code', code: 'const x = 42;', language: 'javascript' }]);
+
+		// Verify that payload transmitted over DataChannel was AES-256-GCM encrypted
+		assert.ok(aliceDc.sentPackets.length >= 1);
+		const rawEncryptedBytes = new Uint8Array(aliceDc.sentPackets[0] as ArrayBuffer);
+		const rawString = new TextDecoder().decode(rawEncryptedBytes);
+		assert.equal(rawString.includes('Hello, room created!'), false, 'Ciphertext must not expose plaintext');
+		assert.equal(rawString.includes('msg-alice-1'), false, 'Ciphertext must not expose message IDs');
+
+		// Verify that history is sent ONCE: subsequent open events do NOT retransmit
+		const packetCountBefore = aliceDc.sentPackets.length;
+		await syncAlice.syncHistoryToPeer('bob'); // Idempotency check
+		assert.equal(aliceDc.sentPackets.length, packetCountBefore, 'Must not resend history to already-synced peer');
+
+		syncAlice.destroy();
+		syncBob.destroy();
+		managerAlice.destroy();
+		managerBob.destroy();
+	});
+});
+
+describe('WebRTC Mesh P2P Chat History Synchronization (3-Peer Mesh: A, B, C)', () => {
+	test('Peer C joins mesh after A and B have chatted, receiving full unified history without duplicates in chronological order', async () => {
+		const roomKey = await deriveInitialKey('1234-5678-9012', 'mesh-3peer-salt');
+
+		const storeAlice = createChatStore();
+		const storeBob = createChatStore();
+		const storeCarol = createChatStore();
+
+		let pcAliceToBob: MockRTCPeerConnection | null = null;
+		let pcBobToAlice: MockRTCPeerConnection | null = null;
+
+		let pcAliceToCarol: MockRTCPeerConnection | null = null;
+		let pcCarolToAlice: MockRTCPeerConnection | null = null;
+
+		let pcBobToCarol: MockRTCPeerConnection | null = null;
+		let pcCarolToBob: MockRTCPeerConnection | null = null;
+
+		const managerAlice = new WebRtcManager({
+			activeKey: roomKey,
+			iceServers: [],
+			rtcPeerConnectionFactory: (cfg) => {
+				const pc = new MockRTCPeerConnection(cfg);
+				if (!pcAliceToBob) pcAliceToBob = pc;
+				else pcAliceToCarol = pc;
+				return pc as unknown as RTCPeerConnection;
+			}
+		});
+
+		const managerBob = new WebRtcManager({
+			activeKey: roomKey,
+			iceServers: [],
+			rtcPeerConnectionFactory: (cfg) => {
+				const pc = new MockRTCPeerConnection(cfg);
+				if (!pcBobToAlice) pcBobToAlice = pc;
+				else pcBobToCarol = pc;
+				return pc as unknown as RTCPeerConnection;
+			}
+		});
+
+		const managerCarol = new WebRtcManager({
+			activeKey: roomKey,
+			iceServers: [],
+			rtcPeerConnectionFactory: (cfg) => {
+				const pc = new MockRTCPeerConnection(cfg);
+				if (!pcCarolToAlice) pcCarolToAlice = pc;
+				else pcCarolToBob = pc;
+				return pc as unknown as RTCPeerConnection;
+			}
+		});
+
+		const syncAlice = new ChatHistorySyncManager(managerAlice, { autoListen: true, chatStore: storeAlice });
+		const syncBob = new ChatHistorySyncManager(managerBob, { autoListen: true, chatStore: storeBob });
+		const syncCarol = new ChatHistorySyncManager(managerCarol, { autoListen: true, chatStore: storeCarol });
+
+		// Phase 1: Alice creates message 1
+		storeAlice.addMessage({
+			id: 'msg-1-alice',
+			sender: 'alice-01',
+			timestamp: 1000,
+			segments: [{ type: 'text', text: 'Message 1 from Alice' }],
+			isSelf: true
+		});
+
+		// Phase 2: Bob connects to Alice
+		await managerAlice.getOrCreateSession('bob', true);
+		await managerBob.getOrCreateSession('alice', false);
+
+		const dcAliceToBob = pcAliceToBob!.localDataChannels[0];
+		const dcBobToAlice = new MockRTCDataChannel('fastchat-data');
+		dcAliceToBob.peerChannel = dcBobToAlice;
+		dcBobToAlice.peerChannel = dcAliceToBob;
+		pcBobToAlice!.ondatachannel?.({ channel: dcBobToAlice });
+
+		dcAliceToBob.open();
+		dcBobToAlice.open();
+
+		await new Promise((r) => setTimeout(r, 40));
+
+		// Bob now has message 1 from Alice
+		let stateBob!: ChatState;
+		storeBob.subscribe((s) => (stateBob = s))();
+		assert.equal(stateBob.messages.length, 1);
+		assert.equal(stateBob.messages[0].id, 'msg-1-alice');
+
+		// Phase 3: Bob sends message 2 live to Alice
+		const msg2: { id: string; sender: string; timestamp: number; segments: MessageSegment[] } = {
+			id: 'msg-2-bob',
+			sender: 'bob-02',
+			timestamp: 2000,
+			segments: [{ type: 'text', text: 'Message 2 from Bob' }]
+		};
+		storeBob.addMessage({ ...msg2, isSelf: true });
+
+
+		// Bob broadcasts live message 2 to Alice
+		managerBob.onMessage((_, payload) => {
+			const chat = deserializeChatMessage(payload);
+			if (chat) storeBob.addMessage({ ...chat, isSelf: false });
+		});
+		managerAlice.onMessage((_, payload) => {
+			const chat = deserializeChatMessage(payload);
+			if (chat) storeAlice.addMessage({ ...chat, isSelf: false });
+		});
+
+		await managerBob.broadcast(serializeChatMessage({ type: 'chat', ...msg2 }));
+		await new Promise((r) => setTimeout(r, 40));
+
+		// Verify both Alice and Bob have [msg-1-alice, msg-2-bob]
+		let stateAlice!: ChatState;
+		storeAlice.subscribe((s) => (stateAlice = s))();
+		assert.equal(stateAlice.messages.length, 2);
+		assert.equal(stateAlice.messages[0].id, 'msg-1-alice');
+		assert.equal(stateAlice.messages[1].id, 'msg-2-bob');
+
+		storeBob.subscribe((s) => (stateBob = s))();
+		assert.equal(stateBob.messages.length, 2);
+		assert.equal(stateBob.messages[0].id, 'msg-1-alice');
+		assert.equal(stateBob.messages[1].id, 'msg-2-bob');
+
+		// Phase 4: Peer Carol joins the room later!
+		// Carol establishes mesh connections to BOTH Alice and Bob
+		await managerAlice.getOrCreateSession('carol', true);
+		await managerCarol.getOrCreateSession('alice', false);
+
+		const dcAliceToCarol = pcAliceToCarol!.localDataChannels[0];
+		const dcCarolToAlice = new MockRTCDataChannel('fastchat-data');
+		dcAliceToCarol.peerChannel = dcCarolToAlice;
+		dcCarolToAlice.peerChannel = dcAliceToCarol;
+		pcCarolToAlice!.ondatachannel?.({ channel: dcCarolToAlice });
+
+		await managerBob.getOrCreateSession('carol', true);
+		await managerCarol.getOrCreateSession('bob', false);
+
+		const dcBobToCarol = pcBobToCarol!.localDataChannels[0];
+		const dcCarolToBob = new MockRTCDataChannel('fastchat-data');
+		dcBobToCarol.peerChannel = dcCarolToBob;
+		dcCarolToBob.peerChannel = dcBobToCarol;
+		pcCarolToBob!.ondatachannel?.({ channel: dcCarolToBob });
+
+		// Both Alice and Bob open DataChannels with Carol concurrently
+		dcAliceToCarol.open();
+		dcCarolToAlice.open();
+		dcBobToCarol.open();
+		dcCarolToBob.open();
+
+		// Wait for both history payloads to arrive, decrypt, and merge on Carol
+		await new Promise((r) => setTimeout(r, 80));
+
+		// Verify Carol's unified chat store
+		let stateCarol!: ChatState;
+		storeCarol.subscribe((s) => (stateCarol = s))();
+
+		assert.equal(
+			stateCarol.messages.length,
+			2,
+			`Carol must contain exactly 2 messages without duplicates, received: ${stateCarol.messages.length}`
+		);
+		assert.equal(stateCarol.messages[0].id, 'msg-1-alice');
+		assert.equal(stateCarol.messages[0].timestamp, 1000);
+		assert.equal(stateCarol.messages[0].isHistory, true);
+
+		assert.equal(stateCarol.messages[1].id, 'msg-2-bob');
+		assert.equal(stateCarol.messages[1].timestamp, 2000);
+		assert.equal(stateCarol.messages[1].isHistory, true);
+
+		syncAlice.destroy();
+		syncBob.destroy();
+		syncCarol.destroy();
+		managerAlice.destroy();
+		managerBob.destroy();
+		managerCarol.destroy();
+	});
+});
+
+describe('Concurrent Live Messages & History Sync Interleaving', () => {
+	test('live messages arriving during or immediately after history sync are never dropped or duplicated', async () => {
+		const roomKey = await deriveInitialKey('1234-5678-9012', 'concurrent-test-salt');
+		const storeAlice = createChatStore();
+		const storeBob = createChatStore();
+
+		// Alice has historical message
+		storeAlice.addMessage({
+			id: 'm1',
+			sender: 'alice',
+			timestamp: 1000,
+			segments: [{ type: 'text', text: 'Historical msg 1' }],
+			isSelf: true
+		});
+
+		let pcAlice: MockRTCPeerConnection | null = null;
+		let pcBob: MockRTCPeerConnection | null = null;
+
+		const managerAlice = new WebRtcManager({
+			activeKey: roomKey,
+			iceServers: [],
+			rtcPeerConnectionFactory: (cfg) => {
+				pcAlice = new MockRTCPeerConnection(cfg);
+				return pcAlice as unknown as RTCPeerConnection;
+			}
+		});
+
+		const managerBob = new WebRtcManager({
+			activeKey: roomKey,
+			iceServers: [],
+			rtcPeerConnectionFactory: (cfg) => {
+				pcBob = new MockRTCPeerConnection(cfg);
+				return pcBob as unknown as RTCPeerConnection;
+			}
+		});
+
+		// Set up history sync and live message listener on Bob
+		const syncAlice = new ChatHistorySyncManager(managerAlice, { autoListen: true, chatStore: storeAlice });
+		const syncBob = new ChatHistorySyncManager(managerBob, { autoListen: true, chatStore: storeBob });
+
+		managerBob.onMessage((peerId, payload) => {
+			const chat = deserializeChatMessage(payload);
+			if (chat) {
+				storeBob.addMessage({
+					id: chat.id,
+					sender: chat.sender,
+					segments: chat.segments,
+					timestamp: chat.timestamp,
+					isSelf: false,
+					senderPeerId: peerId
+				});
+			}
+		});
+
+		await managerAlice.getOrCreateSession('bob', true);
+		await managerBob.getOrCreateSession('alice', false);
+
+		const aliceDc = pcAlice!.localDataChannels[0];
+		const bobDc = new MockRTCDataChannel('fastchat-data');
+		aliceDc.peerChannel = bobDc;
+		bobDc.peerChannel = aliceDc;
+		pcBob!.ondatachannel?.({ channel: bobDc });
+
+		// Open channel
+		aliceDc.open();
+		bobDc.open();
+
+		// Concurrently send live message m2 while history sync is in transit
+		const livePayload = serializeChatMessage({
+			type: 'chat',
+			id: 'm2',
+			sender: 'alice',
+			timestamp: 1500,
+			segments: [{ type: 'text', text: 'Concurrent live message' }]
+		});
+		await managerAlice.send('bob', livePayload);
+
+		// Wait for delivery
+		await new Promise((r) => setTimeout(r, 60));
+
+		let stateBob!: ChatState;
+		storeBob.subscribe((s) => (stateBob = s))();
+
+		assert.equal(stateBob.messages.length, 2, 'Must contain both m1 and m2');
+		assert.equal(stateBob.messages[0].id, 'm1');
+		assert.equal(stateBob.messages[0].timestamp, 1000);
+		assert.equal(stateBob.messages[1].id, 'm2');
+		assert.equal(stateBob.messages[1].timestamp, 1500);
+
+		// Simulate duplicate arrival of m2 via a delayed history sync packet
+		syncBob.handleSyncPayload(
+			'alice',
+			serializeChatHistorySync([
+				{ id: 'm1', sender: 'alice', timestamp: 1000, segments: [{ type: 'text', text: 'm1' }] },
+				{ id: 'm2', sender: 'alice', timestamp: 1500, segments: [{ type: 'text', text: 'm2' }] }
+			])
+		);
+
+		storeBob.subscribe((s) => (stateBob = s))();
+		assert.equal(stateBob.messages.length, 2, 'Duplicate m1 and m2 in history sync must be skipped');
+
+		syncAlice.destroy();
+		syncBob.destroy();
+		managerAlice.destroy();
+		managerBob.destroy();
+	});
+});
+
 

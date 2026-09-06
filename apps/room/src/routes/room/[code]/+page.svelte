@@ -26,11 +26,13 @@
 		updatePastedBlockContent,
 		setPastedBlockLanguageMode,
 		buildMessageSegments,
+		ChatHistorySyncManager,
 		type PastedBlock,
 		type ComposerBlock,
 		type SupportedLanguage,
 		type MessageSegment
 	} from '$lib/chat';
+
 	import { FileSender, FileReceiver, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
 	import { validateRoomCode, resolveRoomIdentifier } from '$lib/utils/roomCode';
@@ -60,10 +62,16 @@
 	let unsubWebRtcMessage: (() => void) | null = null;
 	let fileSender = $state<FileSender | null>(null);
 	let fileReceiver = $state<FileReceiver | null>(null);
+	let chatHistorySync = $state<ChatHistorySyncManager | null>(null);
 	let isSecurityInfoOpen = $state(false);
 	let isZippingFiles = $state(false);
 	let retryingPeers = $state<Record<string, boolean>>({});
 	let ownerPromotionBanner = $state(false);
+
+	const firstHistoricalMessageId = $derived(
+		$chatStore.messages.find((m) => m.isHistory)?.id
+	);
+
 
 	let composerBlocks = $state<ComposerBlock[]>([]);
 	let isManualCodeMode = $state(false);
@@ -320,6 +328,8 @@
 	}
 
 	function leaveRoom() {
+		chatHistorySync?.destroy();
+		chatHistorySync = null;
 		webRtcManager.disconnectAll();
 		signalingClient.disconnect();
 		roomStore.reset();
@@ -341,9 +351,11 @@
 			chatStore.addSystemMessage('Room created.');
 		}
 		webRtcManager.init();
+		chatHistorySync = new ChatHistorySyncManager(webRtcManager);
 		timerInterval = setInterval(() => {
 			now = Math.floor(Date.now() / 1000);
 		}, 1000);
+
 
 		fileSender = new FileSender(webRtcManager, {
 			onProgress: (transferId, peerId, progress) => {
@@ -407,10 +419,16 @@
 							}
 						}
 					} else if (
+						data.type === 'CHAT_HISTORY_SYNC' ||
+						data.type === 'chat_history_sync'
+					) {
+						chatHistorySync?.handleSyncPayload(peerId, payload);
+					} else if (
 						data.type === 'file-meta' ||
 						data.type === 'file-complete' ||
 						data.type === 'file-cancel'
 					) {
+
 						fileReceiver?.handleControlMessage(peerId, data);
 					} else if (data.type === 'file-ready') {
 						fileSender?.handleControlMessage(peerId, data);
@@ -463,6 +481,7 @@
 					const peer = msg.peer_id || msg.peerId || 'Unknown peer';
 					details = `Peer disconnected: ${peer}`;
 					chatStore.addSystemMessage(`Peer ${peer} left the room.`);
+					chatHistorySync?.removePeer(peer);
 					break;
 				}
 				case 'ROOM_OWNER_CHANGED': {
@@ -518,6 +537,10 @@
 	});
 
 	onDestroy(() => {
+		if (chatHistorySync) {
+			chatHistorySync.destroy();
+			chatHistorySync = null;
+		}
 		webRtcManager.disconnectAll();
 		signalingClient.disconnect();
 		roomStore.reset();
@@ -533,6 +556,7 @@
 			unsubMessage();
 		}
 	});
+
 </script>
 
 <svelte:head>
@@ -884,7 +908,21 @@
 							</div>
 						{:else}
 							{#each $chatStore.messages as msg (msg.id)}
+								{#if msg.id === firstHistoricalMessageId}
+									<div class="flex items-center my-3 gap-3" data-testid="earlier-history-separator">
+										<div class="flex-1 border-t border-cyan-500/20"></div>
+										<div class="px-2.5 py-0.5 rounded-full bg-cyan-950/30 border border-cyan-500/20 text-[10px] uppercase font-mono tracking-wider text-cyan-300 flex items-center gap-1.5 shadow-[0_0_10px_rgba(0,229,255,0.05)]">
+											<svg class="w-3 h-3 text-cyan-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+												<circle cx="12" cy="12" r="10"/>
+												<polyline points="12 6 12 12 16 14"/>
+											</svg>
+											<span>Earlier History</span>
+										</div>
+										<div class="flex-1 border-t border-cyan-500/20"></div>
+									</div>
+								{/if}
 								{#if msg.isSystem}
+
 									<div class="flex items-center justify-center my-2">
 										<div class="px-3.5 py-1.5 rounded-full bg-cyan-950/40 border border-cyan-500/30 text-cyan-300 text-[11px] font-mono flex items-center gap-2 shadow-[0_0_15px_rgba(0,229,255,0.1)] max-w-[90%] text-center">
 											<svg class="w-3.5 h-3.5 text-cyan-400 shrink-0 fill-current" viewBox="0 0 24 24">
