@@ -4,6 +4,7 @@
 		activeUploads,
 		activeDownloads,
 		completedFiles,
+		historicalTransfers,
 		hasLargeFileRamWarning,
 		hasActiveUpload
 	} from '$lib/stores/transfer';
@@ -12,14 +13,16 @@
 	import { openDataChannelsCount, hasFailedPeers } from '$lib/stores/webrtc';
 	import type { FileSender } from '$lib/transfer/sender';
 	import type { FileReceiver } from '$lib/transfer/receiver';
+	import type { FileTransferSyncManager } from '$lib/transfer/sync';
 
 	interface Props {
-		fileSender?: FileSender;
-		fileReceiver?: FileReceiver;
+		fileSender?: FileSender | null;
+		fileReceiver?: FileReceiver | null;
+		fileTransferSync?: FileTransferSyncManager | null;
 		username?: string;
 	}
 
-	let { fileSender, fileReceiver, username = 'anonymous' }: Props = $props();
+	let { fileSender, fileReceiver, fileTransferSync, username = 'anonymous' }: Props = $props();
 
 	let fileInput: HTMLInputElement | null = null;
 	let selectedFiles = $state<File[]>([]);
@@ -101,6 +104,15 @@
 
 	function handleAbortIncoming(transferId: string) {
 		fileReceiver?.abortTransfer(transferId, 'Cancelled by local user');
+	}
+
+	async function handleRequestHistoricalFile(fileId: string) {
+		if (!fileTransferSync) return;
+		try {
+			await fileTransferSync.requestFile(fileId);
+		} catch (err) {
+			console.error('Failed to request historical file:', err);
+		}
 	}
 </script>
 
@@ -338,6 +350,124 @@
 					{/if}
 				</div>
 			{/each}
+		</div>
+	{/if}
+
+	<!-- Earlier Transfers (Synchronized History from Room Participants) -->
+	{#if $historicalTransfers.length > 0}
+		<div class="space-y-3 pt-3 border-t border-white/5" data-testid="historical-transfers-section">
+			<div class="flex items-center justify-between">
+				<h3 class="text-[11px] font-bold uppercase tracking-wider text-cyan-400 font-mono flex items-center gap-1.5">
+					<svg class="w-3.5 h-3.5 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="12" cy="12" r="10"/>
+						<polyline points="12 6 12 12 16 14"/>
+					</svg>
+					<span>EARLIER TRANSFERS ({$historicalTransfers.length})</span>
+				</h3>
+				<span class="text-[10px] text-zinc-500 font-mono uppercase">On-Demand Sync</span>
+			</div>
+
+			<ul class="space-y-2.5 text-xs">
+				{#each $historicalTransfers as file (file.fileId)}
+					<li class="p-3.5 rounded-xl bg-[#06080e] border border-cyan-500/20 hover:border-cyan-500/40 space-y-2 transition-colors" data-testid="historical-file-{file.fileId}">
+						<div class="flex flex-wrap items-center justify-between gap-2">
+							<div class="flex items-center space-x-2.5 truncate max-w-[70%]">
+								<svg class="w-4 h-4 text-cyan-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+									<polyline points="14 2 14 8 20 8"/>
+									<line x1="16" y1="13" x2="8" y2="13"/>
+									<line x1="16" y1="17" x2="8" y2="17"/>
+								</svg>
+								<span class="font-medium truncate text-zinc-200" title={file.fileName}>{file.fileName}</span>
+								<span class="text-zinc-500 text-[11px] font-mono">({formatFileSize(file.fileSize)})</span>
+							</div>
+
+							<!-- Action Buttons / Status Badges -->
+							<div class="flex items-center space-x-2">
+								{#if file.status === 'available'}
+									<button
+										type="button"
+										onclick={() => handleRequestHistoricalFile(file.fileId)}
+										class="min-h-[32px] px-3.5 py-1 rounded-full bg-cyan-500 hover:bg-cyan-400 text-black font-bold uppercase text-[11px] transition-all cursor-pointer shadow-[0_0_12px_rgba(0,229,255,0.25)] flex items-center gap-1.5"
+										data-testid="download-historical-btn"
+									>
+										<svg class="w-3 h-3 text-black" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+											<polyline points="7 10 12 15 17 10"/>
+											<line x1="12" x2="12" y1="15" y2="3"/>
+										</svg>
+										<span>Download</span>
+									</button>
+								{:else if file.status === 'requesting'}
+									<span class="text-[10px] px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 uppercase font-mono font-bold animate-pulse flex items-center gap-1.5">
+										<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+										Requesting...
+									</span>
+								{:else if file.status === 'downloading'}
+									<span class="text-[10px] px-2.5 py-1 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 uppercase font-mono font-bold flex items-center gap-1.5">
+										<span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+										Downloading ({file.progress ?? 0}%)
+									</span>
+								{:else if file.status === 'completed'}
+									{#if file.downloadUrl || file.blob}
+										<a
+											href={file.downloadUrl || (file.blob ? URL.createObjectURL(file.blob) : '#')}
+											download={file.fileName}
+											class="min-h-[32px] px-3.5 py-1 rounded-full bg-white hover:bg-zinc-200 text-black font-bold uppercase text-[11px] transition-all shrink-0 flex items-center gap-1.5 shadow-sm"
+										>
+											<svg class="w-3 h-3 text-cyan-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+												<polyline points="20 6 9 17 4 12"/>
+											</svg>
+											<span>Save File</span>
+										</a>
+									{:else}
+										<span class="text-[10px] px-2.5 py-1 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 uppercase font-mono font-bold">
+											Completed
+										</span>
+									{/if}
+								{:else if file.status === 'unavailable'}
+									<span class="text-[10px] px-2.5 py-1 rounded-full bg-red-950/40 text-red-400 border border-red-500/30 uppercase font-mono font-bold flex items-center gap-1">
+										<svg class="w-3 h-3 text-red-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<circle cx="12" cy="12" r="10"/>
+											<line x1="15" y1="9" x2="9" y2="15"/>
+											<line x1="9" y1="9" x2="15" y2="15"/>
+										</svg>
+										<span>Unavailable</span>
+									</span>
+								{/if}
+							</div>
+						</div>
+
+						<!-- Metadata subtitle: Sender & Timestamp -->
+						<div class="text-[11px] text-zinc-400 flex items-center justify-between font-mono">
+							<span>FROM: <strong class="text-zinc-300">{file.senderUsername || file.senderPeerId.slice(0, 8) + '...'}</strong></span>
+							<span class="text-zinc-500">{new Date(file.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+						</div>
+
+						<!-- Progress bar during active downloading -->
+						{#if file.status === 'downloading' && typeof file.progress === 'number'}
+							<div class="w-full bg-[#030407] rounded-full h-1.5 overflow-hidden border border-white/5 mt-1.5">
+								<div
+									class="bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full transition-all duration-200"
+									style="width: {file.progress}%"
+								></div>
+							</div>
+						{/if}
+
+						<!-- Explicit error message banner for unavailable files -->
+						{#if file.status === 'unavailable'}
+							<div role="alert" class="p-2 rounded-lg bg-red-950/30 border border-red-500/30 text-red-300 text-[11px] font-mono flex items-center gap-1.5 mt-1">
+								<svg class="w-3.5 h-3.5 text-red-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<circle cx="12" cy="12" r="10"/>
+									<line x1="12" y1="8" x2="12" y2="12"/>
+									<line x1="12" y1="16" x2="12.01" y2="16"/>
+								</svg>
+								<span>{file.error || 'File unavailable: original sender has left the room'}</span>
+							</div>
+						{/if}
+					</li>
+				{/each}
+			</ul>
 		</div>
 	{/if}
 

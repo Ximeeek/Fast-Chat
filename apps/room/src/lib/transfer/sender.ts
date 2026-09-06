@@ -11,7 +11,8 @@ import type {
 	FileMetaWirePayload,
 	FileCompleteWirePayload,
 	FileCancelWirePayload,
-	FileControlWirePayload
+	FileControlWirePayload,
+	SentFileRecord
 } from './types.ts';
 
 export type TransferProgressCallback = (
@@ -38,6 +39,7 @@ export class FileSender {
 	private chunkSize: number;
 	private highWaterMark: number;
 	private activeTransfers: Map<string, OutgoingTransfer> = new Map();
+	private sentFileLog: Map<string, SentFileRecord> = new Map();
 	private peerStreamPromises: Map<string, Promise<void>> = new Map();
 	private progressCallbacks: Set<TransferProgressCallback> = new Set();
 
@@ -144,6 +146,24 @@ export class FileSender {
 		};
 
 		this.activeTransfers.set(transferId, transfer);
+
+		// Record reference and metadata in session RAM log
+		const localPeerId =
+			(this.webRtcManager as any).localPeerId ||
+			(this.webRtcManager as any).peerId ||
+			'';
+		const sentRecord: SentFileRecord = {
+			fileId: transferId,
+			file,
+			fileName,
+			fileSize: file.size,
+			fileType,
+			senderPeerId: localPeerId,
+			senderUsername: options.senderUsername || 'anonymous',
+			timestamp: Date.now(),
+			targetPeers: [...targetPeers]
+		};
+		this.sentFileLog.set(transferId, sentRecord);
 
 		// Broadcast file-meta announcement to all target peers
 		const metaPayload: FileMetaWirePayload = {
@@ -323,6 +343,43 @@ export class FileSender {
 	 */
 	public removeTransfer(transferId: string): void {
 		this.activeTransfers.delete(transferId);
+	}
+
+	/**
+	 * Retrieves a sent file record from the session RAM log by file ID.
+	 */
+	public getSentFile(fileId: string): SentFileRecord | undefined {
+		return this.sentFileLog.get(fileId);
+	}
+
+	/**
+	 * Returns all sent file records currently stored in the session RAM log.
+	 */
+	public getAllSentFiles(): SentFileRecord[] {
+		return Array.from(this.sentFileLog.values());
+	}
+
+	/**
+	 * Explicitly registers a file record into the session RAM log.
+	 */
+	public recordSentFile(record: SentFileRecord): void {
+		this.sentFileLog.set(record.fileId, record);
+	}
+
+	/**
+	 * Clears all retained file references and metadata from the session RAM log.
+	 */
+	public clearSentFileLog(): void {
+		this.sentFileLog.clear();
+	}
+
+	/**
+	 * Resets all sender state and releases all file handles from memory.
+	 */
+	public reset(): void {
+		this.activeTransfers.clear();
+		this.sentFileLog.clear();
+		this.peerStreamPromises.clear();
 	}
 
 	private notifyProgress(transferId: string, peerId: string, progress: RecipientProgress): void {

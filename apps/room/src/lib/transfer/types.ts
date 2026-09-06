@@ -43,13 +43,68 @@ export interface FileCompleteWirePayload {
 }
 
 /**
+ * Message category discriminator for WebRTC file transfer log synchronization frames.
+ */
+export const FILE_LOG_SYNC_TYPE = 'FILE_LOG_SYNC';
+
+/**
+ * Metadata entry representing a previously transmitted file in the room session.
+ */
+export interface FileLogEntry {
+	fileId: string;
+	fileName: string;
+	fileSize: number;
+	fileType?: string;
+	senderPeerId: string;
+	senderUsername?: string;
+	timestamp: number;
+}
+
+/**
+ * Structured wire payload schema for broadcasting the session's file transfer history to newly connected peers.
+ */
+export interface FileLogSyncWirePayload {
+	type: 'FILE_LOG_SYNC' | 'file_log_sync';
+	files: FileLogEntry[];
+}
+
+/**
+ * Message category discriminator for requesting retransmission of a historical file.
+ */
+export const FILE_REQUEST_TYPE = 'FILE_REQUEST';
+
+/**
+ * Wire payload sent directly to an original sender requesting retransmission of a file.
+ */
+export interface FileRequestWirePayload {
+	type: 'FILE_REQUEST' | 'file-request';
+	fileId: string;
+}
+
+/**
+ * Message category discriminator for signaling that a requested file cannot be provided.
+ */
+export const FILE_UNAVAILABLE_TYPE = 'FILE_UNAVAILABLE';
+
+/**
+ * Wire payload indicating that a requested historical file is unavailable.
+ */
+export interface FileUnavailableWirePayload {
+	type: 'FILE_UNAVAILABLE' | 'file-unavailable';
+	fileId: string;
+	reason?: string;
+}
+
+/**
  * Union of all JSON control payloads exchanged during file transfer negotiations.
  */
 export type FileControlWirePayload =
 	| FileMetaWirePayload
 	| FileReadyWirePayload
 	| FileCancelWirePayload
-	| FileCompleteWirePayload;
+	| FileCompleteWirePayload
+	| FileRequestWirePayload
+	| FileUnavailableWirePayload;
 
 /**
  * Parsed binary file chunk extracted from an encrypted WebRTC data frame.
@@ -148,3 +203,47 @@ export interface CompletedFileRecord {
 	downloadUrl?: string;
 	completedAt: number;
 }
+
+/**
+ * Status lifecycle of a historical file synchronized across peers.
+ */
+export type HistoricalTransferStatus =
+	| 'available'
+	| 'requesting'
+	| 'downloading'
+	| 'completed'
+	| 'unavailable';
+
+/**
+ * Client-side representation of a historical file transfer available for on-demand retransmission.
+ */
+export interface HistoricalFileRecord {
+	fileId: string;
+	fileName: string;
+	fileSize: number;
+	fileType?: string;
+	senderPeerId: string;
+	senderUsername?: string;
+	timestamp: number;
+	status: HistoricalTransferStatus;
+	progress?: number;
+	error?: string;
+	blob?: Blob;
+	downloadUrl?: string;
+}
+
+/**
+ * Local in-memory session record maintained by the original sender to satisfy on-demand retransmission requests.
+ */
+export interface SentFileRecord {
+	fileId: string;
+	file: File | Blob;
+	fileName: string;
+	fileSize: number;
+	fileType: string;
+	senderPeerId: string;
+	senderUsername?: string;
+	timestamp: number;
+	targetPeers?: string[];
+}
+

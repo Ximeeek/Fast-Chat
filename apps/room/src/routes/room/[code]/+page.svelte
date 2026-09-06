@@ -33,7 +33,7 @@
 		type MessageSegment
 	} from '$lib/chat';
 
-	import { FileSender, FileReceiver, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
+	import { FileSender, FileReceiver, FileTransferSyncManager, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
 	import { validateRoomCode, resolveRoomIdentifier } from '$lib/utils/roomCode';
 	import RoomCodeHero from '$lib/room/RoomCodeHero.svelte';
@@ -62,6 +62,7 @@
 	let unsubWebRtcMessage: (() => void) | null = null;
 	let fileSender = $state<FileSender | null>(null);
 	let fileReceiver = $state<FileReceiver | null>(null);
+	let fileTransferSync = $state<FileTransferSyncManager | null>(null);
 	let chatHistorySync = $state<ChatHistorySyncManager | null>(null);
 	let isSecurityInfoOpen = $state(false);
 	let isZippingFiles = $state(false);
@@ -330,6 +331,10 @@
 	function leaveRoom() {
 		chatHistorySync?.destroy();
 		chatHistorySync = null;
+		fileTransferSync?.destroy();
+		fileTransferSync = null;
+		fileSender?.reset();
+		fileReceiver?.reset();
 		webRtcManager.disconnectAll();
 		signalingClient.disconnect();
 		roomStore.reset();
@@ -365,6 +370,7 @@
 
 		fileReceiver = new FileReceiver({
 			webRtcManager,
+			shouldAutoAccept: (transferId) => Boolean(fileTransferSync?.isRequestPending(transferId)),
 			onTransferOffered: (transfer) => {
 				transferStore.addIncomingTransfer(transfer);
 			},
@@ -374,6 +380,12 @@
 			onCompleted: (record) => {
 				transferStore.addCompletedRecord(record);
 			}
+		});
+
+		fileTransferSync = new FileTransferSyncManager(webRtcManager, {
+			fileSender,
+			fileReceiver,
+			store: transferStore
 		});
 
 		unsubWebRtcMessage = webRtcManager.onMessage((peerId, payload) => {
@@ -423,6 +435,25 @@
 						data.type === 'chat_history_sync'
 					) {
 						chatHistorySync?.handleSyncPayload(peerId, payload);
+					} else if (
+						data.type === 'FILE_LOG_SYNC' ||
+						data.type === 'file_log_sync'
+					) {
+						fileTransferSync?.handleSyncPayload(peerId, payload);
+					} else if (
+						data.type === 'FILE_REQUEST' ||
+						data.type === 'file-request'
+					) {
+						if (typeof data.fileId === 'string') {
+							fileTransferSync?.handleFileRequest(peerId, data.fileId);
+						}
+					} else if (
+						data.type === 'FILE_UNAVAILABLE' ||
+						data.type === 'file-unavailable'
+					) {
+						if (typeof data.fileId === 'string') {
+							fileTransferSync?.handleFileUnavailable(peerId, data.fileId, data.reason);
+						}
 					} else if (
 						data.type === 'file-meta' ||
 						data.type === 'file-complete' ||
@@ -482,6 +513,7 @@
 					details = `Peer disconnected: ${peer}`;
 					chatStore.addSystemMessage(`Peer ${peer} left the room.`);
 					chatHistorySync?.removePeer(peer);
+					fileTransferSync?.handlePeerLeft(peer);
 					break;
 				}
 				case 'ROOM_OWNER_CHANGED': {
@@ -541,6 +573,12 @@
 			chatHistorySync.destroy();
 			chatHistorySync = null;
 		}
+		if (fileTransferSync) {
+			fileTransferSync.destroy();
+			fileTransferSync = null;
+		}
+		fileSender?.reset();
+		fileReceiver?.reset();
 		webRtcManager.disconnectAll();
 		signalingClient.disconnect();
 		roomStore.reset();
@@ -1151,7 +1189,7 @@
 
 				<!-- End-to-End Encrypted File Transfer -->
 				{#if fileSender && fileReceiver}
-					<FileTransfer {fileSender} {fileReceiver} username={$chatStore.username || 'anonymous'} />
+					<FileTransfer {fileSender} {fileReceiver} {fileTransferSync} username={$chatStore.username || 'anonymous'} />
 				{/if}
 			</div>
 		</div>

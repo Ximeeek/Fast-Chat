@@ -3,19 +3,23 @@ import type {
 	OutgoingTransfer,
 	IncomingTransfer,
 	CompletedFileRecord,
-	RecipientProgress
+	RecipientProgress,
+	HistoricalFileRecord,
+	FileLogEntry
 } from '../transfer/types.ts';
 
 export interface TransferStoreState {
 	outgoing: OutgoingTransfer[];
 	incoming: IncomingTransfer[];
 	completed: CompletedFileRecord[];
+	historical: HistoricalFileRecord[];
 }
 
 const initialTransferState: TransferStoreState = {
 	outgoing: [],
 	incoming: [],
-	completed: []
+	completed: [],
+	historical: []
 };
 
 function createTransferStore() {
@@ -106,6 +110,62 @@ function createTransferStore() {
 		},
 
 		/**
+		 * Merges incoming historical file log entries received from remote peers.
+		 */
+		addHistoricalFiles: (files: FileLogEntry[]): void => {
+			update((state) => {
+				const existingMap = new Map(state.historical.map((h) => [h.fileId, h]));
+				for (const file of files) {
+					if (!existingMap.has(file.fileId)) {
+						existingMap.set(file.fileId, {
+							fileId: file.fileId,
+							fileName: file.fileName,
+							fileSize: file.fileSize,
+							fileType: file.fileType || 'application/octet-stream',
+							senderPeerId: file.senderPeerId,
+							senderUsername: file.senderUsername,
+							timestamp: file.timestamp,
+							status: 'available'
+						});
+					}
+				}
+				const sorted = Array.from(existingMap.values()).sort(
+					(a, b) => a.timestamp - b.timestamp
+				);
+				return { ...state, historical: sorted };
+			});
+		},
+
+		/**
+		 * Updates lifecycle state or progress for a specific historical file transfer.
+		 */
+		updateHistoricalFile: (
+			fileId: string,
+			updates: Partial<HistoricalFileRecord>
+		): void => {
+			update((state) => ({
+				...state,
+				historical: state.historical.map((h) =>
+					h.fileId === fileId ? { ...h, ...updates } : h
+				)
+			}));
+		},
+
+		/**
+		 * Explicitly flags a historical file as unavailable.
+		 */
+		markHistoricalUnavailable: (fileId: string, reason?: string): void => {
+			update((state) => ({
+				...state,
+				historical: state.historical.map((h) =>
+					h.fileId === fileId
+						? { ...h, status: 'unavailable' as const, error: reason || 'File unavailable' }
+						: h
+				)
+			}));
+		},
+
+		/**
 		 * Clears all transfer state and revokes any active ObjectURLs.
 		 */
 		reset: (): void => {
@@ -121,6 +181,13 @@ function createTransferStore() {
 					if (inc.downloadUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
 						try {
 							URL.revokeObjectURL(inc.downloadUrl);
+						} catch {}
+					}
+				}
+				for (const hist of state.historical) {
+					if (hist.downloadUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+						try {
+							URL.revokeObjectURL(hist.downloadUrl);
 						} catch {}
 					}
 				}
@@ -148,6 +215,11 @@ export const activeDownloads = derived(transferStore, ($s) =>
  * Reactive list of completed files ready for download or ZIP bundle generation.
  */
 export const completedFiles = derived(transferStore, ($s) => $s.completed);
+
+/**
+ * Reactive list of all historical file records synchronized across peers.
+ */
+export const historicalTransfers = derived(transferStore, ($s) => $s.historical);
 
 /**
  * Reactive flag indicating if any incoming transfer poses a high RAM risk (>500MB on Firefox/Safari).

@@ -19,6 +19,7 @@ export interface FileReceiverOptions {
 	onCompleted?: (record: CompletedFileRecord) => void;
 	onError?: (transferId: string, error: Error) => void;
 	showSaveFilePicker?: (options?: any) => Promise<any>;
+	shouldAutoAccept?: (transferId: string) => boolean;
 }
 
 /**
@@ -88,16 +89,22 @@ export class FileReceiver {
 
 	private customSavePicker?: (options?: any) => Promise<any>;
 	private ramHardLimitBytes: number;
+	private shouldAutoAccept?: (transferId: string) => boolean;
 
 	constructor(options: FileReceiverOptions) {
 		this.webRtcManager = options.webRtcManager;
 		this.customSavePicker = options.showSaveFilePicker;
 		this.ramHardLimitBytes = options.ramHardLimitBytes ?? RAM_HARD_LIMIT_BYTES;
+		this.shouldAutoAccept = options.shouldAutoAccept;
 
 		if (options.onTransferOffered) this.offeredCallbacks.add(options.onTransferOffered);
 		if (options.onProgress) this.progressCallbacks.add(options.onProgress);
 		if (options.onCompleted) this.completedCallbacks.add(options.onCompleted);
 		if (options.onError) this.errorCallbacks.add(options.onError);
+	}
+
+	public setAutoAcceptPredicate(predicate: (transferId: string) => boolean): void {
+		this.shouldAutoAccept = predicate;
 	}
 
 	public onOffered(cb: TransferCallback): () => void {
@@ -400,6 +407,29 @@ export class FileReceiver {
 
 		this.incomingTransfers.set(meta.transferId, transfer);
 		this.notifyOffered(transfer);
+
+		if (this.shouldAutoAccept && this.shouldAutoAccept(meta.transferId)) {
+			// Auto-accept requested historical file transfers without prompting for file save modal
+			this.acceptWithBlob(meta.transferId).catch((err) => {
+				console.error(`[FileReceiver] Auto-accept failed for transfer ${meta.transferId}:`, err);
+			});
+		}
+	}
+
+	/**
+	 * Resets all incoming transfers, active streams, and memory buffers.
+	 */
+	public reset(): void {
+		for (const writable of this.writableStreams.values()) {
+			try {
+				if (typeof writable.abort === 'function') writable.abort();
+				else if (typeof writable.close === 'function') writable.close();
+			} catch {}
+		}
+		this.incomingTransfers.clear();
+		this.writableStreams.clear();
+		this.blobChunks.clear();
+		this.completedRecords.clear();
 	}
 
 	private notifyOffered(transfer: IncomingTransfer): void {
