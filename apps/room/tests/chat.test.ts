@@ -14,6 +14,8 @@ import {
 	composeFinalMessage,
 	createPastedBlock,
 	buildMessageSegments,
+	setPastedBlockLanguageMode,
+	updatePastedBlockContent,
 	type PastedBlock,
 	type ComposerBlock
 } from '../src/lib/chat/pastedSnippet.ts';
@@ -758,6 +760,84 @@ describe('Pasted Snippet Drafting & Containment', () => {
 		assert.deepEqual(segments[2], { type: 'text', text: 'And the Rust equivalent:' });
 		assert.deepEqual(segments[3], { type: 'code', code: rustCode, language: 'rust' });
 		assert.deepEqual(segments[4], { type: 'text', text: 'Both handle summation correctly.' });
+	});
+
+	test('selecting "Plain Text" on a detected C++ snippet permanently sets contentType to text and never reverts on edits', () => {
+		const cppCode = '#include <iostream>\n\nint main() {\n    std::cout << "FastChat Room" << std::endl;\n    return 0;\n}';
+		const block = createPastedBlock(cppCode, { id: 'cpp-block' });
+
+		// Auto-detection initially identifies C++
+		assert.equal(block.languageMode, 'auto');
+		assert.equal(block.contentType, 'code');
+		assert.equal(block.language, 'cpp');
+
+		// User explicitly chooses "Plain Text" from the dropdown
+		setPastedBlockLanguageMode(block, 'text');
+		assert.equal(block.languageMode, 'manual');
+		assert.equal(block.contentType, 'text');
+		assert.equal(block.language, null);
+
+		// Subsequent user edit with more C++ code must NEVER revert to C++
+		const updatedCpp = '#include <vector>\n#include <algorithm>\n\nint main() {\n    std::vector<int> v = {1, 2, 3};\n    return 0;\n}';
+		updatePastedBlockContent(block, updatedCpp);
+
+		assert.equal(block.languageMode, 'manual');
+		assert.equal(block.contentType, 'text');
+		assert.equal(block.language, null, 'Must remain plain text without language tags');
+
+		// Final outbound segment must be a plain text segment
+		const segments = buildMessageSegments([{ kind: 'paste', ...block }]);
+		assert.equal(segments.length, 1);
+		assert.deepEqual(segments[0], {
+			type: 'text',
+			text: updatedCpp
+		});
+	});
+
+	test('selecting "Plain Code" permanently locks unhighlighted code with language null across edits', () => {
+		const jsCode = 'const data = [1, 2, 3];\nconsole.log(data);';
+		const block = createPastedBlock(jsCode, { id: 'plain-code-block' });
+
+		assert.equal(block.languageMode, 'auto');
+		assert.equal(block.language, 'javascript');
+
+		// User explicitly chooses "Plain Code"
+		setPastedBlockLanguageMode(block, 'code');
+		assert.equal(block.languageMode, 'manual');
+		assert.equal(block.contentType, 'code');
+		assert.equal(block.language, null);
+
+		// User edits snippet to Python code - manual lock must hold
+		const pyCode = 'def process_items():\n    for item in range(10):\n        print(item)';
+		updatePastedBlockContent(block, pyCode);
+
+		assert.equal(block.languageMode, 'manual');
+		assert.equal(block.contentType, 'code');
+		assert.equal(block.language, null, 'Language must remain null even if edited with recognizable language syntax');
+
+		const segments = buildMessageSegments([{ kind: 'paste', ...block }]);
+		assert.equal(segments.length, 1);
+		assert.deepEqual(segments[0], {
+			type: 'code',
+			code: pyCode,
+			language: null
+		});
+	});
+
+	test('explicitly choosing "auto" restores reactive heuristic detection', () => {
+		const block = createPastedBlock('Some unclassified text', { id: 'revert-auto' });
+		setPastedBlockLanguageMode(block, 'rust');
+		assert.equal(block.languageMode, 'manual');
+		assert.equal(block.language, 'rust');
+
+		// Explicit user action to re-enable auto detection
+		const sqlCode = 'SELECT id, username FROM users WHERE active = 1 ORDER BY id DESC;';
+		block.content = sqlCode;
+		setPastedBlockLanguageMode(block, 'auto');
+
+		assert.equal(block.languageMode, 'auto');
+		assert.equal(block.contentType, 'code');
+		assert.equal(block.language, 'sql');
 	});
 });
 

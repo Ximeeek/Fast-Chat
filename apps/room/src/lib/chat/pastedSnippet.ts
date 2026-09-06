@@ -120,6 +120,58 @@ export function createPastedBlock(
 }
 
 /**
+ * Updates the text content of an existing PastedBlock.
+ * Recomputes code and language detection heuristics ONLY when the block is in 'auto' mode.
+ * When the block has been explicitly designated with 'manual' mode, the user's manual
+ * classification and language override are preserved immutably.
+ *
+ * @param block - The target PastedBlock to update in place.
+ * @param newContent - The modified content string.
+ */
+export function updatePastedBlockContent(block: PastedBlock, newContent: string): void {
+	block.content = newContent;
+	block.lineCount = Math.max(countLines(newContent), 1);
+	if (block.languageMode === 'auto') {
+		const isCode = isCodeSnippet(newContent);
+		block.contentType = isCode ? 'code' : 'text';
+		block.language = isCode ? detectLanguage(newContent) : null;
+	}
+}
+
+/**
+ * Explicitly sets the language and content mode for a PastedBlock, enforcing the tri-state model.
+ * Any manual selection ('text', 'code', or a specific language) immutably locks languageMode = 'manual',
+ * preventing automatic heuristics from overriding the user's decision upon subsequent interactions.
+ * Selecting 'auto' restores heuristic detection based on current content.
+ *
+ * @param block - The target PastedBlock to update in place.
+ * @param selection - 'auto' for heuristic detection, 'text' for plain text, 'code' for unhighlighted code, or a language key.
+ */
+export function setPastedBlockLanguageMode(
+	block: PastedBlock,
+	selection: 'auto' | 'text' | 'code' | string
+): void {
+	if (selection === 'auto') {
+		block.languageMode = 'auto';
+		const isCode = isCodeSnippet(block.content);
+		block.contentType = isCode ? 'code' : 'text';
+		block.language = isCode ? detectLanguage(block.content) : null;
+	} else if (selection === 'text') {
+		block.languageMode = 'manual';
+		block.contentType = 'text';
+		block.language = null;
+	} else if (selection === 'code') {
+		block.languageMode = 'manual';
+		block.contentType = 'code';
+		block.language = null;
+	} else {
+		block.languageMode = 'manual';
+		block.contentType = 'code';
+		block.language = selection.toLowerCase().trim();
+	}
+}
+
+/**
  * Iterates through the composer block sequence and companion input in exact chronological order
  * to assemble the outbound MessageSegment array ready for transmission.
  *
