@@ -1204,6 +1204,162 @@ describe('WebRTC Mesh & Secure DataChannel Subsystem (Phase 8)', () => {
 
 			session.close();
 		});
+
+		test('symmetric failure state propagation across both initiator (creator) and non-initiator (joiner) roles', async () => {
+			let pcInitiator: MockRTCPeerConnection | null = null;
+			let pcResponder: MockRTCPeerConnection | null = null;
+
+			const sessionInitiator = new PeerConnectionSession({
+				localPeerId: 'creator',
+				remotePeerId: 'joiner',
+				isInitiator: true,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				rtcPeerConnectionFactory: (cfg) => {
+					pcInitiator = new MockRTCPeerConnection(cfg);
+					return pcInitiator as unknown as RTCPeerConnection;
+				}
+			});
+
+			const sessionResponder = new PeerConnectionSession({
+				localPeerId: 'joiner',
+				remotePeerId: 'creator',
+				isInitiator: false,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				rtcPeerConnectionFactory: (cfg) => {
+					pcResponder = new MockRTCPeerConnection(cfg);
+					return pcResponder as unknown as RTCPeerConnection;
+				}
+			});
+
+			// Verify initial states
+			assert.equal(sessionInitiator.isInitiator, true);
+			assert.equal(sessionResponder.isInitiator, false);
+			assert.equal(sessionInitiator.getSessionInfo().connectionState, 'connecting');
+			assert.equal(sessionResponder.getSessionInfo().connectionState, 'connecting');
+			assert.equal(sessionInitiator.getSessionInfo().dataChannelState, 'connecting');
+			assert.equal(sessionResponder.getSessionInfo().dataChannelState, 'closed');
+
+			// Trigger failure on initiator (Creator side)
+			pcInitiator!.simulateConnectionState('failed');
+			assert.equal(sessionInitiator.getSessionInfo().connectionState, 'failed');
+			assert.equal(sessionInitiator.getSessionInfo().dataChannelState, 'closed');
+
+			// Subsequent in-flight/checking events on initiator must NOT clobber failed state back to connecting
+			pcInitiator!.simulateConnectionState('connecting');
+			pcInitiator!.simulateIceConnectionState('checking');
+			assert.equal(sessionInitiator.getSessionInfo().connectionState, 'failed');
+			assert.equal(sessionInitiator.getSessionInfo().dataChannelState, 'closed');
+
+			// Trigger failure on responder (Joiner side)
+			pcResponder!.simulateIceConnectionState('failed');
+			assert.equal(sessionResponder.getSessionInfo().connectionState, 'failed');
+			assert.equal(sessionResponder.getSessionInfo().dataChannelState, 'closed');
+
+			sessionInitiator.close();
+			sessionResponder.close();
+		});
+
+		test('initiator createInitialOffer failure transitions session to failed and closes data channel symmetrically', async () => {
+			let pcInstance: MockRTCPeerConnection | null = null;
+			let errorEmitted: Error | null = null;
+
+			const session = new PeerConnectionSession({
+				localPeerId: 'creator',
+				remotePeerId: 'joiner',
+				isInitiator: true,
+				iceServers: dummyIceServers,
+				activeKey: testKey,
+				onIceCandidate: () => {},
+				onError: (err) => {
+					errorEmitted = err;
+				},
+				rtcPeerConnectionFactory: (cfg) => {
+					pcInstance = new MockRTCPeerConnection(cfg);
+					// Force createOffer to reject
+					pcInstance.createOffer = async () => {
+						throw new Error('Simulated SDP offer generation failure');
+					};
+					return pcInstance as unknown as RTCPeerConnection;
+				}
+			});
+
+			assert.equal(session.getSessionInfo().connectionState, 'connecting');
+			assert.equal(session.getSessionInfo().dataChannelState, 'connecting');
+
+			const offer = await session.createInitialOffer();
+			assert.equal(offer, null);
+			assert.ok(errorEmitted);
+			assert.equal(session.getSessionInfo().connectionState, 'failed');
+			assert.equal(session.getSessionInfo().dataChannelState, 'closed');
+
+			session.close();
+		});
+
+		test('WebRtcManager synchronizes failure state to webrtcPeers store for both roles symmetrically', async () => {
+			let pcCreator: MockRTCPeerConnection | null = null;
+			let pcJoiner: MockRTCPeerConnection | null = null;
+
+			const manager = new WebRtcManager({
+				activeKey: testKey,
+				iceServers: dummyIceServers,
+				rtcPeerConnectionFactory: (cfg) => {
+					const pc = new MockRTCPeerConnection(cfg);
+					if (!pcCreator) pcCreator = pc;
+					else pcJoiner = pc;
+					return pc as unknown as RTCPeerConnection;
+				}
+			});
+
+			const creatorSession = await manager.getOrCreateSession('peer-joiner', true);
+			const joinerSession = await manager.getOrCreateSession('peer-creator', false);
+
+			// Both sessions initially connecting
+			assert.equal(creatorSession.getSessionInfo().connectionState, 'connecting');
+			assert.equal(joinerSession.getSessionInfo().connectionState, 'connecting');
+
+			// Creator fails
+			pcCreator!.simulateConnectionState('failed');
+
+			let peersMap: any = {};
+			const unsub = webrtcPeers.subscribe((p) => {
+				peersMap = p;
+			});
+			unsub();
+
+			assert.equal(peersMap['peer-joiner']?.connectionState, 'failed');
+			assert.equal(peersMap['peer-joiner']?.dataChannelState, 'closed');
+
+			let hasFailed = false;
+			const unsubFailed = hasFailedPeers.subscribe((v) => {
+				hasFailed = v;
+			});
+			unsubFailed();
+			assert.equal(hasFailed, true);
+
+			// Joiner fails
+			pcJoiner!.simulateIceConnectionState('failed');
+
+			const unsub2 = webrtcPeers.subscribe((p) => {
+				peersMap = p;
+			});
+			unsub2();
+
+			assert.equal(peersMap['peer-creator']?.connectionState, 'failed');
+			assert.equal(peersMap['peer-creator']?.dataChannelState, 'closed');
+
+			let allFailed = false;
+			const unsubAll = allPeersFailed.subscribe((v) => {
+				allFailed = v;
+			});
+			unsubAll();
+			assert.equal(allFailed, true);
+
+			manager.destroy();
+		});
 	});
 });
 

@@ -310,10 +310,11 @@ export class SignalingClient {
 	 */
 	public sendTurnUsageReport(bytes: number): boolean {
 		if (bytes <= 0) return false;
-		return this.send({
+		this.send({
 			type: 'TURN_USAGE_REPORT',
 			bytes
 		});
+		return true;
 	}
 
 	/**

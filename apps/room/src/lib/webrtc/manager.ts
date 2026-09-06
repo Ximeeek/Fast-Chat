@@ -73,6 +73,12 @@ export class WebRtcManager {
 		});
 		this.signalingCleanups.push(unsubRoom);
 
+		// Synchronously load localPeerId from roomStore if available to prevent timing race
+		const initialPeerId = this.getLocalPeerId();
+		if (initialPeerId && initialPeerId !== 'local-peer') {
+			this.localPeerId = initialPeerId;
+		}
+
 		// Subscribe to signaling events synchronously to avoid dropping early JOIN_OK or PEER_JOINED frames
 		this.signalingCleanups.push(
 			this.signaling.on('ROOM_CREATED', (msg) => {
@@ -250,6 +256,9 @@ export class WebRtcManager {
 					})
 				);
 			} else if (info.dataChannelState === 'connecting') {
+				if (info.connectionState === 'failed') {
+					continue;
+				}
 				sendPromises.push(
 					(async () => {
 						await session.waitForDataChannelOpen(10000);
@@ -404,6 +413,11 @@ export class WebRtcManager {
 						}
 					},
 					onDataChannelStateChange: () => {
+						if (session) {
+							webrtcPeers.upsertPeer(session.getSessionInfo());
+						}
+					},
+					onError: () => {
 						if (session) {
 							webrtcPeers.upsertPeer(session.getSessionInfo());
 						}

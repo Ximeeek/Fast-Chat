@@ -2,6 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
 
 import { createServer, type ViteDevServer } from 'vite';
@@ -19,16 +20,11 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 
 	before(async () => {
 		// 1. Spawn local signaling server on default port 3000
-		const signalingExe = join(
-			process.cwd(),
-			'..',
-			'..',
-			'services',
-			'signaling',
-			'target',
-			'debug',
-			'fastchat-signaling.exe'
-		);
+		const signalingExe = existsSync(
+			join(process.cwd(), 'services', 'signaling', 'target', 'debug', 'fastchat-signaling.exe')
+		)
+			? join(process.cwd(), 'services', 'signaling', 'target', 'debug', 'fastchat-signaling.exe')
+			: join(process.cwd(), '..', '..', 'services', 'signaling', 'target', 'debug', 'fastchat-signaling.exe');
 
 		signalingProcess = spawn(signalingExe, [], {
 			env: {

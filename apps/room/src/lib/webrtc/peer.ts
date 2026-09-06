@@ -79,6 +79,8 @@ export class PeerConnectionSession {
 				const channel = this.pc.createDataChannel('fastchat-data', { ordered: true });
 				this.setupDataChannel(channel);
 			} catch (err) {
+				this.updateDataChannelState('closed');
+				this.updateConnectionState('failed');
 				this.notifyError(err instanceof Error ? err : new Error(String(err)));
 			}
 		}
@@ -106,7 +108,19 @@ export class PeerConnectionSession {
 				sdp: this.pc.localDescription.sdp
 			} : null;
 		} catch (err) {
-			this.notifyError(err instanceof Error ? err : new Error(String(err)));
+			const error = err instanceof Error ? err : new Error(String(err));
+			this.clearDisconnectTimer();
+			this.stopRelayReportTimer();
+			if (this.dataChannel) {
+				try {
+					this.dataChannel.close();
+				} catch {
+					// Ignore close error
+				}
+				this.updateDataChannelState('closed');
+			}
+			this.updateConnectionState('failed');
+			this.notifyError(error);
 			return null;
 		} finally {
 			this.makingOffer = false;
@@ -184,7 +198,19 @@ export class PeerConnectionSession {
 				sdp: this.pc.localDescription.sdp
 			} : null;
 		} catch (err) {
-			this.notifyError(err instanceof Error ? err : new Error(String(err)));
+			const error = err instanceof Error ? err : new Error(String(err));
+			this.clearDisconnectTimer();
+			this.stopRelayReportTimer();
+			if (this.dataChannel) {
+				try {
+					this.dataChannel.close();
+				} catch {
+					// Ignore close error
+				}
+				this.updateDataChannelState('closed');
+			}
+			this.updateConnectionState('failed');
+			this.notifyError(error);
 			return null;
 		}
 	}
@@ -204,7 +230,19 @@ export class PeerConnectionSession {
 			await this.pc.setRemoteDescription(desc);
 			await this.flushBufferedCandidates();
 		} catch (err) {
-			this.notifyError(err instanceof Error ? err : new Error(String(err)));
+			const error = err instanceof Error ? err : new Error(String(err));
+			this.clearDisconnectTimer();
+			this.stopRelayReportTimer();
+			if (this.dataChannel) {
+				try {
+					this.dataChannel.close();
+				} catch {
+					// Ignore close error
+				}
+				this.updateDataChannelState('closed');
+			}
+			this.updateConnectionState('failed');
+			this.notifyError(error);
 		} finally {
 			this.isSettingRemoteAnswerPending = false;
 		}
@@ -559,6 +597,7 @@ export class PeerConnectionSession {
 		};
 
 		channel.onerror = () => {
+			this.updateDataChannelState('closed');
 			this.notifyError(new Error(`DataChannel error with peer ${this.remotePeerId}`));
 		};
 
@@ -674,6 +713,14 @@ export class PeerConnectionSession {
 		if (connState === 'closed' || iceState === 'closed') {
 			this.clearDisconnectTimer();
 			this.stopRelayReportTimer();
+			if (this.dataChannel) {
+				try {
+					this.dataChannel.close();
+				} catch {
+					// Ignore close error
+				}
+				this.updateDataChannelState('closed');
+			}
 			this.updateConnectionState('closed');
 			return;
 		}
@@ -685,7 +732,20 @@ export class PeerConnectionSession {
 			if (this.retryCount > 0) {
 				this.hasFailedAfterRetry = true;
 			}
+			if (this.dataChannel) {
+				try {
+					this.dataChannel.close();
+				} catch {
+					// Ignore close error
+				}
+				this.updateDataChannelState('closed');
+			}
 			this.updateConnectionState('failed');
+			return;
+		}
+
+		// Once failed, in-flight negotiation or transient events must not overwrite failure state
+		if (this.connectionState === 'failed') {
 			return;
 		}
 
@@ -707,10 +767,6 @@ export class PeerConnectionSession {
 		// 4. Transient disconnect: buffer before declaring failure
 		if (connState === 'disconnected' || iceState === 'disconnected') {
 			this.stopRelayReportTimer();
-			if (this.connectionState === 'failed') {
-				return;
-			}
-
 			this.updateConnectionState('disconnected');
 
 			if (!this.disconnectTimer) {
@@ -729,6 +785,14 @@ export class PeerConnectionSession {
 						if (this.retryCount > 0) {
 							this.hasFailedAfterRetry = true;
 						}
+						if (this.dataChannel) {
+							try {
+								this.dataChannel.close();
+							} catch {
+								// Ignore close error
+							}
+							this.updateDataChannelState('closed');
+						}
 						this.updateConnectionState('failed');
 					}
 				}, this.disconnectGracePeriodMs);
@@ -738,7 +802,10 @@ export class PeerConnectionSession {
 
 		// 5. In-flight or initial negotiation
 		if (connState === 'connecting' || iceState === 'checking' || iceState === 'new') {
-			if (this.connectionState !== 'connecting' && this.connectionState !== 'disconnected') {
+			if (
+				this.connectionState !== 'connecting' &&
+				this.connectionState !== 'disconnected'
+			) {
 				this.clearDisconnectTimer();
 				this.updateConnectionState('connecting');
 			}
