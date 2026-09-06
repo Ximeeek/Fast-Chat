@@ -350,6 +350,18 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Transfers room ownership to another connected peer in the room.
+	 * Can only be invoked by a participant holding TransferOwnership permission.
+	 */
+	public transferOwnership(newOwnerPeerId: string): void {
+		this.send({
+			type: 'TRANSFER_OWNERSHIP',
+			new_owner_peer_id: newOwnerPeerId,
+			newOwnerPeerId: newOwnerPeerId
+		} as any);
+	}
+
+	/**
 	 * Verifies the room password for an active room session during rekey.
 	 */
 	public async verifyPassword(password: string): Promise<boolean> {
@@ -547,8 +559,13 @@ export class SignalingClient {
 				}
 				break;
 			}
-			case 'ROOM_OWNER_CHANGED': {
-				const ownerId = msg.owner_peer_id || msg.ownerPeerId;
+			case 'ROOM_OWNER_CHANGED':
+			case 'OWNERSHIP_TRANSFERRED': {
+				const ownerId =
+					(msg as any).owner_peer_id ||
+					(msg as any).ownerPeerId ||
+					(msg as any).new_owner_peer_id ||
+					(msg as any).newOwnerPeerId;
 				if (ownerId) {
 					roomStore.setOwner(ownerId);
 				}

@@ -1652,5 +1652,131 @@ async fn test_ws_mute_and_sweeper_auto_unmute() {
     }
 }
 
+#[tokio::test]
+async fn test_ws_transfer_ownership_flow() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // 2. Bob joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    assert!(matches!(resp_b, ServerMessage::JoinOk { .. }));
+
+    // Alice consumes PeerJoined(bob)
+    let _ = ws_a.next().await.unwrap().unwrap();
+
+    // 3. Bob attempts to transfer ownership to Alice -> unauthorized
+    let xfer_by_bob = ClientMessage::TransferOwnership {
+        new_owner_peer_id: "alice".to_string(),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&xfer_by_bob).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err: ServerMessage = serde_json::from_str(&b_err_raw).unwrap();
+    match b_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected UNAUTHORIZED for Bob, got {b_err:?}"),
+    }
+
+    // 4. Alice attempts to transfer ownership to non-existent peer -> PEER_NOT_FOUND
+    let xfer_ghost = ClientMessage::TransferOwnership {
+        new_owner_peer_id: "charlie".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&xfer_ghost).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_ghost_err_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_ghost_err: ServerMessage = serde_json::from_str(&a_ghost_err_raw).unwrap();
+    match a_ghost_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "PEER_NOT_FOUND"),
+        _ => panic!("Expected PEER_NOT_FOUND, got {a_ghost_err:?}"),
+    }
+
+    // 5. Alice transfers ownership to Bob successfully
+    let xfer_bob = ClientMessage::TransferOwnership {
+        new_owner_peer_id: "bob".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&xfer_bob).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Both Alice and Bob should receive ROOM_OWNER_CHANGED { owner_peer_id: "bob" }
+    let a_xfer_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_xfer: ServerMessage = serde_json::from_str(&a_xfer_raw).unwrap();
+    match a_xfer {
+        ServerMessage::RoomOwnerChanged { owner_peer_id, .. } => assert_eq!(owner_peer_id, "bob"),
+        _ => panic!("Expected RoomOwnerChanged on Alice, got {a_xfer:?}"),
+    }
+
+    let b_xfer_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_xfer: ServerMessage = serde_json::from_str(&b_xfer_raw).unwrap();
+    match b_xfer {
+        ServerMessage::RoomOwnerChanged { owner_peer_id, .. } => assert_eq!(owner_peer_id, "bob"),
+        _ => panic!("Expected RoomOwnerChanged on Bob, got {b_xfer:?}"),
+    }
+
+    // 6. Former owner (Alice) attempts to kick Bob -> rejected with UNAUTHORIZED
+    let kick_bob = ClientMessage::KickPeer {
+        peer_id: "bob".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&kick_bob).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_kick_err_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_kick_err: ServerMessage = serde_json::from_str(&a_kick_err_raw).unwrap();
+    match a_kick_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected UNAUTHORIZED on Alice kicking Bob, got {a_kick_err:?}"),
+    }
+
+    // 7. New owner (Bob) can kick Alice
+    let kick_alice = ClientMessage::KickPeer {
+        peer_id: "alice".to_string(),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&kick_alice).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_kicked_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_kicked: ServerMessage = serde_json::from_str(&a_kicked_raw).unwrap();
+    match a_kicked {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "KICKED_FROM_ROOM"),
+        _ => panic!("Expected KICKED_FROM_ROOM on Alice, got {a_kicked:?}"),
+    }
+}
+
 
 

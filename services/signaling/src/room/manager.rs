@@ -303,6 +303,43 @@ impl RoomManager {
         Ok(())
     }
 
+    /// Transfers room ownership to another connected peer if the operator holds `Permission::TransferOwnership`.
+    pub fn transfer_ownership(
+        &self,
+        code: &RoomCode,
+        operator_peer_id: &str,
+        new_owner_peer_id: &str,
+    ) -> Result<(), RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(code)
+            .ok_or_else(|| RoomError::PeerNotFound(new_owner_peer_id.to_string()))?;
+
+        if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::TransferOwnership) {
+            return Err(RoomError::Unauthorized);
+        }
+
+        if operator_peer_id == new_owner_peer_id {
+            return Err(RoomError::Unauthorized);
+        }
+
+        if !room.peers.iter().any(|p| p.id == new_owner_peer_id) {
+            return Err(RoomError::PeerNotFound(new_owner_peer_id.to_string()));
+        }
+
+        if !room.set_owner(new_owner_peer_id) {
+            return Err(RoomError::PeerNotFound(new_owner_peer_id.to_string()));
+        }
+
+        info!(
+            room = %code,
+            operator = %operator_peer_id,
+            new_owner = %new_owner_peer_id,
+            "Room ownership transferred to peer"
+        );
+        Ok(())
+    }
+
     /// Handles peer departure from a room.
     ///
     /// - If the departing peer was the owner and other peers remain, ownership is

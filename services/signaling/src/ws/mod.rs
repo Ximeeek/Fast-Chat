@@ -1050,5 +1050,73 @@ async fn handle_client_message(
                 }
             }
         }
+        ClientMessage::TransferOwnership { new_owner_peer_id } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before transferring ownership",
+                    ));
+                    return;
+                }
+            };
+
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::TransferOwnership)
+            {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Unauthorized to transfer ownership of this room",
+                ));
+                return;
+            }
+
+            if sender_id == &new_owner_peer_id {
+                let _ = tx.send(ServerMessage::error(
+                    "ALREADY_OWNER",
+                    "You are already the owner of this room",
+                ));
+                return;
+            }
+
+            match state
+                .room_manager
+                .transfer_ownership(code, sender_id, &new_owner_peer_id)
+            {
+                Ok(()) => {
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        operator = %sender_id,
+                        new_owner = %new_owner_peer_id,
+                        event = "TRANSFER_OWNERSHIP",
+                        "Room ownership transferred; broadcasting ROOM_OWNER_CHANGED to participants"
+                    );
+
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::room_owner_changed(code.to_string(), new_owner_peer_id),
+                        None,
+                    );
+                }
+                Err(RoomError::PeerNotFound(p)) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "PEER_NOT_FOUND",
+                        format!("Target peer '{p}' not found in room"),
+                    ));
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Unauthorized to transfer ownership of this room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("TRANSFER_FAILED", e.to_string()));
+                }
+            }
+        }
     }
 }

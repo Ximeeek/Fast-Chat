@@ -99,6 +99,13 @@ export type ClientSignalingMessage =
 			type: 'UNMUTE_PEER';
 			peer_id?: string;
 			peerId?: string;
+	  }
+	| {
+			type: 'TRANSFER_OWNERSHIP';
+			new_owner_peer_id?: string;
+			newOwnerPeerId?: string;
+			peer_id?: string;
+			peerId?: string;
 	  };
 
 /**
@@ -240,6 +247,16 @@ export interface RoomOwnerChangedServerMessage {
 	ownerPeerId?: string;
 }
 
+export interface OwnershipTransferredServerMessage {
+	type: 'OWNERSHIP_TRANSFERRED';
+	room_code?: string;
+	roomCode?: string;
+	owner_peer_id?: string;
+	ownerPeerId?: string;
+	new_owner_peer_id?: string;
+	newOwnerPeerId?: string;
+}
+
 export interface PasswordVerifiedServerMessage {
 	type: 'PASSWORD_VERIFIED';
 	valid: boolean;
@@ -251,6 +268,7 @@ export type ServerSignalingMessage =
 	| PeerJoinedServerMessage
 	| PeerLeftServerMessage
 	| RoomOwnerChangedServerMessage
+	| OwnershipTransferredServerMessage
 	| SdpOfferServerMessage
 	| SdpAnswerServerMessage
 	| IceCandidatesServerMessage

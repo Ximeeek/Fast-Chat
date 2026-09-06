@@ -130,6 +130,13 @@ pub enum ClientMessage {
         #[serde(alias = "peerId")]
         peer_id: String,
     },
+
+    /// Request by an authorized participant to transfer room ownership to another peer.
+    #[serde(alias = "TRANSFER_OWNERSHIP")]
+    TransferOwnership {
+        #[serde(alias = "newOwnerPeerId", alias = "peer_id", alias = "peerId")]
+        new_owner_peer_id: String,
+    },
 }
 
 /// Muted status metadata for a participant in a room session.
@@ -787,5 +794,26 @@ mod tests {
         let join_json = serde_json::to_string(&join_ok).unwrap();
         assert!(join_json.contains(r#""muted_peers":[{""#));
         assert!(join_json.contains(r#""mutedPeers":[{""#));
+    }
+
+    #[test]
+    fn test_client_message_transfer_ownership_deserialization() {
+        let json_camel = r#"{"type":"TRANSFER_OWNERSHIP","newOwnerPeerId":"bob"}"#;
+        let msg_camel: ClientMessage = serde_json::from_str(json_camel).unwrap();
+        assert_eq!(
+            msg_camel,
+            ClientMessage::TransferOwnership {
+                new_owner_peer_id: "bob".to_string(),
+            }
+        );
+
+        let json_snake = r#"{"type":"TRANSFER_OWNERSHIP","new_owner_peer_id":"bob"}"#;
+        let msg_snake: ClientMessage = serde_json::from_str(json_snake).unwrap();
+        assert_eq!(
+            msg_snake,
+            ClientMessage::TransferOwnership {
+                new_owner_peer_id: "bob".to_string(),
+            }
+        );
     }
 }
