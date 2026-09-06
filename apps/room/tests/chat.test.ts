@@ -14,6 +14,12 @@ import {
 	type PastedBlock
 } from '../src/lib/chat/pastedSnippet.ts';
 import { isCodeSnippet } from '../src/lib/chat/codeDetection.ts';
+import {
+	detectLanguage,
+	getLanguageDisplayName,
+	SUPPORTED_LANGUAGES,
+	type SupportedLanguage
+} from '../src/lib/chat/languageDetection.ts';
 import { chatStore, type ChatState } from '../src/lib/stores/chat.ts';
 import { WebRtcManager } from '../src/lib/webrtc/index.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
@@ -675,6 +681,94 @@ describe('Heuristic Code Detection (isCodeSnippet)', () => {
 	});
 });
 
+describe('Heuristic Language Detection (detectLanguage)', () => {
+	test('correctly identifies JavaScript and TypeScript', () => {
+		const jsCode = 'const greet = (name) => {\n  console.log("Hello " + name);\n};';
+		assert.equal(detectLanguage(jsCode), 'javascript');
+
+		const tsCode = 'interface UserProfile {\n  id: string;\n  count: number;\n}\nconst role = "admin" as const;';
+		assert.equal(detectLanguage(tsCode), 'typescript');
+	});
+
+	test('correctly identifies Python', () => {
+		const pyCode = 'def fetch_records(limit):\n    records = []\n    for idx in range(limit):\n        records.append(idx)\n    return records';
+		assert.equal(detectLanguage(pyCode), 'python');
+	});
+
+	test('correctly identifies Rust', () => {
+		const rustCode = 'fn compute() -> Result<u32, &str> {\n    let mut sum: u32 = 0;\n    println!("sum: {}", sum);\n    Ok(sum)\n}';
+		assert.equal(detectLanguage(rustCode), 'rust');
+	});
+
+	test('correctly identifies Go', () => {
+		const goCode = 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("P2P Mesh")\n}';
+		assert.equal(detectLanguage(goCode), 'go');
+	});
+
+	test('correctly identifies Java', () => {
+		const javaCode = 'public class RoomManager {\n    public static void main(String[] args) {\n        System.out.println("Room init");\n    }\n}';
+		assert.equal(detectLanguage(javaCode), 'java');
+	});
+
+	test('correctly identifies C and C++', () => {
+		const cCode = '#include <stdio.h>\n\nint main() {\n    printf("Encrypted bytes\\n");\n    return 0;\n}';
+		assert.equal(detectLanguage(cCode), 'c');
+
+		const cppCode = '#include <iostream>\n\nint main() {\n    std::cout << "FastChat Room" << std::endl;\n    return 0;\n}';
+		assert.equal(detectLanguage(cppCode), 'cpp');
+	});
+
+	test('correctly identifies C#', () => {
+		const csCode = 'using System;\n\nnamespace FastChat {\n    public class PeerHandler {\n        public string Name { get; set; }\n    }\n}';
+		assert.equal(detectLanguage(csCode), 'csharp');
+	});
+
+	test('correctly identifies HTML and CSS', () => {
+		const htmlCode = '<!DOCTYPE html>\n<html>\n<body>\n  <div class="box"><p>Content</p></div>\n</body>\n</html>';
+		assert.equal(detectLanguage(htmlCode), 'html');
+
+		const cssCode = '.terminal-container {\n  display: flex;\n  background: #030407;\n  color: #00e5ff;\n  padding: 16px;\n}';
+		assert.equal(detectLanguage(cssCode), 'css');
+	});
+
+	test('correctly identifies JSON', () => {
+		const jsonCode = '{\n  "status": "connected",\n  "peerCount": 4,\n  "encryption": "AES-256-GCM"\n}';
+		assert.equal(detectLanguage(jsonCode), 'json');
+	});
+
+	test('correctly identifies SQL', () => {
+		const sqlCode = 'SELECT users.id, accounts.balance FROM users JOIN accounts ON users.id = accounts.user_id WHERE balance > 1000;';
+		assert.equal(detectLanguage(sqlCode), 'sql');
+	});
+
+	test('correctly identifies Bash shell scripts', () => {
+		const bashCode = '#!/bin/bash\necho "Running test"\nsudo apt update';
+		assert.equal(detectLanguage(bashCode), 'bash');
+	});
+
+	test('correctly identifies PHP', () => {
+		const phpCode = '<?php\necho "Hello from server";\n$response = $_GET["action"];';
+		assert.equal(detectLanguage(phpCode), 'php');
+	});
+
+	test('returns null for ambiguous or unrecognized code snippets', () => {
+		assert.equal(detectLanguage('x = 1'), null);
+		assert.equal(detectLanguage(''), null);
+		assert.equal(detectLanguage(null as any), null);
+	});
+
+	test('getLanguageDisplayName returns formatted names', () => {
+		assert.equal(getLanguageDisplayName('javascript'), 'JavaScript');
+		assert.equal(getLanguageDisplayName('typescript'), 'TypeScript');
+		assert.equal(getLanguageDisplayName('python'), 'Python');
+		assert.equal(getLanguageDisplayName('rust'), 'Rust');
+		assert.equal(getLanguageDisplayName('cpp'), 'C++');
+		assert.equal(getLanguageDisplayName('csharp'), 'C#');
+		assert.equal(getLanguageDisplayName(null), 'Code');
+		assert.equal(getLanguageDisplayName('unknown-lang'), 'UNKNOWN-LANG');
+	});
+});
+
 describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 	test('no localStorage or sessionStorage present in chat source files', () => {
 		const files = [
@@ -684,6 +778,7 @@ describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 			'src/lib/chat/export.ts',
 			'src/lib/chat/pastedSnippet.ts',
 			'src/lib/chat/codeDetection.ts',
+			'src/lib/chat/languageDetection.ts',
 			'src/lib/stores/chat.ts'
 		];
 

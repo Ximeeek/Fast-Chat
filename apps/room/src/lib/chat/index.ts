@@ -4,3 +4,4 @@ export * from './transport.ts';
 export * from './export.ts';
 export * from './pastedSnippet.ts';
 export * from './codeDetection.ts';
+export * from './languageDetection.ts';
