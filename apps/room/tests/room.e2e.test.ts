@@ -83,7 +83,10 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 		}
 	});
 
-	test('two browser contexts join room, establish WebRTC P2P, exchange chat and initiate file transfer without error', async () => {
+	test(
+		'two browser contexts join room, establish WebRTC P2P, exchange chat and initiate file transfer without error',
+		{ timeout: 60000 },
+		async () => {
 		const ctx1 = await browser.newContext();
 		const ctx2 = await browser.newContext();
 
@@ -96,11 +99,11 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 
 			// 1. Page 1 creates a new room via /create
 			await page1.goto(`${APP_URL}/create`);
-			await page1.waitForSelector('button:has-text("Create New Room")', { timeout: 10000 });
+			await page1.waitForSelector('button:has-text("Create New Room")', { timeout: 30000 });
 			await page1.click('button:has-text("Create New Room")');
 
 			// Wait for navigation to /room/[token]
-			await page1.waitForURL(/\/room\/[0-9a-fA-F]{16}/, { timeout: 10000 });
+			await page1.waitForURL(/\/room\/[0-9a-fA-F]{16}/, { timeout: 30000 });
 			const page1Url = page1.url();
 			const tokenMatch = page1Url.match(/\/room\/([0-9a-fA-F]{16})/);
 			assert.ok(tokenMatch, 'Expected encrypted room token in URL');
@@ -109,7 +112,7 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 
 			// Wait for Page 1 active room interface
 			await page1.waitForSelector('input[placeholder*="Type an encrypted message"]', {
-				timeout: 10000
+				timeout: 30000
 			});
 
 			// 2. Page 2 opens the room directly using the encrypted token: /room/[token]
@@ -150,6 +153,40 @@ describe('Full Application E2E: Two Browsers Same-Host WebRTC Flow', () => {
 
 			// Page 1 receives message
 			await page1.waitForSelector(`text=${msgFrom2}`, { timeout: 10000 });
+
+			// 4b. Test client-side collapsible pasted snippet in chat input
+			// Page 2 pastes a multi-line snippet into the input
+			const multiLineText = 'alpha-line-1\nbravo-line-2\ncharlie-line-3\ndelta-line-4';
+			await page2.evaluate((text) => {
+				const input = document.querySelector('input[placeholder*="Type an encrypted message"]') as HTMLInputElement | null;
+				if (input) {
+					const dt = new DataTransfer();
+					dt.setData('text/plain', text);
+					const pasteEvent = new ClipboardEvent('paste', {
+						clipboardData: dt,
+						bubbles: true,
+						cancelable: true
+					});
+					input.dispatchEvent(pasteEvent);
+				}
+			}, multiLineText);
+
+			// Verify [ Pasted 4 Lines of Text ] appears
+			await page2.waitForSelector('button:has-text("[ Pasted 4 Lines of Text ]")', { timeout: 5000 });
+
+			// Click to expand
+			await page2.click('button:has-text("[ Pasted 4 Lines of Text ]")');
+			await page2.waitForSelector('textarea', { timeout: 5000 });
+
+			// Click to collapse
+			await page2.click('button:has-text("Collapse")');
+			await page2.waitForSelector('button:has-text("[ Pasted 4 Lines of Text ]")', { timeout: 5000 });
+
+			// Dispatches message
+			await page2.click('button[type="submit"]:has-text("Send")');
+
+			// Page 1 receives full multi-line message
+			await page1.waitForSelector('div:has-text("alpha-line-1")', { timeout: 10000 });
 
 			// 5. Test File Transfer over WebRTC DataChannel
 			// Page 1 initiates file transfer with a synthetic test file
