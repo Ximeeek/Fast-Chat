@@ -316,6 +316,17 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Requests to kick a peer from the signaling room.
+	 * Can only be invoked by a participant holding KickPeer permission.
+	 */
+	public kickPeer(peerId: string): void {
+		this.send({
+			type: 'KICK_PEER',
+			peer_id: peerId
+		});
+	}
+
+	/**
 	 * Verifies the room password for an active room session during rekey.
 	 */
 	public async verifyPassword(password: string): Promise<boolean> {
@@ -515,7 +526,18 @@ export class SignalingClient {
 				roomStore.setClosed(msg.reason);
 				break;
 			case 'ERROR':
-				roomStore.setError(msg.code, msg.message);
+				if (msg.code === 'KICKED_FROM_ROOM') {
+					this.isExplicitlyClosed = true;
+					this.stopHeartbeat();
+					if (this.ws) {
+						this.ws.close();
+						this.ws = null;
+					}
+					roomStore.setError(msg.code, msg.message);
+					roomStore.setConnectionState('closed');
+				} else {
+					roomStore.setError(msg.code, msg.message);
+				}
 				break;
 			case 'ICE_SERVERS': {
 				const servers = msg.iceServers || msg.ice_servers || [];

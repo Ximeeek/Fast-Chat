@@ -107,6 +107,13 @@ pub enum ClientMessage {
 
     /// Application-level heartbeat ping.
     Ping,
+
+    /// Request by an authorized participant to kick a peer from the room.
+    #[serde(alias = "KICK_PEER")]
+    KickPeer {
+        #[serde(alias = "peerId")]
+        peer_id: String,
+    },
 }
 
 /// Outgoing server signaling messages sent to WebSocket peers.
@@ -606,5 +613,26 @@ mod tests {
         let msg_false = ServerMessage::password_verified(false);
         let json_false = serde_json::to_string(&msg_false).unwrap();
         assert!(json_false.contains(r#""valid":false"#));
+    }
+
+    #[test]
+    fn test_client_message_kick_peer_deserialization() {
+        let json_snake = r#"{"type":"KICK_PEER","peer_id":"target-peer"}"#;
+        let msg_snake: ClientMessage = serde_json::from_str(json_snake).unwrap();
+        assert_eq!(
+            msg_snake,
+            ClientMessage::KickPeer {
+                peer_id: "target-peer".to_string(),
+            }
+        );
+
+        let json_camel = r#"{"type":"KICK_PEER","peerId":"target-peer"}"#;
+        let msg_camel: ClientMessage = serde_json::from_str(json_camel).unwrap();
+        assert_eq!(
+            msg_camel,
+            ClientMessage::KickPeer {
+                peer_id: "target-peer".to_string(),
+            }
+        );
     }
 }

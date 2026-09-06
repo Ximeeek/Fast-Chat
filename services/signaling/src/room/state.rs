@@ -132,6 +132,8 @@ pub struct RoomState {
     pub extension_count: u32,
     #[serde(skip)]
     pub owner_rate_key: Option<RateKey>,
+    #[serde(skip)]
+    pub kicked_rate_keys: std::collections::HashSet<RateKey>,
 }
 
 impl RoomState {
@@ -170,6 +172,7 @@ impl RoomState {
             closing_deadline: None,
             extension_count: 0,
             owner_rate_key,
+            kicked_rate_keys: std::collections::HashSet::new(),
         }
     }
 
@@ -275,6 +278,20 @@ impl RoomState {
             .ok_or_else(|| RoomError::PeerNotFound(peer_id.to_string()))?;
 
         Ok(self.peers.remove(pos))
+    }
+
+    /// Kicks a peer from the room and records their rate key in the in-memory blacklist.
+    pub fn kick_peer(&mut self, peer_id: &str) -> Result<Peer, RoomError> {
+        let peer = self.remove_peer(peer_id)?;
+        if let Some(rate_key) = peer.rate_key {
+            self.kicked_rate_keys.insert(rate_key);
+        }
+        Ok(peer)
+    }
+
+    /// Checks if a rate key has been kicked from this room session.
+    pub fn is_rate_key_kicked(&self, rate_key: &RateKey) -> bool {
+        self.kicked_rate_keys.contains(rate_key)
     }
 
     /// Checks if a given peer is the designated owner of this room.
@@ -696,6 +713,32 @@ mod tests {
         let action = room.evaluate_lifecycle(1050, &config);
         assert_eq!(action, LifecycleAction::Destroy);
         assert_eq!(room.state, RoomLifecycleState::Destroyed);
+    }
+
+    #[test]
+    fn test_kick_peer_records_rate_key() {
+        let config = Config::default();
+        let key_alice = RateKey([1u8; 16]);
+        let key_bob = RateKey([2u8; 16]);
+        let mut room = RoomState::new(
+            sample_code(),
+            Some("alice".to_string()),
+            Some(key_alice),
+            PasswordStatus::none(),
+            &config,
+            1000,
+        );
+        room.add_peer("bob".to_string(), false, 1001, &config, Some(key_bob)).unwrap();
+
+        assert!(!room.is_rate_key_kicked(&key_bob));
+        let kicked = room.kick_peer("bob").expect("Kick should succeed");
+        assert_eq!(kicked.id, "bob");
+        assert_eq!(room.peers.len(), 1);
+        assert!(room.is_rate_key_kicked(&key_bob));
+        assert!(!room.is_rate_key_kicked(&key_alice));
+
+        // Kicking non-existent peer returns error
+        assert_eq!(room.kick_peer("unknown"), Err(RoomError::PeerNotFound("unknown".to_string())));
     }
 }
 

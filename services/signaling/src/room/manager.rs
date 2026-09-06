@@ -209,6 +209,45 @@ impl RoomManager {
             .unwrap_or(false)
     }
 
+    /// Kicks a peer from the room if the operator holds `Permission::KickPeer`.
+    /// Kicked peer's rate key is added to the in-memory room blocklist.
+    pub fn kick_peer(
+        &self,
+        code: &RoomCode,
+        operator_peer_id: &str,
+        target_peer_id: &str,
+    ) -> Result<Option<RateKey>, RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(code)
+            .ok_or_else(|| RoomError::PeerNotFound(target_peer_id.to_string()))?;
+
+        if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::KickPeer) {
+            return Err(RoomError::Unauthorized);
+        }
+
+        if operator_peer_id == target_peer_id {
+            return Err(RoomError::Unauthorized);
+        }
+
+        let kicked_peer = room.kick_peer(target_peer_id)?;
+        info!(
+            room = %code,
+            operator = %operator_peer_id,
+            target = %target_peer_id,
+            "Peer kicked from room and rate key recorded"
+        );
+        Ok(kicked_peer.rate_key)
+    }
+
+    /// Checks whether a given rate key was kicked from this room.
+    pub fn is_rate_key_kicked(&self, code: &RoomCode, rate_key: &RateKey) -> bool {
+        self.rooms
+            .get(code)
+            .map(|r| r.is_rate_key_kicked(rate_key))
+            .unwrap_or(false)
+    }
+
     /// Handles peer departure from a room.
     ///
     /// - If the departing peer was the owner and other peers remain, ownership is

@@ -1361,3 +1361,118 @@ async fn test_ws_set_room_password_owner_alone() {
     }
 }
 
+#[tokio::test]
+async fn test_ws_kick_peer_and_reentry_blocked() {
+    let (addr, _state) = spawn_test_server(Config::default()).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // 2. Bob joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    assert!(matches!(resp_b, ServerMessage::JoinOk { .. }));
+
+    // Alice consumes PeerJoined(bob)
+    let peer_joined_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let peer_joined: ServerMessage = serde_json::from_str(&peer_joined_raw).unwrap();
+    match peer_joined {
+        ServerMessage::PeerJoined { peer_id, .. } => assert_eq!(peer_id, "bob"),
+        _ => panic!("Expected PeerJoined for bob, got {peer_joined:?}"),
+    }
+
+    // 3. Bob (non-owner) attempts to kick Alice -> rejected as UNAUTHORIZED
+    let kick_alice = ClientMessage::KickPeer {
+        peer_id: "alice".to_string(),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&kick_alice).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err: ServerMessage = serde_json::from_str(&b_err_raw).unwrap();
+    match b_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected UNAUTHORIZED for non-owner kick attempt, got {b_err:?}"),
+    }
+
+    // 4. Alice (owner) kicks Bob
+    let kick_bob = ClientMessage::KickPeer {
+        peer_id: "bob".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&kick_bob).unwrap().into()))
+        .await
+        .unwrap();
+
+    // 5. Bob receives KICKED_FROM_ROOM error and socket closes
+    let bob_kicked_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let bob_kicked: ServerMessage = serde_json::from_str(&bob_kicked_raw).unwrap();
+    match bob_kicked {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "KICKED_FROM_ROOM"),
+        _ => panic!("Expected KICKED_FROM_ROOM error, got {bob_kicked:?}"),
+    }
+
+    // Bob's connection is terminated by server
+    let next_msg = ws_b.next().await;
+    assert!(
+        next_msg.is_none()
+            || matches!(next_msg.as_ref().unwrap(), Ok(Message::Close(_)))
+            || next_msg.as_ref().unwrap().is_err(),
+        "Expected socket closure for kicked peer"
+    );
+
+    // 6. Alice receives PeerLeft(bob)
+    let peer_left_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let peer_left: ServerMessage = serde_json::from_str(&peer_left_raw).unwrap();
+    match peer_left {
+        ServerMessage::PeerLeft { peer_id, .. } => assert_eq!(peer_id, "bob"),
+        _ => panic!("Expected PeerLeft for bob, got {peer_left:?}"),
+    }
+
+    // 7. Bob attempts to rejoin THIS room -> rejected with KICKED_FROM_ROOM
+    let (mut ws_b_retry, _) = connect_async(&ws_url).await.unwrap();
+    let rejoin_attempt = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob-retry".to_string()),
+        password: None,
+    };
+    ws_b_retry
+        .send(Message::Text(serde_json::to_string(&rejoin_attempt).unwrap().into()))
+        .await
+        .unwrap();
+
+    let retry_err_raw = ws_b_retry.next().await.unwrap().unwrap().into_text().unwrap();
+    let retry_err: ServerMessage = serde_json::from_str(&retry_err_raw).unwrap();
+    match retry_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "KICKED_FROM_ROOM"),
+        _ => panic!("Expected KICKED_FROM_ROOM rejection on rejoin, got {retry_err:?}"),
+    }
+}
+
+

@@ -82,6 +82,11 @@ export type ClientSignalingMessage =
 	  }
 	| {
 			type: 'PING';
+	  }
+	| {
+			type: 'KICK_PEER';
+			peer_id?: string;
+			peerId?: string;
 	  };
 
 /**

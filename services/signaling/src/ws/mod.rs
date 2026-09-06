@@ -109,6 +109,9 @@ pub async fn handle_socket(
         tokio::select! {
             Some(server_msg) = rx.recv() => {
                 let is_room_closed = matches!(server_msg, ServerMessage::RoomClosed { .. });
+                let is_kicked = matches!(&server_msg, ServerMessage::Error { code, .. } if code == "KICKED_FROM_ROOM");
+                let should_close = is_room_closed || is_kicked;
+
                 let json = match serde_json::to_string(&server_msg) {
                     Ok(s) => s,
                     Err(e) => {
@@ -121,7 +124,7 @@ pub async fn handle_socket(
                     break;
                 }
 
-                if is_room_closed {
+                if should_close {
                     let _ = socket.send(Message::Close(None)).await;
                     break;
                 }
@@ -441,6 +444,20 @@ async fn handle_client_message(
                 let _ = tx.send(ServerMessage::error(
                     "ROOM_TERMINATED",
                     "Room has closed or expired",
+                ));
+                return;
+            }
+
+            if state.room_manager.is_rate_key_kicked(&code, rate_key) {
+                warn!(
+                    event = "KICKED_PEER_REJECTED",
+                    connection_id = %connection_id,
+                    room = %code,
+                    "Join attempt rejected: rate key is in kicked list for this room"
+                );
+                let _ = tx.send(ServerMessage::error(
+                    "KICKED_FROM_ROOM",
+                    "You have been kicked from this room and cannot rejoin",
                 ));
                 return;
             }
@@ -833,6 +850,79 @@ async fn handle_client_message(
                 "Received client TURN usage report"
             );
             state.limiter.turn_bandwidth.record_usage(rate_key, bytes);
+        }
+        ClientMessage::KickPeer { peer_id: target_peer_id } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before kicking peers",
+                    ));
+                    return;
+                }
+            };
+
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::KickPeer)
+            {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Unauthorized to kick peers from this room",
+                ));
+                return;
+            }
+
+            if sender_id == &target_peer_id {
+                let _ = tx.send(ServerMessage::error(
+                    "CANNOT_KICK_SELF",
+                    "Cannot kick yourself from the room",
+                ));
+                return;
+            }
+
+            match state.room_manager.kick_peer(code, sender_id, &target_peer_id) {
+                Ok(_) => {
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        operator = %sender_id,
+                        target = %target_peer_id,
+                        event = "KICK_PEER",
+                        "Peer kicked from room by authorized operator"
+                    );
+
+                    // 1. Notify kicked peer with terminal KICKED_FROM_ROOM error so their WS loop closes
+                    state.sessions.send_to_peer(
+                        code,
+                        &target_peer_id,
+                        ServerMessage::error("KICKED_FROM_ROOM", "You were kicked from this room"),
+                    );
+
+                    // 2. Broadcast PEER_LEFT to all remaining participants
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::peer_left(target_peer_id.clone()),
+                        Some(&target_peer_id),
+                    );
+                }
+                Err(RoomError::PeerNotFound(p)) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "PEER_NOT_FOUND",
+                        format!("Target peer '{p}' not found in room"),
+                    ));
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Unauthorized to kick peers from this room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("KICK_FAILED", e.to_string()));
+                }
+            }
         }
     }
 }
