@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { signalingClient } from '$lib/signaling/client';
-	import { formatRoomCodeInput, validateRoomCode, resolveRoomIdentifier, encodeRoomToken } from '$lib/utils/roomCode';
+	import { formatRoomCodeInput, validateRoomCode, encodeRoomToken } from '$lib/utils/roomCode';
 	import SecurityInfoPanel from '$lib/room/SecurityInfoPanel.svelte';
 
 	let enablePassword = $state(false);
@@ -15,8 +15,8 @@
 	let isSecurityInfoOpen = $state(false);
 
 	const codePlaceholder = '0000-0000-0000';
-	const isRawDigits = $derived(!/[a-zA-Z]/.test(manualCode) && !manualCode.includes('/'));
-	const maskSuffix = $derived(isRawDigits ? codePlaceholder.slice(manualCode.length) : '');
+	const hasNonDigits = $derived(/[^\d-]/.test(manualCode));
+	const maskSuffix = $derived(!hasNonDigits ? codePlaceholder.slice(manualCode.length) : '');
 
 	function handleCodeKeyDown(e: KeyboardEvent) {
 		if (
@@ -26,31 +26,37 @@
 		) {
 			return;
 		}
-		if (!/^[0-9a-zA-Z\-_/.:]$/.test(e.key)) {
+		if (!/^\d$/.test(e.key)) {
 			e.preventDefault();
+			joinError = 'Only numbers are allowed. Expected room code format: 0000-0000-0000';
 		}
 	}
 
 	function handleCodeInput(e: Event) {
 		const target = e.target as HTMLInputElement;
 		const raw = target.value.trim();
-		if (!/[a-zA-Z]/.test(raw) && !raw.includes('/')) {
-			manualCode = formatRoomCodeInput(raw);
-		} else {
+		if (/[^\d-]/.test(raw)) {
 			manualCode = raw;
+			joinError = 'Only numbers are allowed. Expected room code format: 0000-0000-0000';
+		} else {
+			manualCode = formatRoomCodeInput(raw);
+			target.value = manualCode;
+			joinError = null;
 		}
-		target.value = manualCode;
-		joinError = null;
 	}
 
 	function handleJoinExisting(e: SubmitEvent) {
 		e.preventDefault();
-		const resolved = resolveRoomIdentifier(manualCode);
-		if (!resolved) {
-			joinError = 'Invalid room identifier. Enter a 12-digit code (0000-0000-0000) or encrypted room token.';
+		if (/[^\d-]/.test(manualCode)) {
+			joinError = 'Only numbers are allowed. Expected room code format: 0000-0000-0000';
 			return;
 		}
-		goto(`/room/${resolved.token}`);
+		if (!validateRoomCode(manualCode)) {
+			joinError = 'Invalid room code format. Expected: 0000-0000-0000';
+			return;
+		}
+		const token = encodeRoomToken(manualCode);
+		goto(`/room/${token}`);
 	}
 
 	async function handleCreateRoom(e: SubmitEvent) {
@@ -198,12 +204,12 @@
 			{/if}
 			<div>
 				<label for="manual-code" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
-					Room Identifier or Token
+					Room Identifier
 				</label>
 				<!-- Fixed-position overlay input preventing text jumping and aligning over mask -->
 				<div class="relative flex items-center rounded-xl bg-[#06080e] border border-[#1e2538] focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400 transition-all overflow-hidden">
 					<!-- Visual placeholder mask layer for numeric codes -->
-					{#if isRawDigits}
+					{#if !hasNonDigits}
 						<div
 							class="absolute inset-0 px-4 py-3 flex items-center font-['JetBrains_Mono',monospace] text-sm tracking-[0.22em] pointer-events-none select-none text-left"
 							aria-hidden="true"
@@ -215,15 +221,15 @@
 					<input
 						id="manual-code"
 						type="text"
-						inputmode={isRawDigits ? 'numeric' : 'text'}
-						placeholder={isRawDigits ? '' : 'Enter 12-digit code or encrypted token'}
+						inputmode="numeric"
+						placeholder={hasNonDigits ? '' : '0000-0000-0000'}
 						value={manualCode}
 						onkeydown={handleCodeKeyDown}
 						oninput={handleCodeInput}
-						maxlength={120}
+						maxlength={60}
 						autocomplete="off"
 						spellcheck="false"
-						class="w-full px-4 py-3 bg-transparent text-cyan-300 text-sm font-['JetBrains_Mono',monospace] {isRawDigits ? 'tracking-[0.22em]' : 'tracking-normal'} text-left focus:outline-none relative z-10"
+						class="w-full px-4 py-3 bg-transparent text-cyan-300 text-sm font-['JetBrains_Mono',monospace] {!hasNonDigits ? 'tracking-[0.22em]' : 'tracking-normal'} text-left focus:outline-none relative z-10"
 					/>
 				</div>
 			</div>

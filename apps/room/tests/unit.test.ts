@@ -23,6 +23,9 @@ describe('Room Code Validation & Formatting', () => {
 		assert.equal(validateRoomCode('abcd-efgh-ijkl'), false);
 		assert.equal(validateRoomCode('123a-5678-9012'), false);
 		assert.equal(validateRoomCode(' 1234-5678-9012 '), true);
+		assert.equal(validateRoomCode('http://localhost:5173/room/98e508ffd0ab09b3'), false);
+		assert.equal(validateRoomCode('https://fastchat.room/room/98e508ffd0ab09b3'), false);
+		assert.equal(validateRoomCode('98e508ffd0ab09b3'), false);
 	});
 
 	test('formatRoomCodeInput formats raw digits into hyphens progressively', () => {
