@@ -28,6 +28,8 @@ pub struct Peer {
     pub id: String,
     pub is_owner: bool,
     pub joined_at: i64,
+    #[serde(skip)]
+    pub rate_key: Option<RateKey>,
 }
 
 /// Optional password protection metadata for the room.
@@ -129,7 +131,7 @@ pub struct RoomState {
     pub closing_deadline: Option<i64>,
     pub extension_count: u32,
     #[serde(skip)]
-    pub creator_rate_key: Option<RateKey>,
+    pub owner_rate_key: Option<RateKey>,
 }
 
 impl RoomState {
@@ -138,7 +140,7 @@ impl RoomState {
     pub fn new(
         code: RoomCode,
         owner_peer_id: Option<String>,
-        creator_rate_key: Option<RateKey>,
+        owner_rate_key: Option<RateKey>,
         password_status: PasswordStatus,
         config: &Config,
         now_ts: i64,
@@ -153,6 +155,7 @@ impl RoomState {
                 id: owner_id,
                 is_owner: true,
                 joined_at: now_ts,
+                rate_key: owner_rate_key,
             });
         }
 
@@ -166,7 +169,7 @@ impl RoomState {
             expires_at: now_ts + config.initial_room_duration_secs,
             closing_deadline: None,
             extension_count: 0,
-            creator_rate_key,
+            owner_rate_key,
         }
     }
 
@@ -198,6 +201,7 @@ impl RoomState {
         is_owner: bool,
         now_ts: i64,
         config: &Config,
+        rate_key: Option<RateKey>,
     ) -> Result<(), RoomError> {
         if matches!(
             self.state,
@@ -218,7 +222,12 @@ impl RoomState {
             id: peer_id,
             is_owner,
             joined_at: now_ts,
+            rate_key,
         });
+
+        if is_owner {
+            self.owner_rate_key = rate_key;
+        }
 
         // Automatically activate when first peer/owner joins
         if self.state == RoomLifecycleState::Creating {
@@ -249,11 +258,12 @@ impl RoomState {
         password: Option<&str>,
         now_ts: i64,
         config: &Config,
+        rate_key: Option<RateKey>,
     ) -> Result<(), RoomError> {
         if !is_owner && !self.verify_password(password) {
             return Err(RoomError::InvalidPassword);
         }
-        self.add_peer(peer_id, is_owner, now_ts, config)
+        self.add_peer(peer_id, is_owner, now_ts, config, rate_key)
     }
 
     /// Removes a peer from the room.
@@ -283,16 +293,22 @@ impl RoomState {
     }
 
     /// Sets the designated owner of this room to the specified peer ID.
-    /// Resets owner status for all other peers. Returns true if the peer was found.
+    /// Resets owner status for all other peers and updates `owner_rate_key`.
+    /// Returns true if the peer was found.
     pub fn set_owner(&mut self, peer_id: &str) -> bool {
         let mut found = false;
+        let mut new_rate_key = None;
         for p in &mut self.peers {
             if p.id == peer_id {
                 p.is_owner = true;
+                new_rate_key = p.rate_key;
                 found = true;
             } else {
                 p.is_owner = false;
             }
+        }
+        if found {
+            self.owner_rate_key = new_rate_key;
         }
         found
     }
@@ -481,11 +497,11 @@ mod tests {
         assert_eq!(room.state, RoomLifecycleState::Active);
 
         // Add 2nd participant (allowed)
-        let res2 = room.add_peer("peer2".to_string(), false, 1001, &config);
+        let res2 = room.add_peer("peer2".to_string(), false, 1001, &config, None);
         assert!(res2.is_ok());
 
         // Add 3rd participant (should fail)
-        let res3 = room.add_peer("peer3".to_string(), false, 1002, &config);
+        let res3 = room.add_peer("peer3".to_string(), false, 1002, &config, None);
         assert_eq!(res3, Err(RoomError::RoomFull(2)));
     }
 
@@ -593,7 +609,7 @@ mod tests {
 
         // Before rekey, room has no password: peer can join without password
         assert!(room.verify_password(None));
-        assert!(room.add_peer_with_password("peer1".to_string(), false, None, 1001, &config).is_ok());
+        assert!(room.add_peer_with_password("peer1".to_string(), false, None, 1001, &config, None).is_ok());
 
         // Non-owner cannot rekey
         let err = room.rekey_by_owner("peer1", "secret123", None);
@@ -606,43 +622,48 @@ mod tests {
 
         // Joining without password fails
         assert!(!room.verify_password(None));
-        let join_no_pw = room.add_peer_with_password("peer2".to_string(), false, None, 1002, &config);
+        let join_no_pw = room.add_peer_with_password("peer2".to_string(), false, None, 1002, &config, None);
         assert_eq!(join_no_pw, Err(RoomError::InvalidPassword));
 
         // Joining with wrong password fails
         assert!(!room.verify_password(Some("wrong")));
-        let join_wrong = room.add_peer_with_password("peer2".to_string(), false, Some("wrong"), 1002, &config);
+        let join_wrong = room.add_peer_with_password("peer2".to_string(), false, Some("wrong"), 1002, &config, None);
         assert_eq!(join_wrong, Err(RoomError::InvalidPassword));
 
         // Joining with correct password succeeds
         assert!(room.verify_password(Some("secret123")));
-        let join_ok = room.add_peer_with_password("peer2".to_string(), false, Some("secret123"), 1002, &config);
+        let join_ok = room.add_peer_with_password("peer2".to_string(), false, Some("secret123"), 1002, &config, None);
         assert!(join_ok.is_ok());
     }
 
     #[test]
     fn test_owner_transfer_and_empty_room_destruction() {
         let config = Config::default();
+        let key_alice = RateKey([1u8; 16]);
+        let key_bob = RateKey([2u8; 16]);
         let mut room = RoomState::new(
             sample_code(),
             Some("alice".to_string()),
-            None,
+            Some(key_alice),
             PasswordStatus::none(),
             &config,
             1000,
         );
 
         assert_eq!(room.get_owner_id(), Some("alice".to_string()));
-        assert!(room.add_peer("bob".to_string(), false, 1001, &config).is_ok());
+        assert_eq!(room.owner_rate_key, Some(key_alice));
+        assert!(room.add_peer("bob".to_string(), false, 1001, &config, Some(key_bob)).is_ok());
 
         // Transfer ownership to bob
         assert!(room.set_owner("bob"));
         assert_eq!(room.get_owner_id(), Some("bob".to_string()));
+        assert_eq!(room.owner_rate_key, Some(key_bob));
         assert!(!room.is_owner("alice"));
         assert!(room.is_owner("bob"));
 
-        // Setting non-existent peer as owner returns false
+        // Setting non-existent peer as owner returns false and keeps owner_rate_key
         assert!(!room.set_owner("charlie"));
+        assert_eq!(room.owner_rate_key, Some(key_bob));
 
         // Remove alice then bob -> room empty
         assert!(room.remove_peer("alice").is_ok());

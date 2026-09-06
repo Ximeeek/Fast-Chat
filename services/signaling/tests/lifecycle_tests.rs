@@ -69,15 +69,15 @@ fn test_configurable_participant_limit() {
     assert_eq!(room.peers.len(), 1);
 
     // Peer 2 joins
-    assert!(room.add_peer("peer2".to_string(), false, 1001, &config).is_ok());
+    assert!(room.add_peer("peer2".to_string(), false, 1001, &config, None).is_ok());
     assert_eq!(room.peers.len(), 2);
 
     // Peer 3 joins (reaches limit of 3)
-    assert!(room.add_peer("peer3".to_string(), false, 1002, &config).is_ok());
+    assert!(room.add_peer("peer3".to_string(), false, 1002, &config, None).is_ok());
     assert_eq!(room.peers.len(), 3);
 
     // Peer 4 tries to join -> Must be rejected with RoomFull(3)
-    let overflow_err = room.add_peer("peer4".to_string(), false, 1003, &config);
+    let overflow_err = room.add_peer("peer4".to_string(), false, 1003, &config, None);
     assert_eq!(overflow_err, Err(RoomError::RoomFull(3)));
     assert_eq!(room.peers.len(), 3);
 
@@ -87,7 +87,7 @@ fn test_configurable_participant_limit() {
     assert_eq!(room.peers.len(), 2);
 
     // Peer 4 can now join successfully
-    assert!(room.add_peer("peer4".to_string(), false, 1004, &config).is_ok());
+    assert!(room.add_peer("peer4".to_string(), false, 1004, &config, None).is_ok());
     assert_eq!(room.peers.len(), 3);
 }
 
@@ -117,7 +117,7 @@ fn test_lifecycle_full_state_machine_with_extension_and_server_time() {
 
     // 1. Peer joins -> room transitions to Active
     manager
-        .join_room(&code, "bob".to_string(), false)
+        .join_room(&code, "bob".to_string(), false, None)
         .expect("Bob should join");
     let room = manager.get_room_state(&code).unwrap();
     assert_eq!(room.state, RoomLifecycleState::Active);

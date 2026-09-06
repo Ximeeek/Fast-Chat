@@ -280,7 +280,7 @@ async fn handle_client_message(
             }
 
             let now_ts = chrono::Utc::now().timestamp();
-            let active_rooms = state.room_manager.count_active_rooms_by_creator(rate_key, now_ts);
+            let active_rooms = state.room_manager.count_active_rooms_by_owner(rate_key, now_ts);
             if active_rooms >= state.config.max_active_rooms_per_ip {
                 warn!(
                     event = "LIMITER_REJECTED",
@@ -288,7 +288,7 @@ async fn handle_client_message(
                     limiter = "active_rooms_per_ip",
                     active_rooms = active_rooms,
                     max_allowed = state.config.max_active_rooms_per_ip,
-                    "Room creation rejected: creator already has an active room"
+                    "Room creation rejected: owner already has an active room"
                 );
                 let _ = tx.send(ServerMessage::error(
                     "ACTIVE_ROOM_LIMIT_EXCEEDED",
@@ -458,6 +458,7 @@ async fn handle_client_message(
                 assigned_peer_id.clone(),
                 false,
                 password.as_deref(),
+                Some(*rate_key),
             );
 
             match join_res {

@@ -524,3 +524,165 @@ async fn test_join_room_escalating_lockout_and_success_counter_reset() {
     }
 }
 
+#[tokio::test]
+async fn test_ownership_transfer_updates_active_room_limiter_for_both_parties() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let config = Config {
+        max_active_rooms_per_ip: 1,
+        ..Default::default()
+    };
+    let (addr, state) = spawn_limiter_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    let ip_a = "198.51.100.10";
+    let ip_b = "198.51.100.20";
+
+    // 1. Person A connects from IP A and creates room
+    let mut req_a = ws_url.clone().into_client_request().unwrap();
+    req_a.headers_mut().insert("x-forwarded-for", ip_a.parse().unwrap());
+    let (mut ws_a, _) = connect_async(req_a).await.unwrap();
+
+    let create_a = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_a).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a: ServerMessage = serde_json::from_str(&ws_a.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, peer_id, .. } => {
+            assert_eq!(peer_id, "alice");
+            code
+        }
+        other => panic!("Expected RoomCreated, got {other:?}"),
+    };
+
+    // Verify Person A cannot create a second room while owning the first room
+    let mut req_a_second = ws_url.clone().into_client_request().unwrap();
+    req_a_second.headers_mut().insert("x-forwarded-for", ip_a.parse().unwrap());
+    let (mut ws_a_second, _) = connect_async(req_a_second).await.unwrap();
+
+    let create_a_second = ClientMessage::CreateRoom {
+        peer_id: Some("alice2".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a_second.send(Message::Text(serde_json::to_string(&create_a_second).unwrap().into()))
+        .await
+        .unwrap();
+    let resp_a_second: ServerMessage = serde_json::from_str(&ws_a_second.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    assert!(matches!(resp_a_second, ServerMessage::Error { ref code, .. } if code == "ACTIVE_ROOM_LIMIT_EXCEEDED"));
+    drop(ws_a_second);
+
+    // 2. Person B connects from IP B and joins the room
+    let mut req_b = ws_url.clone().into_client_request().unwrap();
+    req_b.headers_mut().insert("x-forwarded-for", ip_b.parse().unwrap());
+    let (mut ws_b, _) = connect_async(req_b).await.unwrap();
+
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b: ServerMessage = serde_json::from_str(&ws_b.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    assert!(matches!(resp_b, ServerMessage::JoinOk { ref peer_id, is_owner: false, .. } if peer_id == "bob"));
+
+    // Drain Alice's PEER_JOINED notification
+    let _ = ws_a.next().await.unwrap().unwrap();
+
+    // 3. Person A disconnects (leaves room) -> ownership transfers to Person B
+    drop(ws_a);
+
+    // Person B receives PeerLeft(alice) and RoomOwnerChanged(bob)
+    let mut bob_saw_owner_transferred = false;
+    for _ in 0..2 {
+        let msg: ServerMessage = serde_json::from_str(&ws_b.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+        if let ServerMessage::RoomOwnerChanged { owner_peer_id, .. } = msg {
+            if owner_peer_id == "bob" {
+                bob_saw_owner_transferred = true;
+            }
+        }
+    }
+    assert!(bob_saw_owner_transferred);
+
+    // Room still exists with Bob as the sole occupant and owner
+    assert_eq!(state.room_manager.room_count(), 1);
+
+    // 4. Person A (original creator, now departed) connects again from IP A -> can immediately create a new room!
+    let mut req_a_new = ws_url.clone().into_client_request().unwrap();
+    req_a_new.headers_mut().insert("x-forwarded-for", ip_a.parse().unwrap());
+    let (mut ws_a_new, _) = connect_async(req_a_new).await.unwrap();
+
+    let create_a_new = ClientMessage::CreateRoom {
+        peer_id: Some("alice_new".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a_new.send(Message::Text(serde_json::to_string(&create_a_new).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_new: ServerMessage = serde_json::from_str(&ws_a_new.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    assert!(
+        matches!(resp_a_new, ServerMessage::RoomCreated { .. }),
+        "Person A must be able to create a new room immediately after ownership transfer, but got: {resp_a_new:?}"
+    );
+
+    // 5. Person B (now owner of active transferred room) attempts to create a second room from IP B -> BLOCKED by limiter
+    let mut req_b_second = ws_url.clone().into_client_request().unwrap();
+    req_b_second.headers_mut().insert("x-forwarded-for", ip_b.parse().unwrap());
+    let (mut ws_b_second, _) = connect_async(req_b_second).await.unwrap();
+
+    let create_b_second = ClientMessage::CreateRoom {
+        peer_id: Some("bob_second".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_b_second.send(Message::Text(serde_json::to_string(&create_b_second).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_second: ServerMessage = serde_json::from_str(&ws_b_second.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    match resp_b_second {
+        ServerMessage::Error { code, message } => {
+            assert_eq!(code, "ACTIVE_ROOM_LIMIT_EXCEEDED");
+            assert!(message.contains("You already have an active room"));
+        }
+        other => panic!("Expected ACTIVE_ROOM_LIMIT_EXCEEDED for Person B, got {other:?}"),
+    }
+    drop(ws_b_second);
+
+    // 6. Person B leaves/closes their room -> room is destroyed -> Person B can now create a room
+    drop(ws_b);
+
+    // Short wait for socket disconnect cleanup
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut req_b_new = ws_url.clone().into_client_request().unwrap();
+    req_b_new.headers_mut().insert("x-forwarded-for", ip_b.parse().unwrap());
+    let (mut ws_b_new, _) = connect_async(req_b_new).await.unwrap();
+
+    let create_b_new = ClientMessage::CreateRoom {
+        peer_id: Some("bob_new".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_b_new.send(Message::Text(serde_json::to_string(&create_b_new).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_new: ServerMessage = serde_json::from_str(&ws_b_new.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    assert!(
+        matches!(resp_b_new, ServerMessage::RoomCreated { .. }),
+        "Person B must be able to create a room once the transferred room is closed, but got: {resp_b_new:?}"
+    );
+}
+

@@ -69,7 +69,7 @@ async fn create_room_handler(
 
     let rate_key = state.limiter.pepper.derive_key(&client_ip.0);
     let now_ts = Utc::now().timestamp();
-    let active_rooms = state.room_manager.count_active_rooms_by_creator(&rate_key, now_ts);
+    let active_rooms = state.room_manager.count_active_rooms_by_owner(&rate_key, now_ts);
     if active_rooms >= state.config.max_active_rooms_per_ip {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,

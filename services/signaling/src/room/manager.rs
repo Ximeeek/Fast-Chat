@@ -54,7 +54,7 @@ impl RoomManager {
     pub fn create_room(
         &self,
         owner_peer_id: Option<String>,
-        creator_rate_key: Option<RateKey>,
+        owner_rate_key: Option<RateKey>,
         password_status: PasswordStatus,
     ) -> Result<RoomCode, RoomCodeError> {
         let code = RoomCode::generate_unique(&self.rooms)?;
@@ -62,7 +62,7 @@ impl RoomManager {
         let state = RoomState::new(
             code.clone(),
             owner_peer_id,
-            creator_rate_key,
+            owner_rate_key,
             password_status,
             &self.config,
             now_ts,
@@ -73,15 +73,20 @@ impl RoomManager {
         Ok(code)
     }
 
-    /// Counts active rooms created by the specified rate key.
-    pub fn count_active_rooms_by_creator(&self, key: &RateKey, now_ts: i64) -> usize {
+    /// Counts active rooms owned by the specified rate key.
+    pub fn count_active_rooms_by_owner(&self, key: &RateKey, now_ts: i64) -> usize {
         self.rooms
             .iter()
             .filter(|entry| {
                 let room = entry.value();
-                room.creator_rate_key.as_ref() == Some(key) && room.is_active(now_ts)
+                room.owner_rate_key.as_ref() == Some(key) && room.is_active(now_ts)
             })
             .count()
+    }
+
+    /// Backwards-compatible alias for counting active rooms by owner rate key.
+    pub fn count_active_rooms_by_creator(&self, key: &RateKey, now_ts: i64) -> usize {
+        self.count_active_rooms_by_owner(key, now_ts)
     }
 
     /// Retrieves a cloned snapshot of the current state of a room, if it exists.
@@ -95,8 +100,9 @@ impl RoomManager {
         code: &RoomCode,
         peer_id: String,
         is_owner: bool,
+        rate_key: Option<RateKey>,
     ) -> Result<(), RoomError> {
-        self.join_room_with_password(code, peer_id, is_owner, None)
+        self.join_room_with_password(code, peer_id, is_owner, None, rate_key)
     }
 
     /// Adds a peer to the specified room with password verification.
@@ -106,6 +112,7 @@ impl RoomManager {
         peer_id: String,
         is_owner: bool,
         password: Option<&str>,
+        rate_key: Option<RateKey>,
     ) -> Result<(), RoomError> {
         let mut room = self
             .rooms
@@ -113,7 +120,7 @@ impl RoomManager {
             .ok_or_else(|| RoomError::PeerNotFound(peer_id.clone()))?;
 
         let now_ts = Utc::now().timestamp();
-        room.add_peer_with_password(peer_id, is_owner, password, now_ts, &self.config)
+        room.add_peer_with_password(peer_id, is_owner, password, now_ts, &self.config, rate_key)
     }
 
     /// Performs rekeying on an active room, configuring or updating password protection.
@@ -197,9 +204,9 @@ impl RoomManager {
 
         let mut new_owner_id = None;
         if was_owner {
-            // Reassign owner flag to the first remaining participant
-            room_entry.peers[0].is_owner = true;
+            // Reassign owner flag and owner_rate_key to the first remaining participant
             let assigned_owner = room_entry.peers[0].id.clone();
+            room_entry.set_owner(&assigned_owner);
             info!(
                 room = %code,
                 previous_owner = %peer_id,
@@ -313,24 +320,39 @@ mod tests {
     }
 
     #[test]
-    fn test_manager_count_active_rooms_by_creator() {
+    fn test_manager_count_active_rooms_by_owner() {
         let config = Config::default();
         let manager = RoomManager::new(config);
         let key_a = RateKey([1u8; 16]);
         let key_b = RateKey([2u8; 16]);
         let now = 1_000_000;
 
-        assert_eq!(manager.count_active_rooms_by_creator(&key_a, now), 0);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_a, now), 0);
 
         let code_a = manager
             .create_room(Some("alice".to_string()), Some(key_a), PasswordStatus::none())
             .unwrap();
-        assert_eq!(manager.count_active_rooms_by_creator(&key_a, now), 1);
-        assert_eq!(manager.count_active_rooms_by_creator(&key_b, now), 0);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_a, now), 1);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_b, now), 0);
 
-        // Close room a -> immediately not active
-        manager.close_room(&code_a, "alice").unwrap();
-        assert_eq!(manager.count_active_rooms_by_creator(&key_a, now), 0);
+        // Bob joins room
+        manager
+            .join_room(&code_a, "bob".to_string(), false, Some(key_b))
+            .unwrap();
+        assert_eq!(manager.count_active_rooms_by_owner(&key_a, now), 1);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_b, now), 0);
+
+        // Alice (owner) leaves -> ownership transfers to Bob
+        let outcome = manager.leave_room(&code_a, "alice").unwrap();
+        assert_eq!(outcome.new_owner_id, Some("bob".to_string()));
+
+        // Limiter now reflects Bob as owner, Alice is freed
+        assert_eq!(manager.count_active_rooms_by_owner(&key_a, now), 0);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_b, now), 1);
+
+        // Close room -> Bob is freed
+        manager.close_room(&code_a, "bob").unwrap();
+        assert_eq!(manager.count_active_rooms_by_owner(&key_b, now), 0);
     }
 
     #[test]
@@ -384,17 +406,22 @@ mod tests {
         let config = Config::default();
         let broadcaster = Arc::new(MockBroadcaster::default());
         let manager = RoomManager::with_broadcaster(config, broadcaster.clone());
+        let key_alice = RateKey([1u8; 16]);
+        let key_bob = RateKey([2u8; 16]);
+        let now = 1_000_000;
 
         let code = manager
-            .create_room(Some("alice".to_string()), None, PasswordStatus::none())
+            .create_room(Some("alice".to_string()), Some(key_alice), PasswordStatus::none())
             .unwrap();
 
-        manager.join_room(&code, "bob".to_string(), false).unwrap();
-        manager.join_room(&code, "charlie".to_string(), false).unwrap();
+        manager.join_room(&code, "bob".to_string(), false, Some(key_bob)).unwrap();
+        manager.join_room(&code, "charlie".to_string(), false, None).unwrap();
 
         assert!(manager.is_owner(&code, "alice"));
         assert!(!manager.is_owner(&code, "bob"));
         assert!(!manager.is_owner(&code, "charlie"));
+        assert_eq!(manager.count_active_rooms_by_owner(&key_alice, now), 1);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_bob, now), 0);
 
         // 1. Charlie (non-owner) leaves
         let outcome_c = manager.leave_room(&code, "charlie").unwrap();
@@ -408,6 +435,7 @@ mod tests {
         );
         assert!(manager.is_owner(&code, "alice"));
         assert_eq!(manager.room_count(), 1);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_alice, now), 1);
 
         // 2. Alice (owner) leaves -> ownership transfers to bob
         let outcome_a = manager.leave_room(&code, "alice").unwrap();
@@ -422,6 +450,8 @@ mod tests {
         assert!(manager.is_owner(&code, "bob"));
         assert!(!manager.is_owner(&code, "alice"));
         assert_eq!(manager.room_count(), 1);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_alice, now), 0);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_bob, now), 1);
 
         // 3. Bob leaves -> room empty -> auto destroyed immediately
         let outcome_b = manager.leave_room(&code, "bob").unwrap();
@@ -435,5 +465,6 @@ mod tests {
         );
         assert_eq!(manager.room_count(), 0);
         assert_eq!(broadcaster.closed_count.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.count_active_rooms_by_owner(&key_bob, now), 0);
     }
 }
