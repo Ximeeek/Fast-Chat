@@ -1,3 +1,5 @@
+import { getLanguageDisplayName } from './languageDetection.ts';
+
 /**
  * Representation of a multi-line or long pasted text snippet
  * attached to the client-side chat drafting input before transmission.
@@ -11,6 +13,10 @@ export interface PastedBlock {
 	lineCount: number;
 	/** Whether the snippet is currently expanded to show full text in the input */
 	isExpanded: boolean;
+	/** Content classification: standard text or source code */
+	contentType?: 'text' | 'code';
+	/** Detected or manually selected programming language */
+	language?: string | null;
 }
 
 /**
@@ -39,14 +45,24 @@ export function isLongPastedText(text: string, lineThreshold = 3, charThreshold 
 }
 
 /**
- * Formats the user-facing collapsed snippet label.
+ * Formats the user-facing collapsed snippet label, optionally presenting the detected language.
  *
  * @param lineCount - Number of lines in the snippet.
- * @returns Formatted label string, e.g. "[ Pasted 12 Lines of Text ]".
+ * @param language - Optional detected language identifier.
+ * @param isCode - Whether the snippet is designated as source code.
+ * @returns Formatted label string, e.g. "[ Pasted 12 Lines of Text ]" or "[ Pasted 47 Lines · JavaScript ]".
  */
-export function formatPastedLabel(lineCount: number): string {
+export function formatPastedLabel(
+	lineCount: number,
+	language?: string | null,
+	isCode?: boolean
+): string {
 	const count = Math.max(lineCount, 1);
 	const unit = count === 1 ? 'Line' : 'Lines';
+	if (isCode || language) {
+		const langDisplay = getLanguageDisplayName(language);
+		return `[ Pasted ${count} ${unit} · ${langDisplay} ]`;
+	}
 	return `[ Pasted ${count} ${unit} of Text ]`;
 }
 

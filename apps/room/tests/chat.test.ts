@@ -625,6 +625,14 @@ describe('Pasted Snippet Drafting & Containment', () => {
 		assert.equal(formatPastedLabel(0), '[ Pasted 1 Line of Text ]');
 	});
 
+	test('formatPastedLabel generates clean labels with detected or manual language', () => {
+		assert.equal(formatPastedLabel(47, 'javascript', true), '[ Pasted 47 Lines · JavaScript ]');
+		assert.equal(formatPastedLabel(1, 'rust', true), '[ Pasted 1 Line · Rust ]');
+		assert.equal(formatPastedLabel(12, null, true), '[ Pasted 12 Lines · Code ]');
+		assert.equal(formatPastedLabel(8, 'python'), '[ Pasted 8 Lines · Python ]');
+		assert.equal(formatPastedLabel(10, null, false), '[ Pasted 10 Lines of Text ]');
+	});
+
 	test('composeFinalMessage joins input text and pasted snippet blocks cleanly', () => {
 		const blocks: PastedBlock[] = [
 			{ id: 'b1', content: 'const x = 1;\nconsole.log(x);', lineCount: 2, isExpanded: false },

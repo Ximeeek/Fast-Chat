@@ -17,7 +17,12 @@
 		isLongPastedText,
 		formatPastedLabel,
 		composeFinalMessage,
-		type PastedBlock
+		isCodeSnippet,
+		detectLanguage,
+		getLanguageDisplayName,
+		SUPPORTED_LANGUAGES,
+		type PastedBlock,
+		type SupportedLanguage
 	} from '$lib/chat';
 	import { FileSender, FileReceiver, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
@@ -54,6 +59,33 @@
 	let ownerPromotionBanner = $state(false);
 
 	let pastedBlocks = $state<PastedBlock[]>([]);
+	let isManualCodeMode = $state(false);
+	let manualLanguage = $state<SupportedLanguage | null>(null);
+
+	function toggleManualCodeMode() {
+		isManualCodeMode = !isManualCodeMode;
+		if (isManualCodeMode && !manualLanguage) {
+			const detected = detectLanguage(messageInput);
+			if (detected) {
+				manualLanguage = detected;
+			}
+		}
+	}
+
+	function updatePastedBlockMode(id: string, mode: string) {
+		const block = pastedBlocks.find((b) => b.id === id);
+		if (!block) return;
+		if (mode === 'text') {
+			block.contentType = 'text';
+			block.language = null;
+		} else if (mode === 'code') {
+			block.contentType = 'code';
+			block.language = null;
+		} else {
+			block.contentType = 'code';
+			block.language = mode as SupportedLanguage;
+		}
+	}
 
 	const isChatDisabled = $derived($hasFailedPeers && $openDataChannelsCount === 0);
 	const hasPastedContent = $derived(pastedBlocks.some((b) => b.content.trim().length > 0));
@@ -137,11 +169,15 @@
 		if (isLongPastedText(text)) {
 			e.preventDefault();
 			const lines = countLines(text);
+			const isCode = isCodeSnippet(text);
+			const detectedLang = isCode ? detectLanguage(text) : null;
 			pastedBlocks.push({
 				id: `paste-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
 				content: text,
 				lineCount: Math.max(lines, 1),
-				isExpanded: false
+				isExpanded: false,
+				contentType: isCode ? 'code' : 'text',
+				language: detectedLang
 			});
 		}
 	}
@@ -162,6 +198,12 @@
 		if (block) {
 			block.content = newContent;
 			block.lineCount = Math.max(countLines(newContent), 1);
+			if (block.contentType === 'code' && !block.language) {
+				const detected = detectLanguage(newContent);
+				if (detected) {
+					block.language = detected;
+				}
+			}
 		}
 	}
 
@@ -176,6 +218,22 @@
 			: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 		const sender = $chatStore.username || 'anonymous';
 		const timestamp = Date.now();
+
+		// Determine contentType and language
+		let messageContentType: 'text' | 'code' = 'text';
+		let messageLanguage: string | null = null;
+
+		if (isManualCodeMode) {
+			messageContentType = 'code';
+			messageLanguage = manualLanguage || detectLanguage(trimmed);
+		} else if (pastedBlocks.some((b) => b.contentType === 'code')) {
+			messageContentType = 'code';
+			const codeBlock = pastedBlocks.find((b) => b.contentType === 'code');
+			messageLanguage = codeBlock?.language || detectLanguage(trimmed);
+		} else if (isCodeSnippet(trimmed)) {
+			messageContentType = 'code';
+			messageLanguage = detectLanguage(trimmed);
+		}
 
 		if (import.meta.env.DEV) {
 			const targetPeers = Array.from(
@@ -192,6 +250,8 @@
 				targetPeers,
 				contentLengthBytes: new TextEncoder().encode(trimmed).byteLength,
 				peerStates,
+				contentType: messageContentType,
+				language: messageLanguage,
 				timestamp: Date.now()
 			});
 		}
@@ -202,11 +262,15 @@
 			sender,
 			content: trimmed,
 			timestamp,
-			isSelf: true
+			isSelf: true,
+			contentType: messageContentType,
+			language: messageLanguage
 		});
 
 		messageInput = '';
 		pastedBlocks = [];
+		isManualCodeMode = false;
+		manualLanguage = null;
 
 		try {
 			const payload = serializeChatMessage({
@@ -214,7 +278,9 @@
 				id,
 				sender,
 				content: trimmed,
-				timestamp
+				timestamp,
+				contentType: messageContentType,
+				language: messageLanguage
 			});
 			await webRtcManager.broadcast(payload);
 		} catch (err) {
@@ -286,6 +352,8 @@
 		transferStore.reset();
 		messageInput = '';
 		pastedBlocks = [];
+		isManualCodeMode = false;
+		manualLanguage = null;
 		goto('/create');
 	}
 
@@ -352,12 +420,16 @@
 								content: wireMsg.content,
 								timestamp: wireMsg.timestamp,
 								isSelf: false,
-								senderPeerId: peerId
+								senderPeerId: peerId,
+								contentType: wireMsg.contentType,
+								language: wireMsg.language
 							});
 							if (import.meta.env.DEV) {
 								console.debug('[Chat:Receiver:StoreAdded]', {
 									peerId,
 									messageId: wireMsg.id,
+									contentType: wireMsg.contentType,
+									language: wireMsg.language,
 									timestamp: Date.now()
 								});
 							}
@@ -884,7 +956,7 @@
 								{#each pastedBlocks as block (block.id)}
 									{#if !block.isExpanded}
 										<!-- Collapsed Pasted Snippet Pill -->
-										<div class="flex items-center gap-2">
+										<div class="flex items-center gap-2 flex-wrap">
 											<button
 												type="button"
 												onclick={() => togglePastedBlock(block.id)}
@@ -896,11 +968,24 @@
 													<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
 													<rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
 												</svg>
-												<span class="font-semibold">{formatPastedLabel(block.lineCount)}</span>
+												<span class="font-semibold">{formatPastedLabel(block.lineCount, block.language, block.contentType === 'code')}</span>
 												<span class="text-[10px] text-zinc-400 group-hover:text-zinc-300 flex items-center gap-0.5">
 													▾ Expand
 												</span>
 											</button>
+											<select
+												value={block.contentType === 'code' ? (block.language || 'code') : 'text'}
+												onchange={(e) => updatePastedBlockMode(block.id, e.currentTarget.value)}
+												class="text-[11px] font-mono py-1 px-2 rounded-lg bg-[#06080e] hover:bg-[#0c101c] border border-cyan-500/30 text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
+												aria-label="Snippet format and language"
+												title="Change format or language"
+											>
+												<option value="text">Plain Text</option>
+												<option value="code">Plain Code</option>
+												{#each SUPPORTED_LANGUAGES as lang}
+													<option value={lang.id}>{lang.name}</option>
+												{/each}
+											</select>
 											<button
 												type="button"
 												onclick={() => removePastedBlock(block.id)}
@@ -914,13 +999,25 @@
 									{:else}
 										<!-- Expanded Full View Card -->
 										<div class="p-3 rounded-xl bg-[#06080e] border border-cyan-500/30 shadow-[0_0_15px_rgba(0,229,255,0.08)] flex flex-col gap-2">
-											<div class="flex items-center justify-between gap-2 border-b border-white/5 pb-2">
-												<div class="flex items-center gap-2">
+											<div class="flex items-center justify-between gap-2 border-b border-white/5 pb-2 flex-wrap">
+												<div class="flex items-center gap-2 flex-wrap">
 													<svg class="w-3.5 h-3.5 text-cyan-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 														<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
 														<rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
 													</svg>
-													<span class="text-xs font-mono font-bold text-cyan-300">{formatPastedLabel(block.lineCount)}</span>
+													<span class="text-xs font-mono font-bold text-cyan-300">{formatPastedLabel(block.lineCount, block.language, block.contentType === 'code')}</span>
+													<select
+														value={block.contentType === 'code' ? (block.language || 'code') : 'text'}
+														onchange={(e) => updatePastedBlockMode(block.id, e.currentTarget.value)}
+														class="text-[10px] font-mono py-0.5 px-2 rounded-md bg-[#0b0f19] border border-cyan-500/30 text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
+														aria-label="Change snippet format and language"
+													>
+														<option value="text">Plain Text</option>
+														<option value="code">Plain Code</option>
+														{#each SUPPORTED_LANGUAGES as lang}
+															<option value={lang.id}>{lang.name}</option>
+														{/each}
+													</select>
 												</div>
 												<div class="flex items-center gap-1.5">
 													<button
@@ -962,16 +1059,46 @@
 							</div>
 						{/if}
 
-						<div class="flex items-center space-x-2.5">
+						<div class="flex items-center space-x-2">
 							<input
 								type="text"
 								bind:value={messageInput}
 								onpaste={handlePaste}
 								disabled={isChatDisabled}
 								placeholder={chatPlaceholder}
-								class="flex-1 px-4 py-2.5 rounded-full bg-[#05070c] border border-[#1e2538] text-zinc-100 text-xs sm:text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all placeholder:text-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed"
+								class="flex-1 min-w-0 px-4 py-2.5 rounded-full bg-[#05070c] border border-[#1e2538] text-zinc-100 text-xs sm:text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all placeholder:text-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed"
 								maxlength="4000"
 							/>
+							<button
+								type="button"
+								onclick={toggleManualCodeMode}
+								disabled={isChatDisabled}
+								class="h-10 px-3 rounded-full border transition-all flex items-center gap-1.5 font-mono text-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 {isManualCodeMode ? 'bg-cyan-950/50 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(0,229,255,0.2)] font-bold' : 'bg-[#05070c] border-[#1e2538] text-zinc-400 hover:text-zinc-200 hover:border-white/20'}"
+								title={isManualCodeMode ? 'Disable code formatting' : 'Format message as code (</>)'}
+								aria-label="Toggle code mode"
+								aria-pressed={isManualCodeMode}
+							>
+								<span class="font-mono text-sm font-bold tracking-tight">&lt;/&gt;</span>
+								{#if isManualCodeMode}
+									<span class="text-[10px] font-semibold hidden sm:inline">{getLanguageDisplayName(manualLanguage)}</span>
+								{/if}
+							</button>
+							{#if isManualCodeMode}
+								<select
+									value={manualLanguage || 'code'}
+									onchange={(e) => {
+										const val = e.currentTarget.value;
+										manualLanguage = val === 'code' ? null : (val as SupportedLanguage);
+									}}
+									class="h-10 px-2.5 rounded-full bg-[#05070c] border border-cyan-500/40 text-cyan-300 text-xs font-mono focus:outline-none focus:border-cyan-400 cursor-pointer shrink-0"
+									aria-label="Select programming language"
+								>
+									<option value="code">Plain Code</option>
+									{#each SUPPORTED_LANGUAGES as lang}
+										<option value={lang.id}>{lang.name}</option>
+									{/each}
+								</select>
+							{/if}
 							<button
 								type="submit"
 								disabled={!canSend}
