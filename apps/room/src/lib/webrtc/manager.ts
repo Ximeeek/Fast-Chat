@@ -227,12 +227,27 @@ export class WebRtcManager {
 	}
 
 	/**
-	 * Broadcasts an encrypted binary chunk to all peers with open DataChannels.
+	 * Broadcasts an encrypted binary chunk to all peers with open DataChannels,
+	 * optionally skipping any peers matching excludedPeerIds.
 	 */
-	public async broadcast(data: Uint8Array | ArrayBuffer | string): Promise<void> {
+	public async broadcast(
+		data: Uint8Array | ArrayBuffer | string,
+		excludedPeerIds?: Iterable<string> | ((peerId: string) => boolean)
+	): Promise<void> {
+		let isExcluded: (peerId: string) => boolean = () => false;
+		if (typeof excludedPeerIds === 'function') {
+			isExcluded = excludedPeerIds;
+		} else if (excludedPeerIds) {
+			const set = excludedPeerIds instanceof Set ? excludedPeerIds : new Set(excludedPeerIds);
+			isExcluded = (id) => set.has(id);
+		}
+
 		const sendPromises: Promise<void>[] = [];
 		for (const session of this.sessions.values()) {
 			const info = session.getSessionInfo();
+			if (isExcluded(info.peerId)) {
+				continue;
+			}
 			if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
 				console.debug('[WebRtcManager:Broadcast:PeerCheck]', {
 					peerId: info.peerId,

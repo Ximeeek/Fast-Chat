@@ -143,6 +143,10 @@ pub struct RoomState {
     pub kicked_rate_keys: std::collections::HashSet<RateKey>,
     #[serde(default)]
     pub is_locked: bool,
+    #[serde(default)]
+    pub chat_blocked_peers: std::collections::HashSet<String>,
+    #[serde(default)]
+    pub file_blocked_peers: std::collections::HashSet<String>,
 }
 
 impl RoomState {
@@ -185,6 +189,8 @@ impl RoomState {
             owner_rate_key,
             kicked_rate_keys: std::collections::HashSet::new(),
             is_locked: false,
+            chat_blocked_peers: std::collections::HashSet::new(),
+            file_blocked_peers: std::collections::HashSet::new(),
         }
     }
 
@@ -300,6 +306,9 @@ impl RoomState {
             .position(|p| p.id == peer_id)
             .ok_or_else(|| RoomError::PeerNotFound(peer_id.to_string()))?;
 
+        self.chat_blocked_peers.remove(peer_id);
+        self.file_blocked_peers.remove(peer_id);
+
         Ok(self.peers.remove(pos))
     }
 
@@ -315,6 +324,62 @@ impl RoomState {
     /// Checks if a rate key has been kicked from this room session.
     pub fn is_rate_key_kicked(&self, rate_key: &RateKey) -> bool {
         self.kicked_rate_keys.contains(rate_key)
+    }
+
+    /// Sets whether a peer is blocked from receiving chat messages in this room.
+    pub fn set_chat_visibility_blocked(
+        &mut self,
+        peer_id: &str,
+        blocked: bool,
+    ) -> Result<(), RoomError> {
+        if !self.peers.iter().any(|p| p.id == peer_id) {
+            return Err(RoomError::PeerNotFound(peer_id.to_string()));
+        }
+
+        if blocked {
+            self.chat_blocked_peers.insert(peer_id.to_string());
+        } else {
+            self.chat_blocked_peers.remove(peer_id);
+        }
+        Ok(())
+    }
+
+    /// Sets whether a peer is blocked from receiving files in this room.
+    pub fn set_file_visibility_blocked(
+        &mut self,
+        peer_id: &str,
+        blocked: bool,
+    ) -> Result<(), RoomError> {
+        if !self.peers.iter().any(|p| p.id == peer_id) {
+            return Err(RoomError::PeerNotFound(peer_id.to_string()));
+        }
+
+        if blocked {
+            self.file_blocked_peers.insert(peer_id.to_string());
+        } else {
+            self.file_blocked_peers.remove(peer_id);
+        }
+        Ok(())
+    }
+
+    /// Checks whether a peer is blocked from receiving chat messages.
+    pub fn is_chat_blocked(&self, peer_id: &str) -> bool {
+        self.chat_blocked_peers.contains(peer_id)
+    }
+
+    /// Checks whether a peer is blocked from receiving files.
+    pub fn is_file_blocked(&self, peer_id: &str) -> bool {
+        self.file_blocked_peers.contains(peer_id)
+    }
+
+    /// Returns a list of all peers currently blocked from receiving chat messages.
+    pub fn get_chat_blocked_peers(&self) -> Vec<String> {
+        self.chat_blocked_peers.iter().cloned().collect()
+    }
+
+    /// Returns a list of all peers currently blocked from receiving files.
+    pub fn get_file_blocked_peers(&self) -> Vec<String> {
+        self.file_blocked_peers.iter().cloned().collect()
     }
 
     /// Mutes a peer either permanently (duration_secs = None) or temporarily until now_ts + duration_secs.
@@ -906,6 +971,63 @@ mod tests {
         // Bob can now join
         let res_ok = room.add_peer("bob".to_string(), false, 1002, &config, None);
         assert!(res_ok.is_ok());
+    }
+
+    #[test]
+    fn test_chat_and_file_visibility_blocking() {
+        let config = Config::default();
+        let mut room = RoomState::new(
+            sample_code(),
+            Some("alice".to_string()),
+            None,
+            PasswordStatus::none(),
+            &config,
+            1000,
+        );
+        room.add_peer("bob".to_string(), false, 1001, &config, None).unwrap();
+        room.add_peer("charlie".to_string(), false, 1002, &config, None).unwrap();
+
+        // Initially no peers are blocked
+        assert!(!room.is_chat_blocked("bob"));
+        assert!(!room.is_file_blocked("bob"));
+        assert!(room.get_chat_blocked_peers().is_empty());
+        assert!(room.get_file_blocked_peers().is_empty());
+
+        // Blocking unknown peer returns error
+        assert_eq!(
+            room.set_chat_visibility_blocked("unknown", true),
+            Err(RoomError::PeerNotFound("unknown".to_string()))
+        );
+        assert_eq!(
+            room.set_file_visibility_blocked("unknown", true),
+            Err(RoomError::PeerNotFound("unknown".to_string()))
+        );
+
+        // Block bob from chat
+        assert!(room.set_chat_visibility_blocked("bob", true).is_ok());
+        assert!(room.is_chat_blocked("bob"));
+        assert!(!room.is_chat_blocked("charlie"));
+        assert_eq!(room.get_chat_blocked_peers(), vec!["bob".to_string()]);
+
+        // Block charlie from files
+        assert!(room.set_file_visibility_blocked("charlie", true).is_ok());
+        assert!(room.is_file_blocked("charlie"));
+        assert!(!room.is_file_blocked("bob"));
+        assert_eq!(room.get_file_blocked_peers(), vec!["charlie".to_string()]);
+
+        // Unblock bob from chat
+        assert!(room.set_chat_visibility_blocked("bob", false).is_ok());
+        assert!(!room.is_chat_blocked("bob"));
+        assert!(room.get_chat_blocked_peers().is_empty());
+
+        // Block bob from files as well
+        assert!(room.set_file_visibility_blocked("bob", true).is_ok());
+        assert!(room.is_file_blocked("bob"));
+
+        // Removing bob cleans up from file_blocked_peers
+        let _ = room.remove_peer("bob");
+        assert!(!room.is_file_blocked("bob"));
+        assert_eq!(room.get_file_blocked_peers(), vec!["charlie".to_string()]);
     }
 }
 

@@ -110,6 +110,18 @@ export type ClientSignalingMessage =
 	| {
 			type: 'SET_ROOM_LOCKED';
 			locked: boolean;
+	  }
+	| {
+			type: 'SET_CHAT_VISIBILITY_BLOCKED';
+			peer_id?: string;
+			peerId?: string;
+			blocked: boolean;
+	  }
+	| {
+			type: 'SET_FILE_VISIBILITY_BLOCKED';
+			peer_id?: string;
+			peerId?: string;
+			blocked: boolean;
 	  };
 
 /**
@@ -155,6 +167,10 @@ export interface JoinOkServerMessage {
 	locked?: boolean;
 	is_locked?: boolean;
 	isLocked?: boolean;
+	chat_blocked_peers?: string[];
+	chatBlockedPeers?: string[];
+	file_blocked_peers?: string[];
+	fileBlockedPeers?: string[];
 }
 
 export interface PeerMutedServerMessage {
@@ -278,6 +294,20 @@ export interface PasswordVerifiedServerMessage {
 	valid: boolean;
 }
 
+export interface ChatVisibilityBlockedServerMessage {
+	type: 'CHAT_VISIBILITY_BLOCKED';
+	peer_id?: string;
+	peerId?: string;
+	blocked: boolean;
+}
+
+export interface FileVisibilityBlockedServerMessage {
+	type: 'FILE_VISIBILITY_BLOCKED';
+	peer_id?: string;
+	peerId?: string;
+	blocked: boolean;
+}
+
 export type ServerSignalingMessage =
 	| RoomCreatedServerMessage
 	| JoinOkServerMessage
@@ -286,6 +316,8 @@ export type ServerSignalingMessage =
 	| RoomOwnerChangedServerMessage
 	| OwnershipTransferredServerMessage
 	| RoomLockedServerMessage
+	| ChatVisibilityBlockedServerMessage
+	| FileVisibilityBlockedServerMessage
 	| SdpOfferServerMessage
 	| SdpAnswerServerMessage
 	| IceCandidatesServerMessage

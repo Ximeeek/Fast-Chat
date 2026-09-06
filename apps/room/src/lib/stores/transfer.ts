@@ -22,7 +22,7 @@ const initialTransferState: TransferStoreState = {
 	historical: []
 };
 
-function createTransferStore() {
+export function createTransferStore() {
 	const { subscribe, set, update } = writable<TransferStoreState>({ ...initialTransferState });
 
 	return {

@@ -1930,5 +1930,181 @@ async fn test_ws_room_lock_flow() {
     }
 }
 
+#[tokio::test]
+async fn test_ws_chat_and_file_visibility_blocking_flow() {
+    let (addr, _state) = spawn_test_server(Config::default()).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice connects and creates room
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_created_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_created: ServerMessage = serde_json::from_str(&a_created_raw).unwrap();
+    let room_code = match a_created {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated for Alice, got {a_created:?}"),
+    };
+
+    // 2. Bob connects and joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let _ = ws_b.next().await.unwrap().unwrap(); // Bob receives JOIN_OK
+    let _ = ws_a.next().await.unwrap().unwrap(); // Alice receives PeerJoined(bob)
+
+    // 3. Bob (non-owner) attempts to block Alice from chat -> unauthorized
+    let bob_block_chat = ClientMessage::SetChatVisibilityBlocked {
+        peer_id: "alice".to_string(),
+        blocked: true,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&bob_block_chat).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_chat_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err_chat: ServerMessage = serde_json::from_str(&b_err_chat_raw).unwrap();
+    match b_err_chat {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected UNAUTHORIZED error for Bob, got {b_err_chat:?}"),
+    }
+
+    // 4. Bob (non-owner) attempts to block Alice from files -> unauthorized
+    let bob_block_file = ClientMessage::SetFileVisibilityBlocked {
+        peer_id: "alice".to_string(),
+        blocked: true,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&bob_block_file).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_file_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err_file: ServerMessage = serde_json::from_str(&b_err_file_raw).unwrap();
+    match b_err_file {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected UNAUTHORIZED error for Bob, got {b_err_file:?}"),
+    }
+
+    // 5. Alice (owner) blocks Bob from chat -> both Alice and Bob receive CHAT_VISIBILITY_BLOCKED
+    let alice_block_chat = ClientMessage::SetChatVisibilityBlocked {
+        peer_id: "bob".to_string(),
+        blocked: true,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&alice_block_chat).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_chat_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_chat: ServerMessage = serde_json::from_str(&a_chat_raw).unwrap();
+    match a_chat {
+        ServerMessage::ChatVisibilityBlocked { peer_id, blocked, .. } => {
+            assert_eq!(peer_id, "bob");
+            assert!(blocked);
+        }
+        _ => panic!("Expected ChatVisibilityBlocked on Alice, got {a_chat:?}"),
+    }
+
+    let b_chat_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_chat: ServerMessage = serde_json::from_str(&b_chat_raw).unwrap();
+    match b_chat {
+        ServerMessage::ChatVisibilityBlocked { peer_id, blocked, .. } => {
+            assert_eq!(peer_id, "bob");
+            assert!(blocked);
+        }
+        _ => panic!("Expected ChatVisibilityBlocked on Bob, got {b_chat:?}"),
+    }
+
+    // 6. Alice (owner) blocks Bob from files -> both Alice and Bob receive FILE_VISIBILITY_BLOCKED
+    let alice_block_file = ClientMessage::SetFileVisibilityBlocked {
+        peer_id: "bob".to_string(),
+        blocked: true,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&alice_block_file).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_file_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_file: ServerMessage = serde_json::from_str(&a_file_raw).unwrap();
+    match a_file {
+        ServerMessage::FileVisibilityBlocked { peer_id, blocked, .. } => {
+            assert_eq!(peer_id, "bob");
+            assert!(blocked);
+        }
+        _ => panic!("Expected FileVisibilityBlocked on Alice, got {a_file:?}"),
+    }
+
+    let b_file_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_file: ServerMessage = serde_json::from_str(&b_file_raw).unwrap();
+    match b_file {
+        ServerMessage::FileVisibilityBlocked { peer_id, blocked, .. } => {
+            assert_eq!(peer_id, "bob");
+            assert!(blocked);
+        }
+        _ => panic!("Expected FileVisibilityBlocked on Bob, got {b_file:?}"),
+    }
+
+    // 7. Charlie joins room late -> Charlie receives JOIN_OK with Bob in chat_blocked_peers and file_blocked_peers
+    let (mut ws_c, _) = connect_async(&ws_url).await.unwrap();
+    let join_c = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c_join_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_join: ServerMessage = serde_json::from_str(&c_join_raw).unwrap();
+    match c_join {
+        ServerMessage::JoinOk { chat_blocked_peers, file_blocked_peers, .. } => {
+            let chat_blocked = chat_blocked_peers.expect("Charlie should receive chat_blocked_peers");
+            assert_eq!(chat_blocked, vec!["bob".to_string()]);
+            let file_blocked = file_blocked_peers.expect("Charlie should receive file_blocked_peers");
+            assert_eq!(file_blocked, vec!["bob".to_string()]);
+        }
+        _ => panic!("Expected JoinOk for Charlie, got {c_join:?}"),
+    }
+
+    // Consume PeerJoined(charlie) for Alice and Bob
+    let _ = ws_a.next().await.unwrap().unwrap();
+    let _ = ws_b.next().await.unwrap().unwrap();
+
+    // 8. Alice unblocks Bob from chat -> Alice, Bob, and Charlie receive CHAT_VISIBILITY_BLOCKED { blocked: false }
+    let alice_unblock_chat = ClientMessage::SetChatVisibilityBlocked {
+        peer_id: "bob".to_string(),
+        blocked: false,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&alice_unblock_chat).unwrap().into()))
+        .await
+        .unwrap();
+
+    for (ws, name) in [(&mut ws_a, "Alice"), (&mut ws_b, "Bob"), (&mut ws_c, "Charlie")] {
+        let msg_raw = ws.next().await.unwrap().unwrap().into_text().unwrap();
+        let msg: ServerMessage = serde_json::from_str(&msg_raw).unwrap();
+        match msg {
+            ServerMessage::ChatVisibilityBlocked { peer_id, blocked, .. } => {
+                assert_eq!(peer_id, "bob");
+                assert!(!blocked);
+            }
+            _ => panic!("Expected ChatVisibilityBlocked false on {name}, got {msg:?}"),
+        }
+    }
+}
+
 
 

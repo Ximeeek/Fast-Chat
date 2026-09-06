@@ -513,7 +513,9 @@ async fn handle_client_message(
                     let owner_id = room_snapshot.get_owner_id();
                     let now_ts = chrono::Utc::now().timestamp();
                     let muted_peers = room_snapshot.get_muted_peers(now_ts);
-                    let _ = tx.send(ServerMessage::join_ok_with_lock(
+                    let chat_blocked = room_snapshot.get_chat_blocked_peers();
+                    let file_blocked = room_snapshot.get_file_blocked_peers();
+                    let _ = tx.send(ServerMessage::join_ok_with_visibility(
                         code.to_string(),
                         assigned_peer_id.clone(),
                         false,
@@ -523,6 +525,8 @@ async fn handle_client_message(
                         existing_peers,
                         Some(muted_peers),
                         Some(room_snapshot.is_locked),
+                        Some(chat_blocked),
+                        Some(file_blocked),
                     ));
 
                     // Broadcast PEER_JOINED to existing peers
@@ -1190,6 +1194,134 @@ async fn handle_client_message(
                 }
                 Err(e) => {
                     let _ = tx.send(ServerMessage::error("LOCK_FAILED", e.to_string()));
+                }
+            }
+        }
+        ClientMessage::SetChatVisibilityBlocked {
+            peer_id: target_peer_id,
+            blocked,
+        } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before modifying visibility settings",
+                    ));
+                    return;
+                }
+            };
+
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::ManageChatVisibility)
+            {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Unauthorized to manage chat visibility in this room",
+                ));
+                return;
+            }
+
+            match state
+                .room_manager
+                .set_chat_visibility_blocked(code, sender_id, &target_peer_id, blocked)
+            {
+                Ok(()) => {
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        operator = %sender_id,
+                        target = %target_peer_id,
+                        blocked = blocked,
+                        event = "SET_CHAT_VISIBILITY_BLOCKED",
+                        "Peer chat visibility updated; broadcasting CHAT_VISIBILITY_BLOCKED to participants"
+                    );
+
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::chat_visibility_blocked(target_peer_id, blocked),
+                        None,
+                    );
+                }
+                Err(RoomError::PeerNotFound(p)) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "PEER_NOT_FOUND",
+                        format!("Target peer '{p}' not found in room"),
+                    ));
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Unauthorized to manage chat visibility in this room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("SET_CHAT_VISIBILITY_FAILED", e.to_string()));
+                }
+            }
+        }
+        ClientMessage::SetFileVisibilityBlocked {
+            peer_id: target_peer_id,
+            blocked,
+        } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before modifying visibility settings",
+                    ));
+                    return;
+                }
+            };
+
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::ManageFileVisibility)
+            {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Unauthorized to manage file visibility in this room",
+                ));
+                return;
+            }
+
+            match state
+                .room_manager
+                .set_file_visibility_blocked(code, sender_id, &target_peer_id, blocked)
+            {
+                Ok(()) => {
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        operator = %sender_id,
+                        target = %target_peer_id,
+                        blocked = blocked,
+                        event = "SET_FILE_VISIBILITY_BLOCKED",
+                        "Peer file visibility updated; broadcasting FILE_VISIBILITY_BLOCKED to participants"
+                    );
+
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::file_visibility_blocked(target_peer_id, blocked),
+                        None,
+                    );
+                }
+                Err(RoomError::PeerNotFound(p)) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "PEER_NOT_FOUND",
+                        format!("Target peer '{p}' not found in room"),
+                    ));
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Unauthorized to manage file visibility in this room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("SET_FILE_VISIBILITY_FAILED", e.to_string()));
                 }
             }
         }

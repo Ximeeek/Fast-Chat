@@ -2,6 +2,7 @@ import type { WebRtcManager } from '../webrtc/manager.ts';
 import type { FileSender } from './sender.ts';
 import type { FileReceiver } from './receiver.ts';
 import { transferStore } from '../stores/transfer.ts';
+import { roomStore } from '../stores/room.ts';
 import type {
 	FileLogEntry,
 	FileLogSyncWirePayload,
@@ -22,6 +23,15 @@ export interface FileTransferSyncManagerOptions {
 	fileSender?: FileSender;
 	fileReceiver?: FileReceiver;
 	store?: typeof transferStore;
+	/**
+	 * Custom room store instance for inspecting fileBlockedPeers or testing.
+	 * Defaults to the global roomStore singleton.
+	 */
+	roomStore?: typeof roomStore;
+	/**
+	 * Optional predicate returning true if file visibility is blocked for the given peer ID.
+	 */
+	isFileBlocked?: (peerId: string) => boolean;
 	autoListen?: boolean;
 }
 
@@ -36,6 +46,8 @@ export class FileTransferSyncManager {
 	private fileSender?: FileSender;
 	private fileReceiver?: FileReceiver;
 	private store: typeof transferStore;
+	private roomStore: typeof roomStore;
+	private isFileBlocked?: (peerId: string) => boolean;
 	private syncedPeers: Set<string> = new Set();
 	private pendingRequests: Set<string> = new Set();
 	private unsubDataChannelOpen: (() => void) | null = null;
@@ -51,6 +63,8 @@ export class FileTransferSyncManager {
 		this.fileSender = options.fileSender;
 		this.fileReceiver = options.fileReceiver;
 		this.store = options.store || transferStore;
+		this.roomStore = options.roomStore || roomStore;
+		this.isFileBlocked = options.isFileBlocked;
 
 		// Automatically sync historical file log once when an RTCDataChannel transitions to 'open'
 		this.unsubDataChannelOpen = this.webRtcManager.onDataChannelOpen((peerId) => {
@@ -129,6 +143,21 @@ export class FileTransferSyncManager {
 		});
 	}
 
+	private checkIsFileBlocked(peerId: string): boolean {
+		if (this.isFileBlocked) {
+			return this.isFileBlocked(peerId);
+		}
+		if (this.roomStore) {
+			let blocked = false;
+			const unsub = this.roomStore.subscribe((state) => {
+				blocked = state.fileBlockedPeers.includes(peerId);
+			});
+			unsub();
+			return blocked;
+		}
+		return false;
+	}
+
 	/**
 	 * Transmits the local client's sent files metadata to a target remote peer.
 	 * Idempotent per remote peer connection: sends exactly once upon initial DataChannel open.
@@ -139,6 +168,11 @@ export class FileTransferSyncManager {
 		if (this.syncedPeers.has(peerId)) {
 			return false;
 		}
+
+		if (this.checkIsFileBlocked(peerId)) {
+			return false;
+		}
+
 		this.syncedPeers.add(peerId);
 
 		const sentFiles: SentFileRecord[] = this.fileSender
@@ -282,6 +316,10 @@ export class FileTransferSyncManager {
 	 * If the reference is gone, transmits an explicit FILE_UNAVAILABLE wire response.
 	 */
 	public async handleFileRequest(requestingPeerId: string, fileId: string): Promise<void> {
+		if (this.checkIsFileBlocked(requestingPeerId)) {
+			return;
+		}
+
 		const record = this.fileSender?.getSentFile(fileId);
 		if (!record) {
 			const unavailablePayload: FileUnavailableWirePayload = {

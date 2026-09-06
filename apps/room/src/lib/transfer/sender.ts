@@ -1,4 +1,5 @@
 import type { WebRtcManager } from '../webrtc/manager.ts';
+import { roomStore } from '../stores/room.ts';
 import {
 	CHUNK_SIZE,
 	calculateTotalChunks,
@@ -27,6 +28,15 @@ export interface FileSenderOptions {
 	onProgress?: TransferProgressCallback;
 	onCompleted?: (transferId: string) => void;
 	onError?: (transferId: string, peerId: string, error: Error) => void;
+	/**
+	 * Custom room store instance for inspecting fileBlockedPeers or testing.
+	 * Defaults to the global roomStore singleton.
+	 */
+	roomStore?: typeof roomStore;
+	/**
+	 * Optional predicate returning true if file visibility is blocked for the given peer ID.
+	 */
+	isFileBlocked?: (peerId: string) => boolean;
 }
 
 /**
@@ -38,6 +48,8 @@ export class FileSender {
 	private webRtcManager: WebRtcManager;
 	private chunkSize: number;
 	private highWaterMark: number;
+	private roomStore: typeof roomStore;
+	private isFileBlocked?: (peerId: string) => boolean;
 	private activeTransfers: Map<string, OutgoingTransfer> = new Map();
 	private sentFileLog: Map<string, SentFileRecord> = new Map();
 	private peerStreamPromises: Map<string, Promise<void>> = new Map();
@@ -47,10 +59,27 @@ export class FileSender {
 		this.webRtcManager = webRtcManager;
 		this.chunkSize = options.chunkSize || CHUNK_SIZE;
 		this.highWaterMark = options.highWaterMark || 256 * 1024;
+		this.roomStore = options.roomStore || roomStore;
+		this.isFileBlocked = options.isFileBlocked;
 
 		if (options.onProgress) {
 			this.progressCallbacks.add(options.onProgress);
 		}
+	}
+
+	private checkIsFileBlocked(peerId: string): boolean {
+		if (this.isFileBlocked) {
+			return this.isFileBlocked(peerId);
+		}
+		if (this.roomStore) {
+			let blocked = false;
+			const unsub = this.roomStore.subscribe((state) => {
+				blocked = state.fileBlockedPeers.includes(peerId);
+			});
+			unsub();
+			return blocked;
+		}
+		return false;
 	}
 
 	/**
@@ -104,16 +133,20 @@ export class FileSender {
 		// Resolve destination peers
 		let targetPeers = options.targetPeers;
 		if (!targetPeers || targetPeers.length === 0) {
-			// Query open peer sessions from WebRtcManager
+			// Query open peer sessions from WebRtcManager, filtering out file-blocked peers
 			targetPeers = [];
 			const activeStorePeers = this.webRtcManager as any;
 			if (activeStorePeers && activeStorePeers.sessions) {
 				for (const [peerId, session] of activeStorePeers.sessions.entries()) {
 					if (session.getSessionInfo().dataChannelState === 'open') {
-						targetPeers.push(peerId);
+						if (!this.checkIsFileBlocked(peerId)) {
+							targetPeers.push(peerId);
+						}
 					}
 				}
 			}
+		} else {
+			targetPeers = targetPeers.filter((peerId) => !this.checkIsFileBlocked(peerId));
 		}
 
 		if (targetPeers.length === 0) {
@@ -215,6 +248,10 @@ export class FileSender {
 	 * Streams chunks directly to a specific peer after receiving file-ready readiness confirmation.
 	 */
 	public async startStreamToPeer(transferId: string, peerId: string): Promise<void> {
+		if (this.checkIsFileBlocked(peerId)) {
+			return;
+		}
+
 		const transfer = this.activeTransfers.get(transferId);
 		if (!transfer) return;
 

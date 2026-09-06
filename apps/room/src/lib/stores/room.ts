@@ -31,6 +31,8 @@ export interface RoomState {
 	hasPassword: boolean;
 	mutedPeers: Record<string, number | null>;
 	isLocked: boolean;
+	chatBlockedPeers: string[];
+	fileBlockedPeers: string[];
 }
 
 const initialRoomState: RoomState = {
@@ -50,7 +52,9 @@ const initialRoomState: RoomState = {
 	quotaExhausted: false,
 	hasPassword: false,
 	mutedPeers: {},
-	isLocked: false
+	isLocked: false,
+	chatBlockedPeers: [],
+	fileBlockedPeers: []
 };
 
 function createRoomStore() {
@@ -72,6 +76,8 @@ function createRoomStore() {
 					expiresAt: payload.expires_at || payload.expiresAt || null,
 					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
 					isLocked: false,
+					chatBlockedPeers: [],
+					fileBlockedPeers: [],
 					lifecycle: 'joined',
 					error: null
 				};
@@ -90,6 +96,8 @@ function createRoomStore() {
 						mutedMap[mId] = m.muted_until ?? m.mutedUntil ?? null;
 					}
 				}
+				const rawChatBlocked = payload.chatBlockedPeers || payload.chat_blocked_peers || [];
+				const rawFileBlocked = payload.fileBlockedPeers || payload.file_blocked_peers || [];
 				return {
 					...state,
 					code: payload.code,
@@ -102,6 +110,8 @@ function createRoomStore() {
 					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
 					mutedPeers: mutedMap,
 					isLocked: Boolean(payload.locked ?? payload.is_locked ?? payload.isLocked),
+					chatBlockedPeers: [...rawChatBlocked],
+					fileBlockedPeers: [...rawFileBlocked],
 					lifecycle: 'joined',
 					error: null
 				};
@@ -139,6 +149,34 @@ function createRoomStore() {
 				};
 			});
 		},
+		setChatVisibilityBlocked: (peerId: string, blocked: boolean) => {
+			update((state) => {
+				const current = new Set(state.chatBlockedPeers);
+				if (blocked) {
+					current.add(peerId);
+				} else {
+					current.delete(peerId);
+				}
+				return {
+					...state,
+					chatBlockedPeers: Array.from(current)
+				};
+			});
+		},
+		setFileVisibilityBlocked: (peerId: string, blocked: boolean) => {
+			update((state) => {
+				const current = new Set(state.fileBlockedPeers);
+				if (blocked) {
+					current.add(peerId);
+				} else {
+					current.delete(peerId);
+				}
+				return {
+					...state,
+					fileBlockedPeers: Array.from(current)
+				};
+			});
+		},
 		addPeer: (newPeerId: string) => {
 			update((state) => {
 				if (state.peers.includes(newPeerId)) {
@@ -157,7 +195,9 @@ function createRoomStore() {
 				return {
 					...state,
 					peers: state.peers.filter((id) => id !== peerId),
-					mutedPeers: nextMuted
+					mutedPeers: nextMuted,
+					chatBlockedPeers: state.chatBlockedPeers.filter((id) => id !== peerId),
+					fileBlockedPeers: state.fileBlockedPeers.filter((id) => id !== peerId)
 				};
 			});
 		},
@@ -224,3 +264,13 @@ export const isRoomActive = derived(
  * Derived store exposing the total count of connected peers in the room.
  */
 export const peerCount = derived(roomStore, ($room) => $room.peers.length);
+
+/**
+ * Derived store exposing the set of peer IDs blocked from receiving chat messages.
+ */
+export const chatBlockedPeers = derived(roomStore, ($room) => new Set($room.chatBlockedPeers));
+
+/**
+ * Derived store exposing the set of peer IDs blocked from receiving files.
+ */
+export const fileBlockedPeers = derived(roomStore, ($room) => new Set($room.fileBlockedPeers));

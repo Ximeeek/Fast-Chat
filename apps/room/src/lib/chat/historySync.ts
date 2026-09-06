@@ -1,5 +1,6 @@
 import type { WebRtcManager } from '../webrtc/manager.ts';
 import { chatStore } from '../stores/chat.ts';
+import { roomStore } from '../stores/room.ts';
 import type { ChatMessage } from './types.ts';
 import { CHAT_HISTORY_SYNC_TYPE } from './types.ts';
 import {
@@ -18,6 +19,15 @@ export interface ChatHistorySyncManagerOptions {
 	 * Defaults to the global chatStore singleton.
 	 */
 	chatStore?: typeof chatStore;
+	/**
+	 * Custom room store instance for testing or dependency injection.
+	 * Defaults to the global roomStore singleton.
+	 */
+	roomStore?: typeof roomStore;
+	/**
+	 * Optional predicate returning true if chat visibility is blocked for the given peer ID.
+	 */
+	isChatBlocked?: (peerId: string) => boolean;
 }
 
 /**
@@ -29,6 +39,8 @@ export interface ChatHistorySyncManagerOptions {
 export class ChatHistorySyncManager {
 	private webRtcManager: WebRtcManager;
 	private store: typeof chatStore;
+	private roomStore: typeof roomStore;
+	private isChatBlocked?: (peerId: string) => boolean;
 	private syncedPeers: Set<string> = new Set();
 	private unsubDataChannelOpen: (() => void) | null = null;
 	private unsubMessage: (() => void) | null = null;
@@ -39,6 +51,8 @@ export class ChatHistorySyncManager {
 	) {
 		this.webRtcManager = webRtcManager;
 		this.store = options.chatStore || chatStore;
+		this.roomStore = options.roomStore || roomStore;
+		this.isChatBlocked = options.isChatBlocked;
 
 		// Automatically sync history once when an RTCDataChannel transitions to 'open'
 		this.unsubDataChannelOpen = this.webRtcManager.onDataChannelOpen((peerId) => {
@@ -78,6 +92,22 @@ export class ChatHistorySyncManager {
 		if (this.syncedPeers.has(peerId)) {
 			return false;
 		}
+
+		// Skip synchronization if target peer is blocked from chat visibility
+		let isBlocked = false;
+		if (this.isChatBlocked) {
+			isBlocked = this.isChatBlocked(peerId);
+		} else if (this.roomStore) {
+			const unsub = this.roomStore.subscribe((state) => {
+				isBlocked = state.chatBlockedPeers.includes(peerId);
+			});
+			unsub();
+		}
+
+		if (isBlocked) {
+			return false;
+		}
+
 		this.syncedPeers.add(peerId);
 
 		try {

@@ -373,6 +373,32 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Sets whether a specific peer is blocked from receiving chat messages.
+	 * Can only be invoked by a participant holding ManageChatVisibility permission.
+	 */
+	public setChatVisibilityBlocked(peerId: string, blocked: boolean): void {
+		this.send({
+			type: 'SET_CHAT_VISIBILITY_BLOCKED',
+			peer_id: peerId,
+			peerId,
+			blocked
+		} as any);
+	}
+
+	/**
+	 * Sets whether a specific peer is blocked from receiving files.
+	 * Can only be invoked by a participant holding ManageFileVisibility permission.
+	 */
+	public setFileVisibilityBlocked(peerId: string, blocked: boolean): void {
+		this.send({
+			type: 'SET_FILE_VISIBILITY_BLOCKED',
+			peer_id: peerId,
+			peerId,
+			blocked
+		} as any);
+	}
+
+	/**
 	 * Verifies the room password for an active room session during rekey.
 	 */
 	public async verifyPassword(password: string): Promise<boolean> {
@@ -585,6 +611,22 @@ export class SignalingClient {
 			case 'ROOM_LOCKED': {
 				const locked = msg.locked ?? (msg as any).isLocked ?? (msg as any).is_locked ?? false;
 				roomStore.setLocked(locked);
+				break;
+			}
+			case 'CHAT_VISIBILITY_BLOCKED': {
+				const peerId = msg.peer_id || (msg as any).peerId;
+				const blocked = Boolean((msg as any).blocked);
+				if (peerId) {
+					roomStore.setChatVisibilityBlocked(peerId, blocked);
+				}
+				break;
+			}
+			case 'FILE_VISIBILITY_BLOCKED': {
+				const peerId = msg.peer_id || (msg as any).peerId;
+				const blocked = Boolean((msg as any).blocked);
+				if (peerId) {
+					roomStore.setFileVisibilityBlocked(peerId, blocked);
+				}
 				break;
 			}
 			case 'ROOM_CLOSING': {

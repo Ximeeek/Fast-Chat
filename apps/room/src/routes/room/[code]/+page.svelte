@@ -110,12 +110,20 @@
 	const canMutePeer = $derived(hasPermission(currentUserRole, Permission.MutePeer));
 	const canTransferOwnership = $derived(hasPermission(currentUserRole, Permission.TransferOwnership));
 	const canLockRoom = $derived(hasPermission(currentUserRole, Permission.LockRoom));
+	const canManageChatVisibility = $derived(hasPermission(currentUserRole, Permission.ManageChatVisibility));
+	const canManageFileVisibility = $derived(hasPermission(currentUserRole, Permission.ManageFileVisibility));
 
 	const isLocalMuted = $derived(
 		Boolean($roomStore.peerId && $roomStore.mutedPeers[$roomStore.peerId] !== undefined)
 	);
 	const localMutedUntil = $derived(
 		$roomStore.peerId ? ($roomStore.mutedPeers[$roomStore.peerId] ?? null) : null
+	);
+	const isLocalChatBlocked = $derived(
+		Boolean($roomStore.peerId && $roomStore.chatBlockedPeers.includes($roomStore.peerId))
+	);
+	const isLocalFileBlocked = $derived(
+		Boolean($roomStore.peerId && $roomStore.fileBlockedPeers.includes($roomStore.peerId))
 	);
 
 	// Expiration countdown
@@ -154,6 +162,16 @@
 
 	function handleToggleRoomLock() {
 		signalingClient.setRoomLocked(!$roomStore.isLocked);
+	}
+
+	function handleToggleChatVisibility(targetPeer: string, blocked: boolean) {
+		activeActionMenuPeer = null;
+		signalingClient.setChatVisibilityBlocked(targetPeer, blocked);
+	}
+
+	function handleToggleFileVisibility(targetPeer: string, blocked: boolean) {
+		activeActionMenuPeer = null;
+		signalingClient.setFileVisibilityBlocked(targetPeer, blocked);
 	}
 
 	const isChatDisabled = $derived(
@@ -290,7 +308,7 @@
 		if (import.meta.env.DEV) {
 			const targetPeers = Array.from(
 				new Set([...$roomStore.peers, ...webRtcManager.getSessionPeerIds()])
-			);
+			).filter((peerId) => !$roomStore.chatBlockedPeers.includes(peerId));
 			const peerStates = targetPeers.map((peerId) => {
 				const session = webRtcManager.getSession(peerId);
 				return {
@@ -328,7 +346,7 @@
 				timestamp,
 				segments
 			});
-			await webRtcManager.broadcast(payload);
+			await webRtcManager.broadcast(payload, $roomStore.chatBlockedPeers);
 		} catch (err) {
 			if (import.meta.env.DEV) {
 				console.error('[Chat:Sender:BroadcastError]', {
@@ -563,6 +581,9 @@
 			}
 
 			if (isFileChunkPacket(payload)) {
+				if (isLocalFileBlocked) {
+					return;
+				}
 				const chunk = parseFileChunkPacket(payload);
 				if (chunk && fileReceiver) {
 					fileReceiver.handleBinaryChunk(chunk);
@@ -576,6 +597,9 @@
 					const data = JSON.parse(jsonStr);
 
 					if (data.type === 'chat') {
+						if (isLocalChatBlocked) {
+							return;
+						}
 						const wireMsg = deserializeChatMessage(payload);
 						if (import.meta.env.DEV) {
 							console.debug('[Chat:Receiver:Deserialize]', {
@@ -607,16 +631,25 @@
 						data.type === 'CHAT_HISTORY_SYNC' ||
 						data.type === 'chat_history_sync'
 					) {
+						if (isLocalChatBlocked) {
+							return;
+						}
 						chatHistorySync?.handleSyncPayload(peerId, payload);
 					} else if (
 						data.type === 'FILE_LOG_SYNC' ||
 						data.type === 'file_log_sync'
 					) {
+						if (isLocalFileBlocked) {
+							return;
+						}
 						fileTransferSync?.handleSyncPayload(peerId, payload);
 					} else if (
 						data.type === 'FILE_REQUEST' ||
 						data.type === 'file-request'
 					) {
+						if (isLocalFileBlocked) {
+							return;
+						}
 						if (typeof data.fileId === 'string') {
 							fileTransferSync?.handleFileRequest(peerId, data.fileId);
 						}
@@ -632,7 +665,9 @@
 						data.type === 'file-complete' ||
 						data.type === 'file-cancel'
 					) {
-
+						if (isLocalFileBlocked && data.type === 'file-meta') {
+							return;
+						}
 						fileReceiver?.handleControlMessage(peerId, data);
 					} else if (data.type === 'file-ready') {
 						fileSender?.handleControlMessage(peerId, data);
@@ -1159,6 +1194,24 @@
 										Wyciszony{localMutedUntil ? ` (${formatSeconds(muteCountdownSec ?? 0)})` : ''}
 									</span>
 								{/if}
+								{#if isLocalChatBlocked}
+									<span class="text-[10px] rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1">
+										<svg class="w-2.5 h-2.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+											<line x1="2" y1="2" x2="22" y2="22"/>
+										</svg>
+										Czat zablokowany
+									</span>
+								{/if}
+								{#if isLocalFileBlocked}
+									<span class="text-[10px] rounded-full bg-orange-500/15 text-orange-300 border border-orange-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1">
+										<svg class="w-2.5 h-2.5 text-orange-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+											<line x1="2" y1="2" x2="22" y2="22"/>
+										</svg>
+										Pliki zablokowane
+									</span>
+								{/if}
 							</div>
 							{#if $roomStore.isOwner}
 								<span class="text-[10px] rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1 shadow-[0_0_8px_rgba(0,229,255,0.2)]">
@@ -1176,7 +1229,9 @@
 							{@const isPeerMuted = $roomStore.mutedPeers[peer] !== undefined}
 							{@const peerMutedUntil = $roomStore.mutedPeers[peer]}
 							{@const peerCountdown = peerMutedUntil ? Math.max(0, peerMutedUntil - now) : null}
-							{@const canManageThisPeer = canKickPeer || canMutePeer || canTransferOwnership}
+							{@const isPeerChatBlocked = $roomStore.chatBlockedPeers.includes(peer)}
+							{@const isPeerFileBlocked = $roomStore.fileBlockedPeers.includes(peer)}
+							{@const canManageThisPeer = canKickPeer || canMutePeer || canTransferOwnership || canManageChatVisibility || canManageFileVisibility}
 							<div class="p-3.5 rounded-xl bg-[#06080e] border border-white/5 text-xs flex flex-col gap-2.5 relative">
 								<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
 									<div class="flex items-center space-x-2 flex-wrap gap-y-1">
@@ -1200,6 +1255,24 @@
 													<line x1="8" y1="23" x2="16" y2="23"/>
 												</svg>
 												Wyciszony{peerMutedUntil ? ` (${formatSeconds(peerCountdown ?? 0)})` : ''}
+											</span>
+										{/if}
+										{#if isPeerChatBlocked}
+											<span class="text-[10px] rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1">
+												<svg class="w-2.5 h-2.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+													<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+													<line x1="2" y1="2" x2="22" y2="22"/>
+												</svg>
+												Czat zablokowany
+											</span>
+										{/if}
+										{#if isPeerFileBlocked}
+											<span class="text-[10px] rounded-full bg-orange-500/15 text-orange-300 border border-orange-500/30 px-2 py-0.5 uppercase font-bold font-mono flex items-center gap-1">
+												<svg class="w-2.5 h-2.5 text-orange-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+													<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+													<line x1="2" y1="2" x2="22" y2="22"/>
+												</svg>
+												Pliki zablokowane
 											</span>
 										{/if}
 									</div>
@@ -1301,6 +1374,28 @@
 																	<span class="text-[10px] text-zinc-500">∞</span>
 																</button>
 															{/if}
+														{/if}
+
+														{#if canManageChatVisibility}
+															<button
+																type="button"
+																onclick={() => handleToggleChatVisibility(peer, !isPeerChatBlocked)}
+																class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer border-b border-white/5"
+															>
+																<span>{isPeerChatBlocked ? 'Odblokuj widoczność czatu' : 'Zablokuj widoczność czatu'}</span>
+																<span class="text-[10px] text-zinc-500">{isPeerChatBlocked ? 'WŁ' : 'WYŁ'}</span>
+															</button>
+														{/if}
+
+														{#if canManageFileVisibility}
+															<button
+																type="button"
+																onclick={() => handleToggleFileVisibility(peer, !isPeerFileBlocked)}
+																class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer border-b border-white/5"
+															>
+																<span>{isPeerFileBlocked ? 'Odblokuj widoczność plików' : 'Zablokuj widoczność plików'}</span>
+																<span class="text-[10px] text-zinc-500">{isPeerFileBlocked ? 'WŁ' : 'WYŁ'}</span>
+															</button>
 														{/if}
 
 														{#if canTransferOwnership}

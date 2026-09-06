@@ -371,6 +371,62 @@ impl RoomManager {
         self.rooms.get(code).map(|r| r.is_locked).unwrap_or(false)
     }
 
+    /// Sets whether a peer is blocked from receiving chat messages if the operator holds `Permission::ManageChatVisibility`.
+    pub fn set_chat_visibility_blocked(
+        &self,
+        code: &RoomCode,
+        operator_peer_id: &str,
+        target_peer_id: &str,
+        blocked: bool,
+    ) -> Result<(), RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(code)
+            .ok_or_else(|| RoomError::PeerNotFound(operator_peer_id.to_string()))?;
+
+        if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::ManageChatVisibility) {
+            return Err(RoomError::Unauthorized);
+        }
+
+        room.set_chat_visibility_blocked(target_peer_id, blocked)?;
+        info!(
+            room = %code,
+            operator = %operator_peer_id,
+            target = %target_peer_id,
+            blocked = blocked,
+            "Peer chat visibility block updated"
+        );
+        Ok(())
+    }
+
+    /// Sets whether a peer is blocked from receiving files if the operator holds `Permission::ManageFileVisibility`.
+    pub fn set_file_visibility_blocked(
+        &self,
+        code: &RoomCode,
+        operator_peer_id: &str,
+        target_peer_id: &str,
+        blocked: bool,
+    ) -> Result<(), RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(code)
+            .ok_or_else(|| RoomError::PeerNotFound(operator_peer_id.to_string()))?;
+
+        if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::ManageFileVisibility) {
+            return Err(RoomError::Unauthorized);
+        }
+
+        room.set_file_visibility_blocked(target_peer_id, blocked)?;
+        info!(
+            room = %code,
+            operator = %operator_peer_id,
+            target = %target_peer_id,
+            blocked = blocked,
+            "Peer file visibility block updated"
+        );
+        Ok(())
+    }
+
     /// Handles peer departure from a room.
     ///
     /// - If the departing peer was the owner and other peers remain, ownership is
@@ -675,5 +731,44 @@ mod tests {
         assert_eq!(manager.room_count(), 0);
         assert_eq!(broadcaster.closed_count.load(Ordering::SeqCst), 1);
         assert_eq!(manager.count_active_rooms_by_owner(&key_bob, now), 0);
+    }
+
+    #[test]
+    fn test_manager_chat_and_file_visibility_authorization() {
+        let config = Config::default();
+        let manager = RoomManager::new(config);
+        let code = manager
+            .create_room(Some("alice".to_string()), None, PasswordStatus::none())
+            .unwrap();
+
+        manager
+            .join_room(&code, "bob".to_string(), false, None)
+            .unwrap();
+
+        // 1. Bob (participant) attempts to block alice -> Unauthorized
+        let res_bob_chat = manager.set_chat_visibility_blocked(&code, "bob", "alice", true);
+        assert_eq!(res_bob_chat, Err(RoomError::Unauthorized));
+
+        let res_bob_file = manager.set_file_visibility_blocked(&code, "bob", "alice", true);
+        assert_eq!(res_bob_file, Err(RoomError::Unauthorized));
+
+        // 2. Alice (owner) blocks bob from chat -> Success
+        let res_alice_chat = manager.set_chat_visibility_blocked(&code, "alice", "bob", true);
+        assert!(res_alice_chat.is_ok());
+        let room_snap = manager.get_room_state(&code).unwrap();
+        assert!(room_snap.is_chat_blocked("bob"));
+
+        // 3. Alice (owner) blocks bob from files -> Success
+        let res_alice_file = manager.set_file_visibility_blocked(&code, "alice", "bob", true);
+        assert!(res_alice_file.is_ok());
+        let room_snap2 = manager.get_room_state(&code).unwrap();
+        assert!(room_snap2.is_file_blocked("bob"));
+
+        // 4. Alice unblocks bob
+        assert!(manager.set_chat_visibility_blocked(&code, "alice", "bob", false).is_ok());
+        assert!(manager.set_file_visibility_blocked(&code, "alice", "bob", false).is_ok());
+        let room_snap3 = manager.get_room_state(&code).unwrap();
+        assert!(!room_snap3.is_chat_blocked("bob"));
+        assert!(!room_snap3.is_file_blocked("bob"));
     }
 }

@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { validateRoomCode, normalizeRoomCode, formatRoomCodeInput, encodeRoomToken, decodeRoomToken, isRoomToken, resolveRoomIdentifier } from '../src/lib/utils/roomCode.ts';
-import { roomStore, peerCount, type RoomState } from '../src/lib/stores/room.ts';
+import { roomStore, peerCount, chatBlockedPeers, fileBlockedPeers, type RoomState } from '../src/lib/stores/room.ts';
 import { formatChatLog } from '../src/lib/chat/export.ts';
 
 describe('Room Code Validation & Formatting', () => {
@@ -398,6 +398,92 @@ describe('In-Memory Room Store Lifecycle', () => {
 		assert.equal(state.lifecycle, 'closed');
 		assert.equal(state.closureReason, 'Room lifetime expired');
 		assert.equal(state.connectionState, 'closed');
+	});
+
+	test('chat and file visibility blocking updates room store state and derived stores', () => {
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: false,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-owner', 'peer-bob', 'peer-carol']
+		});
+
+		let chatBlocked!: Set<string>;
+		let fileBlocked!: Set<string>;
+		const unsubChat = chatBlockedPeers.subscribe((set) => (chatBlocked = set));
+		const unsubFile = fileBlockedPeers.subscribe((set) => (fileBlocked = set));
+
+		assert.deepEqual(Array.from(chatBlocked), []);
+		assert.deepEqual(Array.from(fileBlocked), []);
+
+		// Block chat visibility for bob
+		roomStore.setChatVisibilityBlocked('peer-bob', true);
+		assert.deepEqual(Array.from(chatBlocked), ['peer-bob']);
+
+		// Block file visibility for carol
+		roomStore.setFileVisibilityBlocked('peer-carol', true);
+		assert.deepEqual(Array.from(fileBlocked), ['peer-carol']);
+
+		// Unblock chat visibility for bob
+		roomStore.setChatVisibilityBlocked('peer-bob', false);
+		assert.deepEqual(Array.from(chatBlocked), []);
+
+		// Unblock file visibility for carol
+		roomStore.setFileVisibilityBlocked('peer-carol', false);
+		assert.deepEqual(Array.from(fileBlocked), []);
+
+		unsubChat();
+		unsubFile();
+	});
+
+	test('JOIN_OK initializes chat_blocked_peers and file_blocked_peers', () => {
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: false,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-owner', 'peer-bob'],
+			chat_blocked_peers: ['peer-bob'],
+			file_blocked_peers: ['peer-bob']
+		});
+
+		let state!: RoomState;
+		const unsub = roomStore.subscribe((s) => (state = s));
+		unsub();
+
+		assert.deepEqual(state.chatBlockedPeers, ['peer-bob']);
+		assert.deepEqual(state.fileBlockedPeers, ['peer-bob']);
+	});
+
+	test('removePeer cleans up chatBlockedPeers and fileBlockedPeers lists', () => {
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: false,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-owner', 'peer-bob'],
+			chat_blocked_peers: ['peer-bob'],
+			file_blocked_peers: ['peer-bob']
+		});
+
+		roomStore.removePeer('peer-bob');
+
+		let state!: RoomState;
+		const unsub = roomStore.subscribe((s) => (state = s));
+		unsub();
+
+		assert.deepEqual(state.chatBlockedPeers, []);
+		assert.deepEqual(state.fileBlockedPeers, []);
 	});
 });
 

@@ -143,6 +143,22 @@ pub enum ClientMessage {
     SetRoomLocked {
         locked: bool,
     },
+
+    /// Request by an authorized participant to block or unblock peer chat visibility.
+    #[serde(alias = "SET_CHAT_VISIBILITY_BLOCKED")]
+    SetChatVisibilityBlocked {
+        #[serde(alias = "peerId")]
+        peer_id: String,
+        blocked: bool,
+    },
+
+    /// Request by an authorized participant to block or unblock peer file visibility.
+    #[serde(alias = "SET_FILE_VISIBILITY_BLOCKED")]
+    SetFileVisibilityBlocked {
+        #[serde(alias = "peerId")]
+        peer_id: String,
+        blocked: bool,
+    },
 }
 
 /// Muted status metadata for a participant in a room session.
@@ -198,6 +214,14 @@ pub enum ServerMessage {
         muted_peers_camel: Option<Vec<MutedPeerInfo>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         locked: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chat_blocked_peers: Option<Vec<String>>,
+        #[serde(default, rename = "chatBlockedPeers", skip_serializing_if = "Option::is_none")]
+        chat_blocked_peers_camel: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_blocked_peers: Option<Vec<String>>,
+        #[serde(default, rename = "fileBlockedPeers", skip_serializing_if = "Option::is_none")]
+        file_blocked_peers_camel: Option<Vec<String>>,
     },
 
     /// Broadcast notification informing active participants that a peer was muted.
@@ -236,6 +260,22 @@ pub enum ServerMessage {
         owner_peer_id: String,
         #[serde(rename = "ownerPeerId")]
         owner_peer_id_camel: String,
+    },
+
+    /// Broadcast notification informing active participants that a peer's chat visibility was blocked or unblocked.
+    ChatVisibilityBlocked {
+        peer_id: String,
+        #[serde(rename = "peerId")]
+        peer_id_camel: String,
+        blocked: bool,
+    },
+
+    /// Broadcast notification informing active participants that a peer's file visibility was blocked or unblocked.
+    FileVisibilityBlocked {
+        peer_id: String,
+        #[serde(rename = "peerId")]
+        peer_id_camel: String,
+        blocked: bool,
     },
 
     /// Broadcast notification informing active participants that a new peer joined.
@@ -415,10 +455,40 @@ impl ServerMessage {
         muted_peers: Option<Vec<MutedPeerInfo>>,
         locked: Option<bool>,
     ) -> Self {
+        Self::join_ok_with_visibility(
+            code,
+            peer_id,
+            is_owner,
+            owner_peer_id,
+            salt_hex,
+            expires_at,
+            peers,
+            muted_peers,
+            locked,
+            None,
+            None,
+        )
+    }
+
+    pub fn join_ok_with_visibility(
+        code: impl Into<String>,
+        peer_id: impl Into<String>,
+        is_owner: bool,
+        owner_peer_id: Option<String>,
+        salt_hex: impl Into<String>,
+        expires_at: i64,
+        peers: Vec<String>,
+        muted_peers: Option<Vec<MutedPeerInfo>>,
+        locked: Option<bool>,
+        chat_blocked_peers: Option<Vec<String>>,
+        file_blocked_peers: Option<Vec<String>>,
+    ) -> Self {
         let code_str = code.into();
         let peer_str = peer_id.into();
         let owner_camel = owner_peer_id.clone();
         let muted_camel = muted_peers.clone();
+        let chat_blocked_camel = chat_blocked_peers.clone();
+        let file_blocked_camel = file_blocked_peers.clone();
         Self::JoinOk {
             status: "OK".to_string(),
             code: code_str,
@@ -434,6 +504,28 @@ impl ServerMessage {
             muted_peers,
             muted_peers_camel: muted_camel,
             locked,
+            chat_blocked_peers,
+            chat_blocked_peers_camel: chat_blocked_camel,
+            file_blocked_peers,
+            file_blocked_peers_camel: file_blocked_camel,
+        }
+    }
+
+    pub fn chat_visibility_blocked(peer_id: impl Into<String>, blocked: bool) -> Self {
+        let id = peer_id.into();
+        Self::ChatVisibilityBlocked {
+            peer_id: id.clone(),
+            peer_id_camel: id,
+            blocked,
+        }
+    }
+
+    pub fn file_visibility_blocked(peer_id: impl Into<String>, blocked: bool) -> Self {
+        let id = peer_id.into();
+        Self::FileVisibilityBlocked {
+            peer_id: id.clone(),
+            peer_id_camel: id,
+            blocked,
         }
     }
 
@@ -890,5 +982,67 @@ mod tests {
         assert!(json.contains(r#""roomCode":"1234-5678-9012""#));
         assert!(json.contains(r#""locked":true"#));
         assert!(json.contains(r#""isLocked":true"#));
+    }
+
+    #[test]
+    fn test_client_message_visibility_blocked_deserialization() {
+        let json_chat = r#"{"type":"SET_CHAT_VISIBILITY_BLOCKED","peerId":"bob","blocked":true}"#;
+        let msg_chat: ClientMessage = serde_json::from_str(json_chat).unwrap();
+        assert_eq!(
+            msg_chat,
+            ClientMessage::SetChatVisibilityBlocked {
+                peer_id: "bob".to_string(),
+                blocked: true,
+            }
+        );
+
+        let json_file = r#"{"type":"SET_FILE_VISIBILITY_BLOCKED","peer_id":"charlie","blocked":false}"#;
+        let msg_file: ClientMessage = serde_json::from_str(json_file).unwrap();
+        assert_eq!(
+            msg_file,
+            ClientMessage::SetFileVisibilityBlocked {
+                peer_id: "charlie".to_string(),
+                blocked: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_server_message_visibility_blocked_serialization() {
+        let msg_chat = ServerMessage::chat_visibility_blocked("bob", true);
+        let json_chat = serde_json::to_string(&msg_chat).unwrap();
+        assert!(json_chat.contains(r#""type":"CHAT_VISIBILITY_BLOCKED""#));
+        assert!(json_chat.contains(r#""peer_id":"bob""#));
+        assert!(json_chat.contains(r#""peerId":"bob""#));
+        assert!(json_chat.contains(r#""blocked":true"#));
+
+        let msg_file = ServerMessage::file_visibility_blocked("charlie", false);
+        let json_file = serde_json::to_string(&msg_file).unwrap();
+        assert!(json_file.contains(r#""type":"FILE_VISIBILITY_BLOCKED""#));
+        assert!(json_file.contains(r#""peer_id":"charlie""#));
+        assert!(json_file.contains(r#""peerId":"charlie""#));
+        assert!(json_file.contains(r#""blocked":false"#));
+    }
+
+    #[test]
+    fn test_server_message_join_ok_with_visibility_serialization() {
+        let join_ok = ServerMessage::join_ok_with_visibility(
+            "1234-5678-9012",
+            "alice",
+            true,
+            Some("alice".to_string()),
+            "001122",
+            1000,
+            vec!["bob".to_string()],
+            None,
+            Some(false),
+            Some(vec!["bob".to_string()]),
+            Some(vec!["charlie".to_string()]),
+        );
+        let json = serde_json::to_string(&join_ok).unwrap();
+        assert!(json.contains(r#""chat_blocked_peers":["bob"]"#));
+        assert!(json.contains(r#""chatBlockedPeers":["bob"]"#));
+        assert!(json.contains(r#""file_blocked_peers":["charlie"]"#));
+        assert!(json.contains(r#""fileBlockedPeers":["charlie"]"#));
     }
 }

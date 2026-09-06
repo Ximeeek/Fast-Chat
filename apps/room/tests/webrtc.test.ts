@@ -920,6 +920,11 @@ describe('WebRTC Mesh & Secure DataChannel Subsystem (Phase 8)', () => {
 			assert.equal(dc1.sentPackets.length, 2);
 			assert.equal(dc2.sentPackets.length, 1);
 
+			// Broadcast with excludedPeerIds
+			await manager.broadcast('Broadcast excluding peer-2', ['peer-2']);
+			assert.equal(dc1.sentPackets.length, 3);
+			assert.equal(dc2.sentPackets.length, 1, 'peer-2 must not receive packet when excluded');
+
 			manager.destroy();
 		});
 
