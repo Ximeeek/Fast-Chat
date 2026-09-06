@@ -13,6 +13,7 @@ import {
 	composeFinalMessage,
 	type PastedBlock
 } from '../src/lib/chat/pastedSnippet.ts';
+import { isCodeSnippet } from '../src/lib/chat/codeDetection.ts';
 import { chatStore, type ChatState } from '../src/lib/stores/chat.ts';
 import { WebRtcManager } from '../src/lib/webrtc/index.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
@@ -593,6 +594,87 @@ describe('Pasted Snippet Drafting & Containment', () => {
 	});
 });
 
+describe('Heuristic Code Detection (isCodeSnippet)', () => {
+	test('positively identifies JavaScript and TypeScript code blocks', () => {
+		const jsFunction = 'function multiply(x, y) {\n  return x * y;\n}';
+		const tsArrow = 'const add = (a: number, b: number): number => {\n  return a + b;\n};';
+		const oneLiner = 'const x = [1, 2, 3].map(n => n * 2);';
+
+		assert.equal(isCodeSnippet(jsFunction), true);
+		assert.equal(isCodeSnippet(tsArrow), true);
+		assert.equal(isCodeSnippet(oneLiner), true);
+	});
+
+	test('positively identifies Python code blocks', () => {
+		const pyFunc = 'def calculate_total(items):\n    total = 0\n    for item in items:\n        total += item.price\n    return total';
+		assert.equal(isCodeSnippet(pyFunc), true);
+	});
+
+	test('positively identifies Rust code blocks', () => {
+		const rustCode = 'fn main() {\n    let mut count = 0;\n    println!("count: {}", count);\n}';
+		assert.equal(isCodeSnippet(rustCode), true);
+	});
+
+	test('positively identifies Go code blocks', () => {
+		const goCode = 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello WebRTC")\n}';
+		assert.equal(isCodeSnippet(goCode), true);
+	});
+
+	test('positively identifies HTML and markup blocks', () => {
+		const htmlSnippet = '<div class="container">\n  <p>Encrypted P2P payload</p>\n</div>';
+		assert.equal(isCodeSnippet(htmlSnippet), true);
+	});
+
+	test('positively identifies JSON data structures', () => {
+		const jsonSnippet = '{\n  "name": "FastChat",\n  "encrypted": true,\n  "count": 42\n}';
+		assert.equal(isCodeSnippet(jsonSnippet), true);
+	});
+
+	test('positively identifies SQL query statements', () => {
+		const sqlSnippet = 'SELECT id, username, email FROM users WHERE is_active = 1 ORDER BY created_at DESC;';
+		assert.equal(isCodeSnippet(sqlSnippet), true);
+	});
+
+	test('positively identifies Bash shell commands and scripts', () => {
+		const bashSnippet = '#!/bin/bash\necho "Starting deployment..."\nsudo systemctl restart fastchat';
+		const npmSnippet = 'npm install -D tailwindcss @sveltejs/kit';
+		assert.equal(isCodeSnippet(bashSnippet), true);
+		assert.equal(isCodeSnippet(npmSnippet), true);
+	});
+
+	test('positively identifies CSS stylesheet rules', () => {
+		const cssSnippet = '.card {\n  display: flex;\n  margin: 10px;\n  color: #ffffff;\n}';
+		assert.equal(isCodeSnippet(cssSnippet), true);
+	});
+
+	test('does NOT falsely identify normal conversational text as code', () => {
+		const conversational1 = 'Hello, how are you doing today?';
+		const conversational2 = 'Cześć! Co tam u Ciebie? Spotkamy się dzisiaj o 18:00?';
+		const conversational3 = 'The quick brown fox jumps over the lazy dog. It was a sunny afternoon.';
+		const conversational4 = 'Yes, I agree with your proposal. Let us discuss this tomorrow morning.';
+		const conversational5 = 'Please review the document attached in the email.';
+		const conversational6 = 'Thanks for the update! Everything looks great so far.';
+		const conversational7 = 'Can you send me the link? https://example.com/page?id=123';
+		const numberedList = '1. First step\n2. Second step\n3. Third step';
+
+		assert.equal(isCodeSnippet(conversational1), false);
+		assert.equal(isCodeSnippet(conversational2), false);
+		assert.equal(isCodeSnippet(conversational3), false);
+		assert.equal(isCodeSnippet(conversational4), false);
+		assert.equal(isCodeSnippet(conversational5), false);
+		assert.equal(isCodeSnippet(conversational6), false);
+		assert.equal(isCodeSnippet(conversational7), false);
+		assert.equal(isCodeSnippet(numberedList), false);
+	});
+
+	test('handles edge cases: empty strings, whitespace, null/undefined', () => {
+		assert.equal(isCodeSnippet(''), false);
+		assert.equal(isCodeSnippet('   \n  \t '), false);
+		assert.equal(isCodeSnippet(null as any), false);
+		assert.equal(isCodeSnippet(undefined as any), false);
+	});
+});
+
 describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 	test('no localStorage or sessionStorage present in chat source files', () => {
 		const files = [
@@ -601,6 +683,7 @@ describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 			'src/lib/chat/transport.ts',
 			'src/lib/chat/export.ts',
 			'src/lib/chat/pastedSnippet.ts',
+			'src/lib/chat/codeDetection.ts',
 			'src/lib/stores/chat.ts'
 		];
 
