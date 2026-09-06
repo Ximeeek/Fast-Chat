@@ -21,6 +21,7 @@
 		detectLanguage,
 		getLanguageDisplayName,
 		SUPPORTED_LANGUAGES,
+		CodeMessageBlock,
 		type PastedBlock,
 		type SupportedLanguage
 	} from '$lib/chat';
@@ -930,9 +931,15 @@
 											<span>•</span>
 											<span class="tabular-nums">{formatMessageTime(msg.timestamp)}</span>
 										</div>
-										<div class="max-w-[85%] sm:max-w-[75%] p-3.5 text-xs sm:text-sm leading-relaxed break-words whitespace-pre-wrap rounded-2xl {msg.isSelf ? 'rounded-tr-sm bg-blue-600/20 text-white border border-blue-500/30 shadow-[0_2px_15px_rgba(0,102,255,0.1)]' : 'rounded-tl-sm bg-[#0c101c] text-zinc-200 border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]'}">
-											{msg.content}
-										</div>
+										{#if msg.contentType === 'code'}
+											<div class="w-full max-w-[95%] sm:max-w-[85%]">
+												<CodeMessageBlock content={msg.content} language={msg.language} />
+											</div>
+										{:else}
+											<div class="max-w-[85%] sm:max-w-[75%] p-3.5 text-xs sm:text-sm leading-relaxed break-words whitespace-pre-wrap rounded-2xl {msg.isSelf ? 'rounded-tr-sm bg-blue-600/20 text-white border border-blue-500/30 shadow-[0_2px_15px_rgba(0,102,255,0.1)]' : 'rounded-tl-sm bg-[#0c101c] text-zinc-200 border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]'}">
+												{msg.content}
+											</div>
+										{/if}
 									</div>
 								{/if}
 							{/each}

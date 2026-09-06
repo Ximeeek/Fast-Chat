@@ -20,6 +20,11 @@ import {
 	SUPPORTED_LANGUAGES,
 	type SupportedLanguage
 } from '../src/lib/chat/languageDetection.ts';
+import {
+	highlightCode,
+	escapeHtml,
+	loadLanguageGrammar
+} from '../src/lib/chat/highlighter.ts';
 import { chatStore, type ChatState } from '../src/lib/stores/chat.ts';
 import { WebRtcManager } from '../src/lib/webrtc/index.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
@@ -828,6 +833,60 @@ describe('Heuristic Language Detection (detectLanguage)', () => {
 	});
 });
 
+describe('Syntax Highlighting & Safe Fallback (highlighter.ts)', () => {
+	test('escapeHtml sanitizes all dangerous HTML characters', () => {
+		const raw = '<script>alert("XSS & theft")</script>\'test\'';
+		const escaped = escapeHtml(raw);
+		assert.equal(escaped.includes('<script>'), false);
+		assert.equal(escaped.includes('&lt;script&gt;'), true);
+		assert.equal(escaped.includes('&amp;'), true);
+		assert.equal(escaped.includes('&quot;'), true);
+		assert.equal(escaped.includes('&#039;'), true);
+	});
+
+	test('highlightCode safely returns escaped HTML for empty or null language', async () => {
+		const snippet = '<div>Plain text or unclassified code</div>';
+		const resultNull = await highlightCode(snippet, null);
+		assert.equal(resultNull, '&lt;div&gt;Plain text or unclassified code&lt;/div&gt;');
+
+		const resultEmpty = await highlightCode(snippet, '');
+		assert.equal(resultEmpty, '&lt;div&gt;Plain text or unclassified code&lt;/div&gt;');
+	});
+
+	test('highlightCode dynamically loads grammar and returns highlighted tokens for JavaScript', async () => {
+		const jsCode = 'const count = 42;';
+		const result = await highlightCode(jsCode, 'javascript');
+		assert.ok(result.includes('token keyword'));
+		assert.ok(result.includes('token number'));
+		assert.ok(result.includes('42'));
+	});
+
+	test('highlightCode dynamically loads grammar and returns highlighted tokens for Python', async () => {
+		const pyCode = 'def calculate(): pass';
+		const result = await highlightCode(pyCode, 'python');
+		assert.ok(result.includes('token keyword'));
+		assert.ok(result.includes('token function'));
+	});
+
+	test('highlightCode dynamically loads grammar and returns highlighted tokens for Rust', async () => {
+		const rustCode = 'fn compute() { println!("hi"); }';
+		const result = await highlightCode(rustCode, 'rust');
+		assert.ok(result.includes('token keyword'));
+		assert.ok(result.includes('token function'));
+	});
+
+	test('highlightCode falls back cleanly to escaped text for unknown language', async () => {
+		const snippet = 'some-custom-syntax { flag: true }';
+		const result = await highlightCode(snippet, 'nonexistent-lang');
+		assert.equal(result, 'some-custom-syntax { flag: true }');
+	});
+
+	test('loadLanguageGrammar reports false for unsupported languages without throwing', async () => {
+		const loaded = await loadLanguageGrammar('unsupported-xyz');
+		assert.equal(loaded, false);
+	});
+});
+
 describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 	test('no localStorage or sessionStorage present in chat source files', () => {
 		const files = [
@@ -838,6 +897,7 @@ describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 			'src/lib/chat/pastedSnippet.ts',
 			'src/lib/chat/codeDetection.ts',
 			'src/lib/chat/languageDetection.ts',
+			'src/lib/chat/highlighter.ts',
 			'src/lib/stores/chat.ts'
 		];
 
