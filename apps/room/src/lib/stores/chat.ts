@@ -57,6 +57,26 @@ function createChatStore() {
 		},
 
 		/**
+		 * Appends an ephemeral system announcement/log to the in-memory chat history.
+		 */
+		addSystemMessage: (content: string): void => {
+			update((state) => ({
+				...state,
+				messages: [
+					...state.messages,
+					{
+						id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+						sender: 'System',
+						content,
+						timestamp: Date.now(),
+						isSelf: false,
+						isSystem: true
+					}
+				]
+			}));
+		},
+
+		/**
 		 * Clears all in-memory chat messages and resets the assigned cosmetic username.
 		 * Invoked upon room leave, closure, or component destruction.
 		 */

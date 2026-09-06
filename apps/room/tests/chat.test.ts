@@ -302,6 +302,35 @@ describe('In-Memory Chat Store Lifecycle', () => {
 		assert.equal(state.username, null);
 		assert.deepEqual(state.messages, []);
 	});
+
+	test('addSystemMessage appends system announcements with proper attributes', () => {
+		chatStore.reset();
+		chatStore.addSystemMessage('Room created.');
+		chatStore.addSystemMessage('Peer peer-123 joined the room.');
+
+		let state!: ChatState;
+		const unsub = chatStore.subscribe((s) => {
+			state = s;
+		});
+		unsub();
+
+		assert.equal(state.messages.length, 2);
+		assert.equal(state.messages[0].sender, 'System');
+		assert.equal(state.messages[0].content, 'Room created.');
+		assert.equal(state.messages[0].isSystem, true);
+		assert.equal(state.messages[0].isSelf, false);
+		assert.match(state.messages[0].id, /^sys-\d+-[a-z0-9]+$/);
+
+		assert.equal(state.messages[1].sender, 'System');
+		assert.equal(state.messages[1].content, 'Peer peer-123 joined the room.');
+		assert.equal(state.messages[1].isSystem, true);
+		assert.equal(state.messages[1].isSelf, false);
+
+		// Verify export formatting
+		const log = formatChatLog('1234-5678-9012', state.messages);
+		assert.match(log, /\[SYSTEM\]: Room created\./);
+		assert.match(log, /\[SYSTEM\]: Peer peer-123 joined the room\./);
+	});
 });
 
 describe('WebRTC Mesh Encrypted Chat Message Transmission', () => {

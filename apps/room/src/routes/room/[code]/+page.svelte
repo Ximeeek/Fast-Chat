@@ -254,16 +254,13 @@
 
 	async function copyRoomCode() {
 		try {
-			const shareTarget = typeof window !== 'undefined' && roomToken
-				? `${window.location.origin}/room/${roomToken}`
-				: roomCode;
-			await navigator.clipboard.writeText(shareTarget);
+			await navigator.clipboard.writeText(roomCode);
 			copySuccess = true;
 			setTimeout(() => {
 				copySuccess = false;
 			}, 2000);
 		} catch (err) {
-			console.error('Failed to copy room link:', err);
+			console.error('Failed to copy room code:', err);
 		}
 	}
 
@@ -297,6 +294,9 @@
 			window.history.replaceState(window.history.state, '', `/room/${roomToken}${window.location.hash}`);
 		}
 		chatStore.initUsername();
+		if ($roomStore.isOwner && $roomStore.lifecycle === 'joined') {
+			chatStore.addSystemMessage('Room created.');
+		}
 		webRtcManager.init();
 		timerInterval = setInterval(() => {
 			now = Math.floor(Date.now() / 1000);
@@ -401,26 +401,35 @@
 			let details = '';
 
 			switch (msg.type) {
-				case 'PEER_JOINED':
-					details = `Peer connected: ${msg.peer_id || msg.peerId}`;
+				case 'ROOM_CREATED':
+					details = `Room created: ${msg.code}`;
+					chatStore.addSystemMessage('Room created.');
 					break;
-				case 'PEER_LEFT':
-					details = `Peer disconnected: ${msg.peer_id || msg.peerId}`;
+				case 'JOIN_OK':
+					details = `Joined room: ${msg.code}`;
+					chatStore.addSystemMessage('Joined the room.');
 					break;
+				case 'PEER_JOINED': {
+					const peer = msg.peer_id || msg.peerId || 'Unknown peer';
+					details = `Peer connected: ${peer}`;
+					chatStore.addSystemMessage(`Peer ${peer} joined the room.`);
+					break;
+				}
+				case 'PEER_LEFT': {
+					const peer = msg.peer_id || msg.peerId || 'Unknown peer';
+					details = `Peer disconnected: ${peer}`;
+					chatStore.addSystemMessage(`Peer ${peer} left the room.`);
+					break;
+				}
 				case 'ROOM_OWNER_CHANGED': {
 					const newOwner = msg.owner_peer_id || msg.ownerPeerId || '';
 					details = `Room ownership transferred to ${newOwner}`;
 					const isLocal = Boolean($roomStore.peerId && newOwner === $roomStore.peerId);
-					chatStore.addMessage({
-						id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-						sender: 'System',
-						content: isLocal
+					chatStore.addSystemMessage(
+						isLocal
 							? 'Room owner disconnected. You are now the room owner.'
-							: `Room owner disconnected. Ownership transferred to ${newOwner}.`,
-						timestamp: Date.now(),
-						isSelf: false,
-						isSystem: true
-					});
+							: `Room owner disconnected. Ownership transferred to ${newOwner}.`
+					);
 					if (isLocal) {
 						ownerPromotionBanner = true;
 					}
@@ -440,6 +449,7 @@
 					break;
 				case 'ROOM_CLOSING':
 					details = `Room closing grace period started`;
+					chatStore.addSystemMessage('Room closing countdown started.');
 					break;
 				case 'ROOM_CLOSED':
 					details = `Room closed: ${msg.reason}`;
@@ -624,23 +634,6 @@
 						<span>PEERS:</span>
 						<strong class="text-cyan-300 tabular-nums">{$peerCount + 1}</strong>
 					</div>
-
-					{#if $roomStore.isOwner}
-						<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold uppercase font-mono shadow-[0_0_10px_rgba(0,229,255,0.2)]">
-							<svg class="w-3 h-3 text-cyan-300 fill-current" viewBox="0 0 24 24">
-								<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
-							</svg>
-							OWNER (YOU)
-						</span>
-					{:else if $roomStore.ownerPeerId}
-						<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#0a0d16] text-zinc-300 border border-white/10 text-[10px] font-medium uppercase font-mono">
-							<svg class="w-3 h-3 text-amber-400 fill-current" viewBox="0 0 24 24">
-								<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
-							</svg>
-							<span class="text-zinc-500">OWNER:</span>
-							<strong class="text-amber-300">{$roomStore.ownerPeerId}</strong>
-						</span>
-					{/if}
 				</div>
 
 				<!-- Right: Timer, Log Export, Security & Leave Action -->
