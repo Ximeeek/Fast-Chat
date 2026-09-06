@@ -167,36 +167,52 @@ pub async fn handle_socket(
 
     // Unregister session and notify remaining room participants on disconnect
     let unreg_result = state.sessions.unregister_connection(&connection_id);
-    if let Some((code, peer_id, _)) = current_session {
+    let session_to_cleanup = current_session
+        .map(|(code, peer, _)| (code, peer))
+        .or_else(|| unreg_result.map(|(code, peer, _)| (code, peer)));
+
+    if let Some((code, peer_id)) = session_to_cleanup {
         debug!(
             connection_id = %connection_id,
             room = %code,
             peer = %peer_id,
             "WebSocket peer disconnected; cleaning up session"
         );
-        if let Some(mut room_entry) = state.room_manager.rooms.get_mut(&code) {
-            let _ = room_entry.remove_peer(&peer_id);
+
+        if let Some(outcome) = state.room_manager.leave_room(&code, &peer_id) {
+            if outcome.room_destroyed {
+                info!(
+                    room = %code,
+                    peer = %peer_id,
+                    "Last peer disconnected; room automatically destroyed"
+                );
+                state.sessions.broadcast(
+                    &code,
+                    ServerMessage::room_closed(code.to_string(), "room_empty"),
+                    None,
+                );
+            } else {
+                state.sessions.broadcast(
+                    &code,
+                    ServerMessage::peer_left(peer_id.clone()),
+                    None,
+                );
+
+                if let Some(new_owner) = outcome.new_owner_id {
+                    info!(
+                        room = %code,
+                        previous_owner = %peer_id,
+                        new_owner = %new_owner,
+                        "Broadcasting ROOM_OWNER_CHANGED to remaining participants"
+                    );
+                    state.sessions.broadcast(
+                        &code,
+                        ServerMessage::room_owner_changed(code.to_string(), new_owner),
+                        None,
+                    );
+                }
+            }
         }
-        state.sessions.broadcast(
-            &code,
-            ServerMessage::peer_left(peer_id),
-            None,
-        );
-    } else if let Some((code, peer_id, _)) = unreg_result {
-        debug!(
-            connection_id = %connection_id,
-            room = %code,
-            peer = %peer_id,
-            "Cleaned up orphaned connection registry session on disconnect"
-        );
-        if let Some(mut room_entry) = state.room_manager.rooms.get_mut(&code) {
-            let _ = room_entry.remove_peer(&peer_id);
-        }
-        state.sessions.broadcast(
-            &code,
-            ServerMessage::peer_left(peer_id),
-            None,
-        );
     }
 }
 
@@ -462,10 +478,12 @@ async fn handle_client_message(
                     );
 
                     // Send JOIN_OK to joining peer
+                    let owner_id = room_snapshot.get_owner_id();
                     let _ = tx.send(ServerMessage::join_ok(
                         code.to_string(),
                         assigned_peer_id.clone(),
                         false,
+                        owner_id,
                         salt_hex,
                         room_snapshot.expires_at,
                         existing_peers,
@@ -616,7 +634,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::Rekey { password, salt } => {
-            let (code, sender_id, is_owner) = match current_session {
+            let (code, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -627,7 +645,8 @@ async fn handle_client_message(
                 }
             };
 
-            if !*is_owner {
+            let is_owner = state.room_manager.is_owner(code, sender_id);
+            if !is_owner {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
                     "Only the room owner can initiate a REKEY",

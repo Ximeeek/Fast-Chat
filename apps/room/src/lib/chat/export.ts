@@ -32,8 +32,12 @@ export function formatChatLog(
 		for (const msg of messages) {
 			const d = new Date(msg.timestamp);
 			const timeStr = d.toISOString().slice(11, 19); // HH:MM:SS
-			const senderBadge = msg.isSelf ? `${msg.sender} (You)` : msg.sender;
-			lines.push(`[${timeStr}] ${senderBadge}: ${msg.content}`);
+			if (msg.isSystem) {
+				lines.push(`[${timeStr}] [SYSTEM]: ${msg.content}`);
+			} else {
+				const senderBadge = msg.isSelf ? `${msg.sender} (You)` : msg.sender;
+				lines.push(`[${timeStr}] ${senderBadge}: ${msg.content}`);
+			}
 		}
 		lines.push('');
 	}

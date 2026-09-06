@@ -97,6 +97,8 @@ export interface JoinOkServerMessage {
 	peer_id: string;
 	peerId?: string;
 	is_owner: boolean;
+	owner_peer_id?: string;
+	ownerPeerId?: string;
 	salt: string;
 	expires_at: number;
 	expiresAt?: number;
@@ -178,11 +180,20 @@ export interface IceServersServerMessage {
 	turnIssuanceLimited?: boolean;
 }
 
+export interface RoomOwnerChangedServerMessage {
+	type: 'ROOM_OWNER_CHANGED';
+	room_code: string;
+	roomCode?: string;
+	owner_peer_id: string;
+	ownerPeerId?: string;
+}
+
 export type ServerSignalingMessage =
 	| RoomCreatedServerMessage
 	| JoinOkServerMessage
 	| PeerJoinedServerMessage
 	| PeerLeftServerMessage
+	| RoomOwnerChangedServerMessage
 	| SdpOfferServerMessage
 	| SdpAnswerServerMessage
 	| IceCandidatesServerMessage

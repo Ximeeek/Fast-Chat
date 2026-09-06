@@ -6,6 +6,13 @@ import { join } from 'node:path';
 import { generateUsername } from '../src/lib/chat/username.ts';
 import { serializeChatMessage, deserializeChatMessage } from '../src/lib/chat/transport.ts';
 import { formatChatLog, downloadChatLog } from '../src/lib/chat/export.ts';
+import {
+	countLines,
+	isLongPastedText,
+	formatPastedLabel,
+	composeFinalMessage,
+	type PastedBlock
+} from '../src/lib/chat/pastedSnippet.ts';
 import { chatStore, type ChatState } from '../src/lib/stores/chat.ts';
 import { WebRtcManager } from '../src/lib/webrtc/index.ts';
 import { deriveInitialKey } from '../src/lib/crypto/kdf.ts';
@@ -496,6 +503,67 @@ describe('Client-Side Chat Log Formatting & Export', () => {
 	});
 });
 
+describe('Pasted Snippet Drafting & Containment', () => {
+	test('counts lines accurately across CRLF, LF, and CR delimiters', () => {
+		assert.equal(countLines(''), 0);
+		assert.equal(countLines('single line text'), 1);
+		assert.equal(countLines('line 1\nline 2\nline 3'), 3);
+		assert.equal(countLines('line 1\r\nline 2\r\nline 3\r\nline 4'), 4);
+		assert.equal(countLines('line 1\rline 2'), 2);
+	});
+
+	test('isLongPastedText detects multiline or long text exceeding thresholds', () => {
+		// Short text under 3 lines and under 250 characters -> false
+		assert.equal(isLongPastedText('hello world'), false);
+		assert.equal(isLongPastedText('line one\nline two'), false);
+		assert.equal(isLongPastedText(''), false);
+
+		// 3 or more lines -> true
+		assert.equal(isLongPastedText('one\ntwo\nthree'), true);
+		assert.equal(isLongPastedText('one\r\ntwo\r\nthree\r\nfour'), true);
+
+		// Long single line > 250 characters -> true
+		const longSingleLine = 'a'.repeat(251);
+		assert.equal(isLongPastedText(longSingleLine), true);
+
+		// Single line <= 250 characters -> false
+		const shortSingleLine = 'a'.repeat(250);
+		assert.equal(isLongPastedText(shortSingleLine), false);
+	});
+
+	test('formatPastedLabel generates clean singular and plural labels', () => {
+		assert.equal(formatPastedLabel(1), '[ Pasted 1 Line of Text ]');
+		assert.equal(formatPastedLabel(2), '[ Pasted 2 Lines of Text ]');
+		assert.equal(formatPastedLabel(15), '[ Pasted 15 Lines of Text ]');
+		assert.equal(formatPastedLabel(0), '[ Pasted 1 Line of Text ]');
+	});
+
+	test('composeFinalMessage joins input text and pasted snippet blocks cleanly', () => {
+		const blocks: PastedBlock[] = [
+			{ id: 'b1', content: 'const x = 1;\nconsole.log(x);', lineCount: 2, isExpanded: false },
+			{ id: 'b2', content: 'Some extra log line', lineCount: 1, isExpanded: false }
+		];
+
+		// Both typed input and blocks
+		const result1 = composeFinalMessage('Check this snippet:', blocks);
+		assert.equal(
+			result1,
+			'Check this snippet:\n\nconst x = 1;\nconsole.log(x);\n\nSome extra log line'
+		);
+
+		// Only blocks, empty typed input
+		const result2 = composeFinalMessage('   ', blocks);
+		assert.equal(result2, 'const x = 1;\nconsole.log(x);\n\nSome extra log line');
+
+		// Only typed input, empty blocks
+		const result3 = composeFinalMessage('Hello peer', []);
+		assert.equal(result3, 'Hello peer');
+
+		// Empty input and empty blocks
+		assert.equal(composeFinalMessage('', []), '');
+	});
+});
+
 describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 	test('no localStorage or sessionStorage present in chat source files', () => {
 		const files = [
@@ -503,6 +571,7 @@ describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 			'src/lib/chat/types.ts',
 			'src/lib/chat/transport.ts',
 			'src/lib/chat/export.ts',
+			'src/lib/chat/pastedSnippet.ts',
 			'src/lib/stores/chat.ts'
 		];
 
@@ -522,3 +591,4 @@ describe('Zero Persistence & Zero Signaling Plaintext Audit', () => {
 		}
 	});
 });
+

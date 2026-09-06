@@ -460,6 +460,13 @@ export class SignalingClient {
 				}
 				break;
 			}
+			case 'ROOM_OWNER_CHANGED': {
+				const ownerId = msg.owner_peer_id || msg.ownerPeerId;
+				if (ownerId) {
+					roomStore.setOwner(ownerId);
+				}
+				break;
+			}
 			case 'ROOM_CLOSING': {
 				const deadline = msg.closing_deadline || msg.closingDeadline || 0;
 				const expires = msg.expires_at || msg.expiresAt || 0;

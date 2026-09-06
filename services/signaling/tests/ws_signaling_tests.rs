@@ -872,3 +872,210 @@ async fn test_connection_disconnect_cleans_up_room_registration_allows_rejoin() 
     }
 }
 
+#[tokio::test]
+async fn test_ws_owner_departure_transfers_ownership_and_empty_room_auto_destroyed() {
+    let config = Config::default();
+    let (addr, state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect peer A");
+    let create_a = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_a).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, peer_id, .. } => {
+            assert_eq!(peer_id, "alice");
+            code
+        }
+        other => panic!("Expected RoomCreated, got {other:?}"),
+    };
+
+    // 2. Bob joins room and gets JoinOk with owner_peer_id: "alice"
+    let (mut ws_b, _) = connect_async(&ws_url).await.expect("Failed to connect peer B");
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    match resp_b {
+        ServerMessage::JoinOk {
+            status,
+            code,
+            peer_id,
+            is_owner,
+            owner_peer_id,
+            ..
+        } => {
+            assert_eq!(status, "OK");
+            assert_eq!(code, room_code);
+            assert_eq!(peer_id, "bob");
+            assert!(!is_owner);
+            assert_eq!(owner_peer_id, Some("alice".to_string()));
+        }
+        other => panic!("Expected JoinOk for Bob, got {other:?}"),
+    }
+
+    // Drain Alice's PEER_JOINED for Bob
+    let _ = ws_a.next().await.unwrap().unwrap();
+
+    // 3. Charlie joins room
+    let (mut ws_c, _) = connect_async(&ws_url).await.expect("Failed to connect peer C");
+    let join_c = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_c_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_c: ServerMessage = serde_json::from_str(&resp_c_raw).unwrap();
+    assert!(matches!(resp_c, ServerMessage::JoinOk { .. }));
+
+    // Drain PEER_JOINED notifications from Alice and Bob
+    let _ = ws_a.next().await.unwrap().unwrap();
+    let _ = ws_b.next().await.unwrap().unwrap();
+
+    // 4. Alice (owner) disconnects
+    drop(ws_a);
+
+    // 5. Bob receives PeerLeft(alice) and RoomOwnerChanged(bob)
+    let mut bob_saw_alice_left = false;
+    let mut bob_saw_owner_changed_to_bob = false;
+
+    for _ in 0..2 {
+        let msg_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+        let msg: ServerMessage = serde_json::from_str(&msg_raw).unwrap();
+        match msg {
+            ServerMessage::PeerLeft { peer_id, .. } => {
+                if peer_id == "alice" {
+                    bob_saw_alice_left = true;
+                }
+            }
+            ServerMessage::RoomOwnerChanged { owner_peer_id, .. } => {
+                if owner_peer_id == "bob" {
+                    bob_saw_owner_changed_to_bob = true;
+                }
+            }
+            other => panic!("Unexpected message for Bob: {other:?}"),
+        }
+    }
+    assert!(bob_saw_alice_left);
+    assert!(bob_saw_owner_changed_to_bob);
+
+    // 6. Charlie also receives PeerLeft(alice) and RoomOwnerChanged(bob)
+    let mut charlie_saw_alice_left = false;
+    let mut charlie_saw_owner_changed_to_bob = false;
+
+    for _ in 0..2 {
+        let msg_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+        let msg: ServerMessage = serde_json::from_str(&msg_raw).unwrap();
+        match msg {
+            ServerMessage::PeerLeft { peer_id, .. } => {
+                if peer_id == "alice" {
+                    charlie_saw_alice_left = true;
+                }
+            }
+            ServerMessage::RoomOwnerChanged { owner_peer_id, .. } => {
+                if owner_peer_id == "bob" {
+                    charlie_saw_owner_changed_to_bob = true;
+                }
+            }
+            other => panic!("Unexpected message for Charlie: {other:?}"),
+        }
+    }
+    assert!(charlie_saw_alice_left);
+    assert!(charlie_saw_owner_changed_to_bob);
+
+    // 7. Charlie attempts to Rekey -> rejected UNAUTHORIZED
+    let charlie_rekey = ClientMessage::Rekey {
+        password: "charlie-pass".to_string(),
+        salt: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&charlie_rekey).unwrap().into()))
+        .await
+        .unwrap();
+    let charlie_err_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let charlie_err: ServerMessage = serde_json::from_str(&charlie_err_raw).unwrap();
+    match charlie_err {
+        ServerMessage::Error { code, .. } => {
+            assert_eq!(code, "UNAUTHORIZED");
+        }
+        other => panic!("Expected UNAUTHORIZED for Charlie rekey, got {other:?}"),
+    }
+
+    // 8. Bob (new owner) initiates Rekey -> succeeds and broadcasts Rekey
+    let bob_rekey = ClientMessage::Rekey {
+        password: "bob-pass-123".to_string(),
+        salt: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&bob_rekey).unwrap().into()))
+        .await
+        .unwrap();
+
+    let bob_rekey_resp_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let bob_rekey_resp: ServerMessage = serde_json::from_str(&bob_rekey_resp_raw).unwrap();
+    assert!(matches!(bob_rekey_resp, ServerMessage::Rekey { .. }));
+
+    // Charlie also receives Rekey broadcast
+    let charlie_rekey_notif_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let charlie_rekey_notif: ServerMessage = serde_json::from_str(&charlie_rekey_notif_raw).unwrap();
+    assert!(matches!(charlie_rekey_notif, ServerMessage::Rekey { .. }));
+
+    // 9. Charlie disconnects
+    drop(ws_c);
+    let bob_saw_charlie_left_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    assert!(matches!(
+        serde_json::from_str::<ServerMessage>(&bob_saw_charlie_left_raw).unwrap(),
+        ServerMessage::PeerLeft { peer_id, .. } if peer_id == "charlie"
+    ));
+
+    // Room still exists with Bob
+    assert_eq!(state.room_manager.room_count(), 1);
+
+    // 10. Bob disconnects -> room becomes empty
+    drop(ws_b);
+
+    // Give asynchronous disconnect a moment to process
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Room is automatically destroyed from memory
+    assert_eq!(state.room_manager.room_count(), 0);
+
+    // 11. Attempting to join the emptied room fails with ROOM_NOT_FOUND
+    let (mut ws_d, _) = connect_async(&ws_url).await.expect("Failed to connect peer D");
+    let join_d = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("david".to_string()),
+        password: None,
+    };
+    ws_d.send(Message::Text(serde_json::to_string(&join_d).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_d_raw = ws_d.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_d: ServerMessage = serde_json::from_str(&resp_d_raw).unwrap();
+    match resp_d {
+        ServerMessage::Error { code, .. } => {
+            assert_eq!(code, "ROOM_NOT_FOUND");
+        }
+        other => panic!("Expected ROOM_NOT_FOUND, got {other:?}"),
+    }
+}
+

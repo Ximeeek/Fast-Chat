@@ -123,11 +123,25 @@ pub enum ServerMessage {
         #[serde(rename = "peerId")]
         peer_id_camel: String,
         is_owner: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner_peer_id: Option<String>,
+        #[serde(default, rename = "ownerPeerId", skip_serializing_if = "Option::is_none")]
+        owner_peer_id_camel: Option<String>,
         salt: String,
         expires_at: i64,
         #[serde(rename = "expiresAt")]
         expires_at_camel: i64,
         peers: Vec<String>,
+    },
+
+    /// Broadcast notification informing active participants that room ownership transferred.
+    RoomOwnerChanged {
+        room_code: String,
+        #[serde(rename = "roomCode")]
+        room_code_camel: String,
+        owner_peer_id: String,
+        #[serde(rename = "ownerPeerId")]
+        owner_peer_id_camel: String,
     },
 
     /// Broadcast notification informing active participants that a new peer joined.
@@ -238,22 +252,37 @@ impl ServerMessage {
         code: impl Into<String>,
         peer_id: impl Into<String>,
         is_owner: bool,
+        owner_peer_id: Option<String>,
         salt_hex: impl Into<String>,
         expires_at: i64,
         peers: Vec<String>,
     ) -> Self {
         let code_str = code.into();
         let peer_str = peer_id.into();
+        let owner_camel = owner_peer_id.clone();
         Self::JoinOk {
             status: "OK".to_string(),
             code: code_str,
             peer_id: peer_str.clone(),
             peer_id_camel: peer_str,
             is_owner,
+            owner_peer_id,
+            owner_peer_id_camel: owner_camel,
             salt: salt_hex.into(),
             expires_at,
             expires_at_camel: expires_at,
             peers,
+        }
+    }
+
+    pub fn room_owner_changed(room_code: impl Into<String>, owner_peer_id: impl Into<String>) -> Self {
+        let code_str = room_code.into();
+        let owner_str = owner_peer_id.into();
+        Self::RoomOwnerChanged {
+            room_code: code_str.clone(),
+            room_code_camel: code_str,
+            owner_peer_id: owner_str.clone(),
+            owner_peer_id_camel: owner_str,
         }
     }
 
@@ -469,12 +498,22 @@ mod tests {
         assert!(serialized.contains(r#""expiresAt":1000"#));
         assert!(serialized.contains(r#""expires_at":1000"#));
 
-        let join_ok = ServerMessage::join_ok("1234-5678-9012", "bob", false, "001122", 1000, vec!["alice".to_string()]);
+        let join_ok = ServerMessage::join_ok("1234-5678-9012", "bob", false, Some("alice".to_string()), "001122", 1000, vec!["alice".to_string()]);
         let join_serialized = serde_json::to_string(&join_ok).unwrap();
         assert!(join_serialized.contains(r#""type":"JOIN_OK""#));
         assert!(join_serialized.contains(r#""status":"OK""#));
         assert!(join_serialized.contains(r#""expiresAt":1000"#));
+        assert!(join_serialized.contains(r#""owner_peer_id":"alice""#));
+        assert!(join_serialized.contains(r#""ownerPeerId":"alice""#));
         assert!(join_serialized.contains(r#""peers":["alice"]"#));
+
+        let owner_changed = ServerMessage::room_owner_changed("1234-5678-9012", "bob");
+        let owner_serialized = serde_json::to_string(&owner_changed).unwrap();
+        assert!(owner_serialized.contains(r#""type":"ROOM_OWNER_CHANGED""#));
+        assert!(owner_serialized.contains(r#""room_code":"1234-5678-9012""#));
+        assert!(owner_serialized.contains(r#""roomCode":"1234-5678-9012""#));
+        assert!(owner_serialized.contains(r#""owner_peer_id":"bob""#));
+        assert!(owner_serialized.contains(r#""ownerPeerId":"bob""#));
 
         let sdp_relay = ServerMessage::sdp_offer("alice", serde_json::json!({"type": "offer", "sdp": "data"}));
         let sdp_serialized = serde_json::to_string(&sdp_relay).unwrap();

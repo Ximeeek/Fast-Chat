@@ -10,6 +10,14 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
+/// Outcome of a peer leaving a room.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerLeaveOutcome {
+    pub was_owner: bool,
+    pub new_owner_id: Option<String>,
+    pub room_destroyed: bool,
+}
+
 /// In-memory manager orchestrating all room states without persistent storage.
 /// FastChat guarantees zero disk footprint and zero database storage.
 #[derive(Debug)]
@@ -154,6 +162,58 @@ impl RoomManager {
             .broadcast_state_changed(code, RoomLifecycleState::Closing);
         info!(room = %code, peer = %peer_id, "Room manual closing initiated by owner");
         Ok(())
+    }
+
+    /// Checks atomically whether a peer is the registered owner of the room.
+    pub fn is_owner(&self, code: &RoomCode, peer_id: &str) -> bool {
+        self.rooms
+            .get(code)
+            .map(|r| r.is_owner(peer_id))
+            .unwrap_or(false)
+    }
+
+    /// Handles peer departure from a room.
+    ///
+    /// - If the departing peer was the owner and other peers remain, ownership is
+    ///   automatically transferred to the oldest remaining participant.
+    /// - If the room has no remaining peers, it is immediately purged from memory.
+    pub fn leave_room(&self, code: &RoomCode, peer_id: &str) -> Option<PeerLeaveOutcome> {
+        let mut room_entry = self.rooms.get_mut(code)?;
+        let removed_peer = room_entry.remove_peer(peer_id).ok()?;
+        let was_owner = removed_peer.is_owner;
+
+        if room_entry.peers.is_empty() {
+            // Drop mutable reference before removing from DashMap
+            drop(room_entry);
+            self.rooms.remove(code);
+            self.broadcaster.broadcast_room_closed(code, "room_empty");
+            info!(room = %code, "Room emptied; automatically destroyed from memory");
+            return Some(PeerLeaveOutcome {
+                was_owner,
+                new_owner_id: None,
+                room_destroyed: true,
+            });
+        }
+
+        let mut new_owner_id = None;
+        if was_owner {
+            // Reassign owner flag to the first remaining participant
+            room_entry.peers[0].is_owner = true;
+            let assigned_owner = room_entry.peers[0].id.clone();
+            info!(
+                room = %code,
+                previous_owner = %peer_id,
+                new_owner = %assigned_owner,
+                "Room owner departed; transferred ownership to next participant"
+            );
+            new_owner_id = Some(assigned_owner);
+        }
+
+        Some(PeerLeaveOutcome {
+            was_owner,
+            new_owner_id,
+            room_destroyed: false,
+        })
     }
 
     /// Evaluates lifecycle across all rooms at a specific timestamp.
@@ -315,6 +375,64 @@ mod tests {
 
         // 5. Tick after grace period (+612s) -> Destroyed, removed from DashMap
         manager.tick_lifecycle(start_time + 612);
+        assert_eq!(manager.room_count(), 0);
+        assert_eq!(broadcaster.closed_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_leave_room_ownership_transfer_and_empty_room_purge() {
+        let config = Config::default();
+        let broadcaster = Arc::new(MockBroadcaster::default());
+        let manager = RoomManager::with_broadcaster(config, broadcaster.clone());
+
+        let code = manager
+            .create_room(Some("alice".to_string()), None, PasswordStatus::none())
+            .unwrap();
+
+        manager.join_room(&code, "bob".to_string(), false).unwrap();
+        manager.join_room(&code, "charlie".to_string(), false).unwrap();
+
+        assert!(manager.is_owner(&code, "alice"));
+        assert!(!manager.is_owner(&code, "bob"));
+        assert!(!manager.is_owner(&code, "charlie"));
+
+        // 1. Charlie (non-owner) leaves
+        let outcome_c = manager.leave_room(&code, "charlie").unwrap();
+        assert_eq!(
+            outcome_c,
+            PeerLeaveOutcome {
+                was_owner: false,
+                new_owner_id: None,
+                room_destroyed: false,
+            }
+        );
+        assert!(manager.is_owner(&code, "alice"));
+        assert_eq!(manager.room_count(), 1);
+
+        // 2. Alice (owner) leaves -> ownership transfers to bob
+        let outcome_a = manager.leave_room(&code, "alice").unwrap();
+        assert_eq!(
+            outcome_a,
+            PeerLeaveOutcome {
+                was_owner: true,
+                new_owner_id: Some("bob".to_string()),
+                room_destroyed: false,
+            }
+        );
+        assert!(manager.is_owner(&code, "bob"));
+        assert!(!manager.is_owner(&code, "alice"));
+        assert_eq!(manager.room_count(), 1);
+
+        // 3. Bob leaves -> room empty -> auto destroyed immediately
+        let outcome_b = manager.leave_room(&code, "bob").unwrap();
+        assert_eq!(
+            outcome_b,
+            PeerLeaveOutcome {
+                was_owner: true,
+                new_owner_id: None,
+                room_destroyed: true,
+            }
+        );
         assert_eq!(manager.room_count(), 0);
         assert_eq!(broadcaster.closed_count.load(Ordering::SeqCst), 1);
     }

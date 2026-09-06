@@ -12,6 +12,8 @@ export interface ChatMessage {
 	timestamp: number;
 	/** True if the message originated from the local client session */
 	isSelf: boolean;
+	/** True if the message is a system notification/announcement */
+	isSystem?: boolean;
 	/** Remote WebRTC peer identifier if received from a remote participant */
 	senderPeerId?: string;
 }

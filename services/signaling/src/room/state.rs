@@ -274,9 +274,38 @@ impl RoomState {
             .any(|p| p.id == peer_id && p.is_owner)
     }
 
+    /// Returns the peer ID of the current room owner, if assigned.
+    pub fn get_owner_id(&self) -> Option<String> {
+        self.peers
+            .iter()
+            .find(|p| p.is_owner)
+            .map(|p| p.id.clone())
+    }
+
+    /// Sets the designated owner of this room to the specified peer ID.
+    /// Resets owner status for all other peers. Returns true if the peer was found.
+    pub fn set_owner(&mut self, peer_id: &str) -> bool {
+        let mut found = false;
+        for p in &mut self.peers {
+            if p.id == peer_id {
+                p.is_owner = true;
+                found = true;
+            } else {
+                p.is_owner = false;
+            }
+        }
+        found
+    }
+
     /// Evaluates the room's lifecycle against server time and transitions state accordingly.
     /// This is invoked by the background ticker to keep the server as the single source of truth.
     pub fn evaluate_lifecycle(&mut self, now_ts: i64, config: &Config) -> LifecycleAction {
+        // Rooms that have no active participants (and are past creation) are destroyed immediately.
+        if self.peers.is_empty() && self.state != RoomLifecycleState::Creating {
+            self.state = RoomLifecycleState::Destroyed;
+            return LifecycleAction::Destroy;
+        }
+
         match self.state {
             RoomLifecycleState::Closing => {
                 if let Some(deadline) = self.closing_deadline
@@ -590,4 +619,40 @@ mod tests {
         let join_ok = room.add_peer_with_password("peer2".to_string(), false, Some("secret123"), 1002, &config);
         assert!(join_ok.is_ok());
     }
+
+    #[test]
+    fn test_owner_transfer_and_empty_room_destruction() {
+        let config = Config::default();
+        let mut room = RoomState::new(
+            sample_code(),
+            Some("alice".to_string()),
+            None,
+            PasswordStatus::none(),
+            &config,
+            1000,
+        );
+
+        assert_eq!(room.get_owner_id(), Some("alice".to_string()));
+        assert!(room.add_peer("bob".to_string(), false, 1001, &config).is_ok());
+
+        // Transfer ownership to bob
+        assert!(room.set_owner("bob"));
+        assert_eq!(room.get_owner_id(), Some("bob".to_string()));
+        assert!(!room.is_owner("alice"));
+        assert!(room.is_owner("bob"));
+
+        // Setting non-existent peer as owner returns false
+        assert!(!room.set_owner("charlie"));
+
+        // Remove alice then bob -> room empty
+        assert!(room.remove_peer("alice").is_ok());
+        assert!(room.remove_peer("bob").is_ok());
+        assert!(room.peers.is_empty());
+
+        // Empty active room triggers immediate Destroy lifecycle action
+        let action = room.evaluate_lifecycle(1050, &config);
+        assert_eq!(action, LifecycleAction::Destroy);
+        assert_eq!(room.state, RoomLifecycleState::Destroyed);
+    }
 }
+

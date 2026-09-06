@@ -17,6 +17,7 @@ export interface RoomState {
 	code: string | null;
 	peerId: string | null;
 	isOwner: boolean;
+	ownerPeerId: string | null;
 	salt: string | null;
 	expiresAt: number | null; // Unix timestamp in seconds
 	peers: string[];
@@ -33,6 +34,7 @@ const initialRoomState: RoomState = {
 	code: null,
 	peerId: null,
 	isOwner: false,
+	ownerPeerId: null,
 	salt: null,
 	expiresAt: null,
 	peers: [],
@@ -51,28 +53,46 @@ function createRoomStore() {
 	return {
 		subscribe,
 		setCreated: (payload: RoomCreatedServerMessage) => {
-			update((state) => ({
-				...state,
-				code: payload.code,
-				peerId: payload.peer_id || payload.peerId || state.peerId,
-				isOwner: true,
-				salt: payload.salt || payload.crypto_salt || null,
-				expiresAt: payload.expires_at || payload.expiresAt || null,
-				lifecycle: 'joined',
-				error: null
-			}));
+			const peerId = payload.peer_id || payload.peerId || null;
+			update((state) => {
+				const currentPeerId = peerId || state.peerId;
+				return {
+					...state,
+					code: payload.code,
+					peerId: currentPeerId,
+					isOwner: true,
+					ownerPeerId: currentPeerId,
+					salt: payload.salt || payload.crypto_salt || null,
+					expiresAt: payload.expires_at || payload.expiresAt || null,
+					lifecycle: 'joined',
+					error: null
+				};
+			});
 		},
 		setJoined: (payload: JoinOkServerMessage) => {
+			const peerId = payload.peer_id || payload.peerId || null;
+			update((state) => {
+				const currentPeerId = peerId || state.peerId;
+				const ownerId = payload.owner_peer_id || payload.ownerPeerId || (payload.is_owner ? currentPeerId : null);
+				return {
+					...state,
+					code: payload.code,
+					peerId: currentPeerId,
+					isOwner: payload.is_owner,
+					ownerPeerId: ownerId,
+					salt: payload.salt,
+					expiresAt: payload.expires_at || payload.expiresAt || null,
+					peers: [...payload.peers],
+					lifecycle: 'joined',
+					error: null
+				};
+			});
+		},
+		setOwner: (ownerPeerId: string) => {
 			update((state) => ({
 				...state,
-				code: payload.code,
-				peerId: payload.peer_id || payload.peerId || state.peerId,
-				isOwner: payload.is_owner,
-				salt: payload.salt,
-				expiresAt: payload.expires_at || payload.expiresAt || null,
-				peers: [...payload.peers],
-				lifecycle: 'joined',
-				error: null
+				ownerPeerId,
+				isOwner: state.peerId === ownerPeerId
 			}));
 		},
 		addPeer: (newPeerId: string) => {
