@@ -23,7 +23,8 @@
 		SUPPORTED_LANGUAGES,
 		CodeMessageBlock,
 		type PastedBlock,
-		type SupportedLanguage
+		type SupportedLanguage,
+		type MessageSegment
 	} from '$lib/chat';
 	import { FileSender, FileReceiver, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
@@ -257,15 +258,18 @@
 			});
 		}
 
+		const segments: MessageSegment[] =
+			messageContentType === 'code'
+				? [{ type: 'code', code: trimmed, language: messageLanguage }]
+				: [{ type: 'text', text: trimmed }];
+
 		// Optimistically append local message
 		chatStore.addMessage({
 			id,
 			sender,
-			content: trimmed,
+			segments,
 			timestamp,
-			isSelf: true,
-			contentType: messageContentType,
-			language: messageLanguage
+			isSelf: true
 		});
 
 		messageInput = '';
@@ -278,10 +282,8 @@
 				type: 'chat',
 				id,
 				sender,
-				content: trimmed,
 				timestamp,
-				contentType: messageContentType,
-				language: messageLanguage
+				segments
 			});
 			await webRtcManager.broadcast(payload);
 		} catch (err) {
@@ -418,19 +420,16 @@
 							chatStore.addMessage({
 								id: wireMsg.id,
 								sender: wireMsg.sender,
-								content: wireMsg.content,
+								segments: wireMsg.segments,
 								timestamp: wireMsg.timestamp,
 								isSelf: false,
-								senderPeerId: peerId,
-								contentType: wireMsg.contentType,
-								language: wireMsg.language
+								senderPeerId: peerId
 							});
 							if (import.meta.env.DEV) {
 								console.debug('[Chat:Receiver:StoreAdded]', {
 									peerId,
 									messageId: wireMsg.id,
-									contentType: wireMsg.contentType,
-									language: wireMsg.language,
+									segmentsCount: wireMsg.segments.length,
 									timestamp: Date.now()
 								});
 							}
@@ -919,7 +918,7 @@
 											<svg class="w-3.5 h-3.5 text-cyan-400 shrink-0 fill-current" viewBox="0 0 24 24">
 												<path d="M12 2l3 7h7l-5.5 4.5 2 7.5L12 17l-6.5 4 2-7.5L2 9h7z"/>
 											</svg>
-											<span>{msg.content}</span>
+											<span>{msg.segments?.[0]?.type === 'text' ? msg.segments[0].text : ''}</span>
 										</div>
 									</div>
 								{:else}
@@ -931,15 +930,19 @@
 											<span>•</span>
 											<span class="tabular-nums">{formatMessageTime(msg.timestamp)}</span>
 										</div>
-										{#if msg.contentType === 'code'}
-											<div class="w-full max-w-[95%] sm:max-w-[85%]">
-												<CodeMessageBlock content={msg.content} language={msg.language} />
-											</div>
-										{:else}
-											<div class="max-w-[85%] sm:max-w-[75%] p-3.5 text-xs sm:text-sm leading-relaxed break-words whitespace-pre-wrap rounded-2xl {msg.isSelf ? 'rounded-tr-sm bg-blue-600/20 text-white border border-blue-500/30 shadow-[0_2px_15px_rgba(0,102,255,0.1)]' : 'rounded-tl-sm bg-[#0c101c] text-zinc-200 border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]'}">
-												{msg.content}
-											</div>
-										{/if}
+										<div class="flex flex-col gap-2 {msg.isSelf ? 'items-end' : 'items-start'} w-full">
+											{#each msg.segments as segment}
+												{#if segment.type === 'code'}
+													<div class="w-full max-w-[95%] sm:max-w-[85%]">
+														<CodeMessageBlock content={segment.code} language={segment.language} />
+													</div>
+												{:else}
+													<div class="max-w-[85%] sm:max-w-[75%] p-3.5 text-xs sm:text-sm leading-relaxed break-words whitespace-pre-wrap rounded-2xl {msg.isSelf ? 'rounded-tr-sm bg-blue-600/20 text-white border border-blue-500/30 shadow-[0_2px_15px_rgba(0,102,255,0.1)]' : 'rounded-tl-sm bg-[#0c101c] text-zinc-200 border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]'}">
+														{segment.text}
+													</div>
+												{/if}
+											{/each}
+										</div>
 									</div>
 								{/if}
 							{/each}

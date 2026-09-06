@@ -32,11 +32,21 @@ export function formatChatLog(
 		for (const msg of messages) {
 			const d = new Date(msg.timestamp);
 			const timeStr = d.toISOString().slice(11, 19); // HH:MM:SS
+			const body = Array.isArray(msg.segments)
+				? msg.segments
+						.map((seg) =>
+							seg.type === 'code'
+								? (seg.language ? `\`\`\`${seg.language}\n${seg.code}\n\`\`\`` : `\`\`\`\n${seg.code}\n\`\`\``)
+								: seg.text
+						)
+						.join('\n\n')
+				: ((msg as any).content || '');
+
 			if (msg.isSystem) {
-				lines.push(`[${timeStr}] [SYSTEM]: ${msg.content}`);
+				lines.push(`[${timeStr}] [SYSTEM]: ${body}`);
 			} else {
 				const senderBadge = msg.isSelf ? `${msg.sender} (You)` : msg.sender;
-				lines.push(`[${timeStr}] ${senderBadge}: ${msg.content}`);
+				lines.push(`[${timeStr}] ${senderBadge}: ${body}`);
 			}
 		}
 		lines.push('');

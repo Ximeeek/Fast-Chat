@@ -389,14 +389,14 @@ describe('Search Engine Privacy & Zero Storage Policy Audit', () => {
 			{
 				id: 'msg-1',
 				sender: 'alice',
-				content: 'Hello everyone',
+				segments: [{ type: 'text', text: 'Hello everyone' }],
 				timestamp: 1700000000000,
 				isSelf: false
 			},
 			{
 				id: 'sys-1',
 				sender: 'System',
-				content: 'Room owner disconnected. You are now the room owner.',
+				segments: [{ type: 'text', text: 'Room owner disconnected. You are now the room owner.' }],
 				timestamp: 1700000010000,
 				isSelf: false,
 				isSystem: true

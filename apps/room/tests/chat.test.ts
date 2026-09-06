@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { generateUsername } from '../src/lib/chat/username.ts';
+import type { ChatMessage, ChatWirePayload, MessageSegment } from '../src/lib/chat/types.ts';
 import { serializeChatMessage, deserializeChatMessage } from '../src/lib/chat/transport.ts';
 import { formatChatLog, downloadChatLog } from '../src/lib/chat/export.ts';
 import {
@@ -178,12 +179,12 @@ describe('Cosmetic Username Generation', () => {
 
 describe('Chat Wire Serialization and Deserialization', () => {
 	test('successfully serializes and deserializes standard chat payloads', () => {
-		const original = {
-			type: 'chat' as const,
+		const original: ChatWirePayload = {
+			type: 'chat',
 			id: 'msg-1234-uuid',
 			sender: 'swift-fox-42',
-			content: 'Hello, encrypted WebRTC world!',
-			timestamp: 1725555555000
+			timestamp: 1725555555000,
+			segments: [{ type: 'text', text: 'Hello, encrypted WebRTC world!' }]
 		};
 
 		const bytes = serializeChatMessage(original);
@@ -196,18 +197,19 @@ describe('Chat Wire Serialization and Deserialization', () => {
 
 	test('handles Unicode, emojis, multiline strings, and whitespace', () => {
 		const complexContent = 'Zażółć gęślą jaźń! 🚀✨\nSecond line with spaces   and symbols: &<>"\'' ;
-		const original = {
-			type: 'chat' as const,
+		const original: ChatWirePayload = {
+			type: 'chat',
 			id: 'msg-unicode-test',
 			sender: 'keen-otter-99',
-			content: complexContent,
-			timestamp: Date.now()
+			timestamp: Date.now(),
+			segments: [{ type: 'text', text: complexContent }]
 		};
 
 		const bytes = serializeChatMessage(original);
 		const deserialized = deserializeChatMessage(bytes);
 		assert.ok(deserialized);
-		assert.equal(deserialized.content, complexContent);
+		assert.equal(deserialized.segments[0].type, 'text');
+		assert.equal((deserialized.segments[0] as any).text, complexContent);
 	});
 
 	test('rejects corrupt, incomplete, or malformed byte packets safely', () => {
@@ -217,8 +219,11 @@ describe('Chat Wire Serialization and Deserialization', () => {
 			new TextEncoder().encode('not-json'),
 			new TextEncoder().encode('{"type":"other"}'),
 			new TextEncoder().encode('{"type":"chat"}'), // missing fields
-			new TextEncoder().encode('{"type":"chat","id":"","sender":"a","content":"b","timestamp":1}'), // empty id
-			new TextEncoder().encode('{"type":"chat","id":"1","sender":"a","content":123,"timestamp":1}') // invalid content type
+			new TextEncoder().encode('{"type":"chat","id":"","sender":"a","timestamp":1,"segments":[]}'), // empty id
+			new TextEncoder().encode('{"type":"chat","id":"1","sender":"a","timestamp":1,"segments":[]}'), // empty segments array
+			new TextEncoder().encode('{"type":"chat","id":"1","sender":"a","timestamp":1,"segments":"invalid"}'), // non-array segments
+			new TextEncoder().encode('{"type":"chat","id":"1","sender":"a","timestamp":1,"segments":[{}]}'), // malformed segment
+			new TextEncoder().encode('{"type":"chat","id":"1","sender":"a","timestamp":1,"segments":[{"type":"unknown"}]}') // unknown segment type
 		];
 
 		for (const item of invalidPayloads) {
@@ -228,15 +233,34 @@ describe('Chat Wire Serialization and Deserialization', () => {
 		}
 	});
 
+	test('rejects payloads exceeding MAX_SEGMENTS_PER_MESSAGE bound', () => {
+		const tooManySegments: MessageSegment[] = Array.from({ length: 51 }, (_, i) => ({
+			type: 'text' as const,
+			text: `Line ${i}`
+		}));
+		const payload: ChatWirePayload = {
+			type: 'chat',
+			id: 'msg-oversized-segments',
+			sender: 'swift-fox-42',
+			timestamp: Date.now(),
+			segments: tooManySegments
+		};
+		const bytes = serializeChatMessage(payload);
+		const deserialized = deserializeChatMessage(bytes);
+		assert.equal(deserialized, null, 'Should reject payload with > 50 segments');
+	});
+
 	test('serializes and deserializes code messages with detected or manual language', () => {
-		const codeMessage = {
-			type: 'chat' as const,
+		const codeMessage: ChatWirePayload = {
+			type: 'chat',
 			id: 'msg-code-payload-1',
 			sender: 'swift-fox-42',
-			content: 'fn main() {\n    println!("hello");\n}',
 			timestamp: 1725555555000,
-			contentType: 'code' as const,
-			language: 'rust'
+			segments: [{
+				type: 'code',
+				code: 'fn main() {\n    println!("hello");\n}',
+				language: 'rust'
+			}]
 		};
 
 		const bytes = serializeChatMessage(codeMessage);
@@ -245,14 +269,16 @@ describe('Chat Wire Serialization and Deserialization', () => {
 	});
 
 	test('serializes and deserializes code messages with null language', () => {
-		const codeMessage = {
-			type: 'chat' as const,
+		const codeMessage: ChatWirePayload = {
+			type: 'chat',
 			id: 'msg-code-payload-2',
 			sender: 'swift-fox-42',
-			content: 'echo "plain code snippet"',
 			timestamp: 1725555555000,
-			contentType: 'code' as const,
-			language: null
+			segments: [{
+				type: 'code',
+				code: 'echo "plain code snippet"',
+				language: null
+			}]
 		};
 
 		const bytes = serializeChatMessage(codeMessage);
@@ -260,23 +286,22 @@ describe('Chat Wire Serialization and Deserialization', () => {
 		assert.deepEqual(deserialized, codeMessage);
 	});
 
-	test('deserializes legacy Phase 9 packets without contentType or language fields', () => {
-		const legacyJson = JSON.stringify({
+	test('serializes and deserializes multi-segment payload with mixed text and code', () => {
+		const multiSegmentMessage: ChatWirePayload = {
 			type: 'chat',
-			id: 'legacy-msg-100',
-			sender: 'calm-badger-19',
-			content: 'Legacy message from Phase 9 client',
-			timestamp: 1725555555000
-		});
-		const bytes = new TextEncoder().encode(legacyJson);
-		const deserialized = deserializeChatMessage(bytes);
+			id: 'msg-multi-1',
+			sender: 'swift-fox-42',
+			timestamp: 1725555555000,
+			segments: [
+				{ type: 'text', text: 'Here is the implementation:' },
+				{ type: 'code', code: 'const x = 42;', language: 'javascript' },
+				{ type: 'text', text: 'And here is what we do next.' }
+			]
+		};
 
-		assert.ok(deserialized);
-		assert.equal(deserialized.id, 'legacy-msg-100');
-		assert.equal(deserialized.sender, 'calm-badger-19');
-		assert.equal(deserialized.content, 'Legacy message from Phase 9 client');
-		assert.equal(deserialized.contentType, undefined);
-		assert.equal(deserialized.language, undefined);
+		const bytes = serializeChatMessage(multiSegmentMessage);
+		const deserialized = deserializeChatMessage(bytes);
+		assert.deepEqual(deserialized, multiSegmentMessage);
 	});
 });
 
@@ -313,18 +338,18 @@ describe('In-Memory Chat Store Lifecycle', () => {
 	});
 
 	test('addMessage appends messages and deduplicates identical IDs', () => {
-		const msg1 = {
+		const msg1: ChatMessage = {
 			id: 'msg-1',
 			sender: 'swift-fox-42',
-			content: 'First message',
+			segments: [{ type: 'text', text: 'First message' }],
 			timestamp: 1000,
 			isSelf: true
 		};
 
-		const msg2 = {
+		const msg2: ChatMessage = {
 			id: 'msg-2',
 			sender: 'brave-wolf-88',
-			content: 'Second message',
+			segments: [{ type: 'text', text: 'Second message' }],
 			timestamp: 2000,
 			isSelf: false
 		};
@@ -349,7 +374,7 @@ describe('In-Memory Chat Store Lifecycle', () => {
 		chatStore.addMessage({
 			id: 'msg-x',
 			sender: 'test-user-55',
-			content: 'Hello',
+			segments: [{ type: 'text', text: 'Hello' }],
 			timestamp: 1000,
 			isSelf: true
 		});
@@ -379,13 +404,13 @@ describe('In-Memory Chat Store Lifecycle', () => {
 
 		assert.equal(state.messages.length, 2);
 		assert.equal(state.messages[0].sender, 'System');
-		assert.equal(state.messages[0].content, 'Room created.');
+		assert.deepEqual(state.messages[0].segments, [{ type: 'text', text: 'Room created.' }]);
 		assert.equal(state.messages[0].isSystem, true);
 		assert.equal(state.messages[0].isSelf, false);
 		assert.match(state.messages[0].id, /^sys-\d+-[a-z0-9]+$/);
 
 		assert.equal(state.messages[1].sender, 'System');
-		assert.equal(state.messages[1].content, 'Peer peer-123 joined the room.');
+		assert.deepEqual(state.messages[1].segments, [{ type: 'text', text: 'Peer peer-123 joined the room.' }]);
 		assert.equal(state.messages[1].isSystem, true);
 		assert.equal(state.messages[1].isSelf, false);
 
@@ -449,11 +474,11 @@ describe('WebRTC Mesh Encrypted Chat Message Transmission', () => {
 		});
 
 		// Alice broadcasts an encrypted chat message
-		const chatWire = {
-			type: 'chat' as const,
+		const chatWire: ChatWirePayload = {
+			type: 'chat',
 			id: 'chat-uuid-001',
 			sender: 'swift-fox-42',
-			content: 'Secret peer message encrypted with AES-256-GCM',
+			segments: [{ type: 'text', text: 'Secret peer message encrypted with AES-256-GCM' }],
 			timestamp: 1725555599000
 		};
 
@@ -466,7 +491,7 @@ describe('WebRTC Mesh Encrypted Chat Message Transmission', () => {
 		assert.equal(bobReceivedMessages.length, 1);
 		assert.equal(bobReceivedMessages[0].id, 'chat-uuid-001');
 		assert.equal(bobReceivedMessages[0].sender, 'swift-fox-42');
-		assert.equal(bobReceivedMessages[0].content, 'Secret peer message encrypted with AES-256-GCM');
+		assert.deepEqual(bobReceivedMessages[0].segments, [{ type: 'text', text: 'Secret peer message encrypted with AES-256-GCM' }]);
 		assert.equal(bobReceivedMessages[0].senderPeerId, 'alice');
 
 		// Verify that the sent raw packet across the data channel was encrypted (ciphertext + tag)
@@ -498,18 +523,18 @@ describe('Client-Side Chat Log Formatting & Export', () => {
 	});
 
 	test('formats populated chat history with chronological timestamps and sender badges', () => {
-		const messages = [
+		const messages: ChatMessage[] = [
 			{
 				id: 'm1',
 				sender: 'swift-fox-42',
-				content: 'Hello everyone!',
+				segments: [{ type: 'text', text: 'Hello everyone!' }],
 				timestamp: new Date('2026-09-05T18:00:15.000Z').getTime(),
 				isSelf: true
 			},
 			{
 				id: 'm2',
 				sender: 'calm-badger-19',
-				content: 'Hey swift-fox, encrypted P2P mesh established.',
+				segments: [{ type: 'text', text: 'Hey swift-fox, encrypted P2P mesh established.' }],
 				timestamp: new Date('2026-09-05T18:01:05.000Z').getTime(),
 				isSelf: false
 			}

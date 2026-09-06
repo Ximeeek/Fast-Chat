@@ -67,7 +67,7 @@ function createChatStore() {
 					{
 						id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
 						sender: 'System',
-						content,
+						segments: [{ type: 'text', text: content }],
 						timestamp: Date.now(),
 						isSelf: false,
 						isSystem: true

@@ -1,7 +1,9 @@
 /**
- * Content type discriminator categorizing plaintext chat messages versus formatted code blocks.
+ * Discriminated union representing an ordered message segment within a chat message.
  */
-export type MessageContentType = 'text' | 'code';
+export type MessageSegment =
+	| { type: 'text'; text: string }
+	| { type: 'code'; code: string; language: string | null };
 
 /**
  * In-memory representation of a chat message within the client room session.
@@ -11,8 +13,8 @@ export interface ChatMessage {
 	id: string;
 	/** Cosmetic nickname of the sender (e.g., "swift-fox-42") */
 	sender: string;
-	/** Decrypted plaintext message body */
-	content: string;
+	/** Ordered list of text prose and code segments */
+	segments: MessageSegment[];
 	/** Unix timestamp in milliseconds when the message was dispatched */
 	timestamp: number;
 	/** True if the message originated from the local client session */
@@ -21,10 +23,6 @@ export interface ChatMessage {
 	isSystem?: boolean;
 	/** Remote WebRTC peer identifier if received from a remote participant */
 	senderPeerId?: string;
-	/** Content classification: standard conversational text or source code */
-	contentType?: MessageContentType;
-	/** Optional detected or user-specified language identifier (e.g., "javascript", "rust") */
-	language?: string | null;
 }
 
 /**
@@ -37,12 +35,8 @@ export interface ChatWirePayload {
 	id: string;
 	/** Sender cosmetic username */
 	sender: string;
-	/** Message text payload */
-	content: string;
+	/** Ordered list of text prose and code segments */
+	segments: MessageSegment[];
 	/** Dispatch timestamp */
 	timestamp: number;
-	/** Content classification: standard conversational text or source code */
-	contentType?: MessageContentType;
-	/** Optional detected or user-specified language identifier */
-	language?: string | null;
 }

@@ -1,7 +1,18 @@
-import type { ChatWirePayload } from './types.ts';
+import type { ChatWirePayload, MessageSegment } from './types.ts';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+/**
+ * Maximum permissible number of segments within a single inbound chat message frame.
+ * Prevents resource exhaustion from pathological segment proliferation.
+ */
+export const MAX_SEGMENTS_PER_MESSAGE = 50;
+
+/**
+ * Maximum permissible character length of a single segment text/code body (100KB).
+ */
+export const MAX_SEGMENT_LENGTH = 100_000;
 
 /**
  * Serializes a structured chat wire payload into raw UTF-8 binary bytes
@@ -11,23 +22,30 @@ const decoder = new TextDecoder();
  * @returns Serialized Uint8Array bytes.
  */
 export function serializeChatMessage(payload: ChatWirePayload): Uint8Array {
+	const sanitizedSegments: MessageSegment[] = payload.segments.map((seg) => {
+		if (seg.type === 'code') {
+			return {
+				type: 'code',
+				code: seg.code,
+				language:
+					typeof seg.language === 'string' && seg.language.trim().length > 0
+						? seg.language.trim().toLowerCase()
+						: null
+			};
+		}
+		return {
+			type: 'text',
+			text: seg.text
+		};
+	});
+
 	const wire: ChatWirePayload = {
 		type: 'chat',
 		id: payload.id,
 		sender: payload.sender,
-		content: payload.content,
-		timestamp: payload.timestamp
+		timestamp: payload.timestamp,
+		segments: sanitizedSegments
 	};
-
-	if (payload.contentType === 'code' || payload.contentType === 'text') {
-		wire.contentType = payload.contentType;
-	}
-	if (payload.contentType === 'code') {
-		wire.language =
-			typeof payload.language === 'string' && payload.language.trim().length > 0
-				? payload.language.trim().toLowerCase()
-				: null;
-	}
 
 	const jsonString = JSON.stringify(wire);
 	return encoder.encode(jsonString);
@@ -35,8 +53,8 @@ export function serializeChatMessage(payload: ChatWirePayload): Uint8Array {
 
 /**
  * Deserializes and validates raw decrypted binary bytes into a typed ChatWirePayload.
- * Returns null if the byte buffer is corrupted, fails JSON parsing, or does not adhere
- * to the chat wire schema.
+ * Returns null if the byte buffer is corrupted, fails JSON parsing, violates size bounds,
+ * or does not adhere to the chat wire segment schema.
  *
  * @param bytes - Decrypted plaintext Uint8Array received over RTCDataChannel.
  * @returns Validated ChatWirePayload or null.
@@ -47,38 +65,62 @@ export function deserializeChatMessage(bytes: Uint8Array): ChatWirePayload | nul
 		const data = JSON.parse(jsonString);
 
 		if (
-			typeof data === 'object' &&
-			data !== null &&
-			data.type === 'chat' &&
-			typeof data.id === 'string' &&
-			data.id.length > 0 &&
-			typeof data.sender === 'string' &&
-			typeof data.content === 'string' &&
-			typeof data.timestamp === 'number'
+			typeof data !== 'object' ||
+			data === null ||
+			data.type !== 'chat' ||
+			typeof data.id !== 'string' ||
+			data.id.length === 0 ||
+			typeof data.sender !== 'string' ||
+			typeof data.timestamp !== 'number' ||
+			!Array.isArray(data.segments) ||
+			data.segments.length === 0 ||
+			data.segments.length > MAX_SEGMENTS_PER_MESSAGE
 		) {
-			const payload: ChatWirePayload = {
-				type: 'chat',
-				id: data.id,
-				sender: data.sender,
-				content: data.content,
-				timestamp: data.timestamp
-			};
-
-			if (data.contentType === 'code' || data.contentType === 'text') {
-				payload.contentType = data.contentType;
-			}
-			if (payload.contentType === 'code') {
-				payload.language =
-					typeof data.language === 'string' &&
-					/^[a-zA-Z0-9_#+-]+$/.test(data.language.trim())
-						? data.language.trim().toLowerCase()
-						: null;
-			}
-
-			return payload;
+			return null;
 		}
 
-		return null;
+		const validatedSegments: MessageSegment[] = [];
+
+		for (const seg of data.segments) {
+			if (typeof seg !== 'object' || seg === null) {
+				return null;
+			}
+
+			if (seg.type === 'text') {
+				if (typeof seg.text !== 'string' || seg.text.length > MAX_SEGMENT_LENGTH) {
+					return null;
+				}
+				validatedSegments.push({
+					type: 'text',
+					text: seg.text
+				});
+			} else if (seg.type === 'code') {
+				if (typeof seg.code !== 'string' || seg.code.length > MAX_SEGMENT_LENGTH) {
+					return null;
+				}
+				const sanitizedLanguage =
+					typeof seg.language === 'string' &&
+					/^[a-zA-Z0-9_#+-]+$/.test(seg.language.trim())
+						? seg.language.trim().toLowerCase()
+						: null;
+
+				validatedSegments.push({
+					type: 'code',
+					code: seg.code,
+					language: sanitizedLanguage
+				});
+			} else {
+				return null;
+			}
+		}
+
+		return {
+			type: 'chat',
+			id: data.id,
+			sender: data.sender,
+			timestamp: data.timestamp,
+			segments: validatedSegments
+		};
 	} catch {
 		return null;
 	}
