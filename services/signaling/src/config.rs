@@ -49,7 +49,7 @@ pub struct Config {
     /// Maximum join attempts per minute per rate key (default: 30).
     pub rate_limit_joins_per_min: usize,
 
-    /// Maximum consecutive failed join attempts before temporary lockout (default: 5).
+    /// Maximum consecutive failed join attempts before temporary lockout (default: 4).
     pub rate_limit_failed_joins_threshold: usize,
 
     /// Time window in seconds for counting consecutive failed join attempts (default: 300s = 5m).
@@ -129,7 +129,7 @@ impl Default for Config {
             rate_limit_ws_base_backoff_secs: 2,
             rate_limit_ws_max_backoff_secs: 300,
             rate_limit_joins_per_min: 30,
-            rate_limit_failed_joins_threshold: 5,
+            rate_limit_failed_joins_threshold: 4,
             rate_limit_failed_joins_window_secs: 300,
             rate_limit_join_lockout_secs: 900,
             flood_bucket_capacity: 30,
@@ -388,6 +388,7 @@ mod tests {
         assert_eq!(config.turn_max_monthly_bytes, DEFAULT_TURN_MAX_MONTHLY_BYTES);
         assert_eq!(config.turn_credential_ttl_secs, 86400);
         assert_eq!(config.turn_api_base_url, "https://rtc.live.cloudflare.com");
+        assert_eq!(config.rate_limit_failed_joins_threshold, 4);
     }
 
     #[test]
