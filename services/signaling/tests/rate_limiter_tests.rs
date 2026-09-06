@@ -427,3 +427,100 @@ async fn test_turn_bandwidth_limiter_and_usage_reports() {
     assert_eq!(pong, ServerMessage::Pong);
 }
 
+#[tokio::test]
+async fn test_join_room_escalating_lockout_and_success_counter_reset() {
+    let config = Config::default(); // Uses default threshold = 4
+    let (addr, state) = spawn_limiter_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Create a legitimate room to join
+    let legitimate_code = state
+        .room_manager
+        .create_room(Some("owner_alice".to_string()), None, fastchat_signaling::room::PasswordStatus::none())
+        .unwrap();
+
+    let (mut ws, _) = connect_async(&ws_url).await.unwrap();
+
+    // 2. Send 2 failed join attempts (non-existent code)
+    for _ in 0..2 {
+        let bad_join = ClientMessage::JoinRoom {
+            code: "0000-0000-0000".to_string(),
+            peer_id: Some("attacker".to_string()),
+            password: None,
+        };
+        ws.send(Message::Text(serde_json::to_string(&bad_join).unwrap().into()))
+            .await
+            .unwrap();
+        let resp: ServerMessage = serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+        assert!(matches!(resp, ServerMessage::Error { ref code, .. } if code == "ROOM_NOT_FOUND"));
+    }
+
+    // 3. Perform a successful join -> resets the consecutive failure counter
+    let good_join = ClientMessage::JoinRoom {
+        code: legitimate_code.to_string(),
+        peer_id: Some("joiner_bob".to_string()),
+        password: None,
+    };
+    ws.send(Message::Text(serde_json::to_string(&good_join).unwrap().into()))
+        .await
+        .unwrap();
+    let join_ok: ServerMessage = serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    assert!(matches!(join_ok, ServerMessage::JoinOk { .. }));
+
+    // 4. Drop socket connection to disconnect peer from room
+    drop(ws);
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Connect second WebSocket from exact same IP
+    let (mut ws2, _) = connect_async(&ws_url).await.unwrap();
+
+    // 5. Send 2 more failed attempts (total 4 failed across session, but failure counter was reset)
+    for _ in 0..2 {
+        let bad_join = ClientMessage::JoinRoom {
+            code: "0000-0000-0000".to_string(),
+            peer_id: Some("attacker".to_string()),
+            password: None,
+        };
+        ws2.send(Message::Text(serde_json::to_string(&bad_join).unwrap().into()))
+            .await
+            .unwrap();
+        let resp: ServerMessage = serde_json::from_str(&ws2.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+        assert!(matches!(resp, ServerMessage::Error { ref code, .. } if code == "ROOM_NOT_FOUND"));
+    }
+
+    // Client is NOT locked out yet (current window has only 2 failures)
+    // 6. Send 2 more failures to reach threshold (4 in current window)
+    for _ in 0..2 {
+        let bad_join = ClientMessage::JoinRoom {
+            code: "0000-0000-0000".to_string(),
+            peer_id: Some("attacker".to_string()),
+            password: None,
+        };
+        ws2.send(Message::Text(serde_json::to_string(&bad_join).unwrap().into()))
+            .await
+            .unwrap();
+        let resp: ServerMessage = serde_json::from_str(&ws2.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+        assert!(matches!(resp, ServerMessage::Error { ref code, .. } if code == "ROOM_NOT_FOUND"));
+    }
+
+    // 7. 5th attempt in window must be rejected immediately with JOIN_LOCKED_OUT
+    let locked_attempt = ClientMessage::JoinRoom {
+        code: legitimate_code.to_string(),
+        peer_id: Some("attacker".to_string()),
+        password: None,
+    };
+    ws2.send(Message::Text(serde_json::to_string(&locked_attempt).unwrap().into()))
+        .await
+        .unwrap();
+
+    let locked_resp: ServerMessage = serde_json::from_str(&ws2.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+    match locked_resp {
+        ServerMessage::Error { code, message } => {
+            assert_eq!(code, "JOIN_LOCKED_OUT");
+            assert!(message.contains("Temporary lockout in effect"));
+            assert!(message.contains("300 seconds") || message.contains("299 seconds"));
+        }
+        other => panic!("Expected JOIN_LOCKED_OUT, got {other:?}"),
+    }
+}
+
