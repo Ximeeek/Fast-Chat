@@ -107,6 +107,9 @@ pub enum RoomError {
 
     #[error("Room can only be extended when in the ExtendableWindow state (remaining time <= 2m)")]
     NotInExtendableWindow,
+
+    #[error("Room is currently locked to new participants")]
+    RoomLocked,
 }
 
 /// Action resulting from evaluating the room's lifecycle against the current server time.
@@ -138,6 +141,8 @@ pub struct RoomState {
     pub owner_rate_key: Option<RateKey>,
     #[serde(skip)]
     pub kicked_rate_keys: std::collections::HashSet<RateKey>,
+    #[serde(default)]
+    pub is_locked: bool,
 }
 
 impl RoomState {
@@ -179,7 +184,13 @@ impl RoomState {
             extension_count: 0,
             owner_rate_key,
             kicked_rate_keys: std::collections::HashSet::new(),
+            is_locked: false,
         }
+    }
+
+    /// Sets room lock status. When locked, new participants cannot join.
+    pub fn set_locked(&mut self, locked: bool) {
+        self.is_locked = locked;
     }
 
     /// Returns whether the room is actively alive (not destroyed, not in closing grace period, and unexpired).
@@ -217,6 +228,10 @@ impl RoomState {
             RoomLifecycleState::Closing | RoomLifecycleState::Destroyed
         ) {
             return Err(RoomError::RoomTerminated);
+        }
+
+        if self.is_locked {
+            return Err(RoomError::RoomLocked);
         }
 
         if self.peers.len() >= config.max_participants_per_room {
@@ -861,6 +876,36 @@ mod tests {
         // 5. Manual unmute
         assert!(room.unmute_peer("bob").is_ok());
         assert!(room.get_muted_peers(2000).is_empty());
+    }
+
+    #[test]
+    fn test_room_lock_blocks_join() {
+        let config = Config::default();
+        let mut room = RoomState::new(
+            sample_code(),
+            Some("alice".to_string()),
+            None,
+            PasswordStatus::none(),
+            &config,
+            1000,
+        );
+        assert!(!room.is_locked);
+
+        // Lock room
+        room.set_locked(true);
+        assert!(room.is_locked);
+
+        // Attempt to add peer fails with RoomLocked
+        let res = room.add_peer("bob".to_string(), false, 1001, &config, None);
+        assert_eq!(res, Err(RoomError::RoomLocked));
+
+        // Unlock room
+        room.set_locked(false);
+        assert!(!room.is_locked);
+
+        // Bob can now join
+        let res_ok = room.add_peer("bob".to_string(), false, 1002, &config, None);
+        assert!(res_ok.is_ok());
     }
 }
 

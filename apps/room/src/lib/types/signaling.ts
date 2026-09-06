@@ -106,6 +106,10 @@ export type ClientSignalingMessage =
 			newOwnerPeerId?: string;
 			peer_id?: string;
 			peerId?: string;
+	  }
+	| {
+			type: 'SET_ROOM_LOCKED';
+			locked: boolean;
 	  };
 
 /**
@@ -148,6 +152,9 @@ export interface JoinOkServerMessage {
 	mutedPeers?: MutedPeerInfo[];
 	has_password?: boolean;
 	hasPassword?: boolean;
+	locked?: boolean;
+	is_locked?: boolean;
+	isLocked?: boolean;
 }
 
 export interface PeerMutedServerMessage {
@@ -257,6 +264,15 @@ export interface OwnershipTransferredServerMessage {
 	newOwnerPeerId?: string;
 }
 
+export interface RoomLockedServerMessage {
+	type: 'ROOM_LOCKED';
+	room_code?: string;
+	roomCode?: string;
+	locked: boolean;
+	is_locked?: boolean;
+	isLocked?: boolean;
+}
+
 export interface PasswordVerifiedServerMessage {
 	type: 'PASSWORD_VERIFIED';
 	valid: boolean;
@@ -269,6 +285,7 @@ export type ServerSignalingMessage =
 	| PeerLeftServerMessage
 	| RoomOwnerChangedServerMessage
 	| OwnershipTransferredServerMessage
+	| RoomLockedServerMessage
 	| SdpOfferServerMessage
 	| SdpAnswerServerMessage
 	| IceCandidatesServerMessage

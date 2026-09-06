@@ -339,6 +339,43 @@ describe('In-Memory Room Store Lifecycle', () => {
 		assert.equal(state.mutedPeers['peer-owner'], null);
 	});
 
+	test('room lock state updates isLocked in room store', () => {
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: false,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-owner'],
+			locked: true
+		});
+
+		let state!: RoomState;
+		const unsub1 = roomStore.subscribe((s) => {
+			state = s;
+		});
+		unsub1();
+		assert.equal(state.isLocked, true);
+
+		// Unlock room
+		roomStore.setLocked(false);
+		const unsub2 = roomStore.subscribe((s) => {
+			state = s;
+		});
+		unsub2();
+		assert.equal(state.isLocked, false);
+
+		// Lock room again
+		roomStore.setLocked(true);
+		const unsub3 = roomStore.subscribe((s) => {
+			state = s;
+		});
+		unsub3();
+		assert.equal(state.isLocked, true);
+	});
+
 	test('room lifecycle transitions: closing and closed', () => {
 		roomStore.setClosing(1800000010, 1800000000);
 

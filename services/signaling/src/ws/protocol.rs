@@ -137,6 +137,12 @@ pub enum ClientMessage {
         #[serde(alias = "newOwnerPeerId", alias = "peer_id", alias = "peerId")]
         new_owner_peer_id: String,
     },
+
+    /// Request by an authorized participant to lock or unlock the room.
+    #[serde(alias = "SET_ROOM_LOCKED")]
+    SetRoomLocked {
+        locked: bool,
+    },
 }
 
 /// Muted status metadata for a participant in a room session.
@@ -190,6 +196,8 @@ pub enum ServerMessage {
         muted_peers: Option<Vec<MutedPeerInfo>>,
         #[serde(default, rename = "mutedPeers", skip_serializing_if = "Option::is_none")]
         muted_peers_camel: Option<Vec<MutedPeerInfo>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        locked: Option<bool>,
     },
 
     /// Broadcast notification informing active participants that a peer was muted.
@@ -208,6 +216,16 @@ pub enum ServerMessage {
         peer_id: String,
         #[serde(rename = "peerId")]
         peer_id_camel: String,
+    },
+
+    /// Broadcast notification informing active participants that room lock status changed.
+    RoomLocked {
+        room_code: String,
+        #[serde(rename = "roomCode")]
+        room_code_camel: String,
+        locked: bool,
+        #[serde(rename = "isLocked")]
+        is_locked_camel: bool,
     },
 
     /// Broadcast notification informing active participants that room ownership transferred.
@@ -373,6 +391,30 @@ impl ServerMessage {
         peers: Vec<String>,
         muted_peers: Option<Vec<MutedPeerInfo>>,
     ) -> Self {
+        Self::join_ok_with_lock(
+            code,
+            peer_id,
+            is_owner,
+            owner_peer_id,
+            salt_hex,
+            expires_at,
+            peers,
+            muted_peers,
+            None,
+        )
+    }
+
+    pub fn join_ok_with_lock(
+        code: impl Into<String>,
+        peer_id: impl Into<String>,
+        is_owner: bool,
+        owner_peer_id: Option<String>,
+        salt_hex: impl Into<String>,
+        expires_at: i64,
+        peers: Vec<String>,
+        muted_peers: Option<Vec<MutedPeerInfo>>,
+        locked: Option<bool>,
+    ) -> Self {
         let code_str = code.into();
         let peer_str = peer_id.into();
         let owner_camel = owner_peer_id.clone();
@@ -391,6 +433,17 @@ impl ServerMessage {
             peers,
             muted_peers,
             muted_peers_camel: muted_camel,
+            locked,
+        }
+    }
+
+    pub fn room_locked(room_code: impl Into<String>, locked: bool) -> Self {
+        let code_str = room_code.into();
+        Self::RoomLocked {
+            room_code: code_str.clone(),
+            room_code_camel: code_str,
+            locked,
+            is_locked_camel: locked,
         }
     }
 
@@ -815,5 +868,27 @@ mod tests {
                 new_owner_peer_id: "bob".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_client_message_set_room_locked_deserialization() {
+        let json = r#"{"type":"SET_ROOM_LOCKED","locked":true}"#;
+        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg, ClientMessage::SetRoomLocked { locked: true });
+
+        let json_false = r#"{"type":"SET_ROOM_LOCKED","locked":false}"#;
+        let msg_false: ClientMessage = serde_json::from_str(json_false).unwrap();
+        assert_eq!(msg_false, ClientMessage::SetRoomLocked { locked: false });
+    }
+
+    #[test]
+    fn test_server_message_room_locked_serialization() {
+        let msg = ServerMessage::room_locked("1234-5678-9012", true);
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"ROOM_LOCKED""#));
+        assert!(json.contains(r#""room_code":"1234-5678-9012""#));
+        assert!(json.contains(r#""roomCode":"1234-5678-9012""#));
+        assert!(json.contains(r#""locked":true"#));
+        assert!(json.contains(r#""isLocked":true"#));
     }
 }

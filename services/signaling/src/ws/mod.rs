@@ -462,6 +462,20 @@ async fn handle_client_message(
                 return;
             }
 
+            if room_snapshot.is_locked {
+                warn!(
+                    event = "ROOM_LOCKED_REJECTED",
+                    connection_id = %connection_id,
+                    room = %code,
+                    "Join attempt rejected: room is currently locked"
+                );
+                let _ = tx.send(ServerMessage::error(
+                    "ROOM_LOCKED",
+                    "Room is locked to new participants",
+                ));
+                return;
+            }
+
             let assigned_peer_id = peer_id
                 .map(|p| p.trim().to_string())
                 .filter(|p| !p.is_empty())
@@ -499,7 +513,7 @@ async fn handle_client_message(
                     let owner_id = room_snapshot.get_owner_id();
                     let now_ts = chrono::Utc::now().timestamp();
                     let muted_peers = room_snapshot.get_muted_peers(now_ts);
-                    let _ = tx.send(ServerMessage::join_ok_full(
+                    let _ = tx.send(ServerMessage::join_ok_with_lock(
                         code.to_string(),
                         assigned_peer_id.clone(),
                         false,
@@ -508,6 +522,7 @@ async fn handle_client_message(
                         room_snapshot.expires_at,
                         existing_peers,
                         Some(muted_peers),
+                        Some(room_snapshot.is_locked),
                     ));
 
                     // Broadcast PEER_JOINED to existing peers
@@ -523,6 +538,12 @@ async fn handle_client_message(
                         ServerMessage::peer_joined(assigned_peer_id.clone()),
                         Some(&assigned_peer_id),
                     );
+                }
+                Err(RoomError::RoomLocked) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "ROOM_LOCKED",
+                        "Room is locked to new participants",
+                    ));
                 }
                 Err(RoomError::InvalidPassword) => {
                     state.limiter.join.record_failure(rate_key);
@@ -1115,6 +1136,60 @@ async fn handle_client_message(
                 }
                 Err(e) => {
                     let _ = tx.send(ServerMessage::error("TRANSFER_FAILED", e.to_string()));
+                }
+            }
+        }
+        ClientMessage::SetRoomLocked { locked } => {
+            let (code, sender_id, _) = match current_session {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before locking or unlocking it",
+                    ));
+                    return;
+                }
+            };
+
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::LockRoom)
+            {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Unauthorized to lock or unlock this room",
+                ));
+                return;
+            }
+
+            match state
+                .room_manager
+                .set_room_locked(code, sender_id, locked)
+            {
+                Ok(()) => {
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        operator = %sender_id,
+                        locked = locked,
+                        event = "SET_ROOM_LOCKED",
+                        "Room lock status updated; broadcasting ROOM_LOCKED to participants"
+                    );
+
+                    state.sessions.broadcast(
+                        code,
+                        ServerMessage::room_locked(code.to_string(), locked),
+                        None,
+                    );
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Unauthorized to lock or unlock this room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("LOCK_FAILED", e.to_string()));
                 }
             }
         }

@@ -362,6 +362,17 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Sets the room locked status to prevent or allow new participants from joining.
+	 * Can only be invoked by a participant holding LockRoom permission.
+	 */
+	public setRoomLocked(locked: boolean): void {
+		this.send({
+			type: 'SET_ROOM_LOCKED',
+			locked
+		});
+	}
+
+	/**
 	 * Verifies the room password for an active room session during rekey.
 	 */
 	public async verifyPassword(password: string): Promise<boolean> {
@@ -569,6 +580,11 @@ export class SignalingClient {
 				if (ownerId) {
 					roomStore.setOwner(ownerId);
 				}
+				break;
+			}
+			case 'ROOM_LOCKED': {
+				const locked = msg.locked ?? (msg as any).isLocked ?? (msg as any).is_locked ?? false;
+				roomStore.setLocked(locked);
 				break;
 			}
 			case 'ROOM_CLOSING': {

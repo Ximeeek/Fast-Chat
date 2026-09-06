@@ -30,6 +30,7 @@ export interface RoomState {
 	quotaExhausted: boolean;
 	hasPassword: boolean;
 	mutedPeers: Record<string, number | null>;
+	isLocked: boolean;
 }
 
 const initialRoomState: RoomState = {
@@ -48,7 +49,8 @@ const initialRoomState: RoomState = {
 	iceServers: [],
 	quotaExhausted: false,
 	hasPassword: false,
-	mutedPeers: {}
+	mutedPeers: {},
+	isLocked: false
 };
 
 function createRoomStore() {
@@ -69,6 +71,7 @@ function createRoomStore() {
 					salt: payload.salt || payload.crypto_salt || null,
 					expiresAt: payload.expires_at || payload.expiresAt || null,
 					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
+					isLocked: false,
 					lifecycle: 'joined',
 					error: null
 				};
@@ -98,10 +101,14 @@ function createRoomStore() {
 					peers: [...payload.peers],
 					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
 					mutedPeers: mutedMap,
+					isLocked: Boolean(payload.locked ?? payload.is_locked ?? payload.isLocked),
 					lifecycle: 'joined',
 					error: null
 				};
 			});
+		},
+		setLocked: (isLocked: boolean) => {
+			update((state) => ({ ...state, isLocked }));
 		},
 		setPasswordStatus: (hasPassword: boolean) => {
 			update((state) => ({ ...state, hasPassword }));

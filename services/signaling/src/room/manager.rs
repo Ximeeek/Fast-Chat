@@ -340,6 +340,37 @@ impl RoomManager {
         Ok(())
     }
 
+    /// Sets the room lock status if the operator holds `Permission::LockRoom`.
+    pub fn set_room_locked(
+        &self,
+        code: &RoomCode,
+        operator_peer_id: &str,
+        locked: bool,
+    ) -> Result<(), RoomError> {
+        let mut room = self
+            .rooms
+            .get_mut(code)
+            .ok_or_else(|| RoomError::PeerNotFound(operator_peer_id.to_string()))?;
+
+        if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::LockRoom) {
+            return Err(RoomError::Unauthorized);
+        }
+
+        room.set_locked(locked);
+        info!(
+            room = %code,
+            operator = %operator_peer_id,
+            locked = locked,
+            "Room lock status updated"
+        );
+        Ok(())
+    }
+
+    /// Checks whether a room is currently locked to new participants.
+    pub fn is_room_locked(&self, code: &RoomCode) -> bool {
+        self.rooms.get(code).map(|r| r.is_locked).unwrap_or(false)
+    }
+
     /// Handles peer departure from a room.
     ///
     /// - If the departing peer was the owner and other peers remain, ownership is

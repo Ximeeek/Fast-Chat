@@ -1778,5 +1778,157 @@ async fn test_ws_transfer_ownership_flow() {
     }
 }
 
+#[tokio::test]
+async fn test_ws_room_lock_flow() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let room_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // 2. Bob joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    match resp_b {
+        ServerMessage::JoinOk { locked, .. } => {
+            assert_eq!(locked, Some(false));
+        }
+        _ => panic!("Expected JoinOk"),
+    }
+
+    // Alice consumes PeerJoined(bob)
+    let _ = ws_a.next().await.unwrap().unwrap();
+
+    // 3. Bob attempts to lock the room -> rejected with UNAUTHORIZED
+    let lock_by_bob = ClientMessage::SetRoomLocked { locked: true };
+    ws_b.send(Message::Text(serde_json::to_string(&lock_by_bob).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err: ServerMessage = serde_json::from_str(&b_err_raw).unwrap();
+    match b_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected UNAUTHORIZED for Bob, got {b_err:?}"),
+    }
+
+    // 4. Alice locks the room -> both Alice and Bob receive ROOM_LOCKED { locked: true }
+    let lock_by_alice = ClientMessage::SetRoomLocked { locked: true };
+    ws_a.send(Message::Text(serde_json::to_string(&lock_by_alice).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_locked_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_locked: ServerMessage = serde_json::from_str(&a_locked_raw).unwrap();
+    match a_locked {
+        ServerMessage::RoomLocked { locked, .. } => assert!(locked),
+        _ => panic!("Expected RoomLocked on Alice, got {a_locked:?}"),
+    }
+
+    let b_locked_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_locked: ServerMessage = serde_json::from_str(&b_locked_raw).unwrap();
+    match b_locked {
+        ServerMessage::RoomLocked { locked, .. } => assert!(locked),
+        _ => panic!("Expected RoomLocked on Bob, got {b_locked:?}"),
+    }
+
+    // 5. Charlie attempts to join locked room -> rejected with ROOM_LOCKED error
+    let (mut ws_c, _) = connect_async(&ws_url).await.unwrap();
+    let join_c = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c_err_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_err: ServerMessage = serde_json::from_str(&c_err_raw).unwrap();
+    match c_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "ROOM_LOCKED"),
+        _ => panic!("Expected ROOM_LOCKED error for Charlie, got {c_err:?}"),
+    }
+
+    // 6. Alice and Bob remain connected and can exchange SDP
+    let sdp_msg = ClientMessage::SdpOffer {
+        target_peer_id: "bob".to_string(),
+        sdp: serde_json::json!({ "type": "offer", "sdp": "v=0..." }),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&sdp_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_sdp_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_sdp: ServerMessage = serde_json::from_str(&b_sdp_raw).unwrap();
+    assert!(matches!(b_sdp, ServerMessage::SdpOffer { .. }));
+
+    // 7. Alice unlocks the room -> both Alice and Bob receive ROOM_LOCKED { locked: false }
+    let unlock_by_alice = ClientMessage::SetRoomLocked { locked: false };
+    ws_a.send(Message::Text(serde_json::to_string(&unlock_by_alice).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_unlocked_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_unlocked: ServerMessage = serde_json::from_str(&a_unlocked_raw).unwrap();
+    match a_unlocked {
+        ServerMessage::RoomLocked { locked, .. } => assert!(!locked),
+        _ => panic!("Expected RoomLocked false on Alice, got {a_unlocked:?}"),
+    }
+
+    let b_unlocked_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_unlocked: ServerMessage = serde_json::from_str(&b_unlocked_raw).unwrap();
+    match b_unlocked {
+        ServerMessage::RoomLocked { locked, .. } => assert!(!locked),
+        _ => panic!("Expected RoomLocked false on Bob, got {b_unlocked:?}"),
+    }
+
+    // 8. Charlie can now join successfully
+    let (mut ws_c2, _) = connect_async(&ws_url).await.unwrap();
+    let join_c2 = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c2.send(Message::Text(serde_json::to_string(&join_c2).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c2_resp_raw = ws_c2.next().await.unwrap().unwrap().into_text().unwrap();
+    let c2_resp: ServerMessage = serde_json::from_str(&c2_resp_raw).unwrap();
+    match c2_resp {
+        ServerMessage::JoinOk { locked, .. } => {
+            assert_eq!(locked, Some(false));
+        }
+        _ => panic!("Expected JoinOk for Charlie after unlock, got {c2_resp:?}"),
+    }
+}
+
 
 
