@@ -11,7 +11,25 @@ const decoder = new TextDecoder();
  * @returns Serialized Uint8Array bytes.
  */
 export function serializeChatMessage(payload: ChatWirePayload): Uint8Array {
-	const jsonString = JSON.stringify(payload);
+	const wire: ChatWirePayload = {
+		type: 'chat',
+		id: payload.id,
+		sender: payload.sender,
+		content: payload.content,
+		timestamp: payload.timestamp
+	};
+
+	if (payload.contentType === 'code' || payload.contentType === 'text') {
+		wire.contentType = payload.contentType;
+	}
+	if (payload.contentType === 'code') {
+		wire.language =
+			typeof payload.language === 'string' && payload.language.trim().length > 0
+				? payload.language.trim().toLowerCase()
+				: null;
+	}
+
+	const jsonString = JSON.stringify(wire);
 	return encoder.encode(jsonString);
 }
 
@@ -38,13 +56,26 @@ export function deserializeChatMessage(bytes: Uint8Array): ChatWirePayload | nul
 			typeof data.content === 'string' &&
 			typeof data.timestamp === 'number'
 		) {
-			return {
+			const payload: ChatWirePayload = {
 				type: 'chat',
 				id: data.id,
 				sender: data.sender,
 				content: data.content,
 				timestamp: data.timestamp
 			};
+
+			if (data.contentType === 'code' || data.contentType === 'text') {
+				payload.contentType = data.contentType;
+			}
+			if (payload.contentType === 'code') {
+				payload.language =
+					typeof data.language === 'string' &&
+					/^[a-zA-Z0-9_#+-]+$/.test(data.language.trim())
+						? data.language.trim().toLowerCase()
+						: null;
+			}
+
+			return payload;
 		}
 
 		return null;

@@ -1,4 +1,9 @@
 /**
+ * Content type discriminator categorizing plaintext chat messages versus formatted code blocks.
+ */
+export type MessageContentType = 'text' | 'code';
+
+/**
  * In-memory representation of a chat message within the client room session.
  */
 export interface ChatMessage {
@@ -16,6 +21,10 @@ export interface ChatMessage {
 	isSystem?: boolean;
 	/** Remote WebRTC peer identifier if received from a remote participant */
 	senderPeerId?: string;
+	/** Content classification: standard conversational text or source code */
+	contentType?: MessageContentType;
+	/** Optional detected or user-specified language identifier (e.g., "javascript", "rust") */
+	language?: string | null;
 }
 
 /**
@@ -32,4 +41,8 @@ export interface ChatWirePayload {
 	content: string;
 	/** Dispatch timestamp */
 	timestamp: number;
+	/** Content classification: standard conversational text or source code */
+	contentType?: MessageContentType;
+	/** Optional detected or user-specified language identifier */
+	language?: string | null;
 }

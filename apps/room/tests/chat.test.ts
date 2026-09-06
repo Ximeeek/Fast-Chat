@@ -222,6 +222,57 @@ describe('Chat Wire Serialization and Deserialization', () => {
 			assert.equal(result, null, 'Should return null for invalid payload');
 		}
 	});
+
+	test('serializes and deserializes code messages with detected or manual language', () => {
+		const codeMessage = {
+			type: 'chat' as const,
+			id: 'msg-code-payload-1',
+			sender: 'swift-fox-42',
+			content: 'fn main() {\n    println!("hello");\n}',
+			timestamp: 1725555555000,
+			contentType: 'code' as const,
+			language: 'rust'
+		};
+
+		const bytes = serializeChatMessage(codeMessage);
+		const deserialized = deserializeChatMessage(bytes);
+		assert.deepEqual(deserialized, codeMessage);
+	});
+
+	test('serializes and deserializes code messages with null language', () => {
+		const codeMessage = {
+			type: 'chat' as const,
+			id: 'msg-code-payload-2',
+			sender: 'swift-fox-42',
+			content: 'echo "plain code snippet"',
+			timestamp: 1725555555000,
+			contentType: 'code' as const,
+			language: null
+		};
+
+		const bytes = serializeChatMessage(codeMessage);
+		const deserialized = deserializeChatMessage(bytes);
+		assert.deepEqual(deserialized, codeMessage);
+	});
+
+	test('deserializes legacy Phase 9 packets without contentType or language fields', () => {
+		const legacyJson = JSON.stringify({
+			type: 'chat',
+			id: 'legacy-msg-100',
+			sender: 'calm-badger-19',
+			content: 'Legacy message from Phase 9 client',
+			timestamp: 1725555555000
+		});
+		const bytes = new TextEncoder().encode(legacyJson);
+		const deserialized = deserializeChatMessage(bytes);
+
+		assert.ok(deserialized);
+		assert.equal(deserialized.id, 'legacy-msg-100');
+		assert.equal(deserialized.sender, 'calm-badger-19');
+		assert.equal(deserialized.content, 'Legacy message from Phase 9 client');
+		assert.equal(deserialized.contentType, undefined);
+		assert.equal(deserialized.language, undefined);
+	});
 });
 
 describe('In-Memory Chat Store Lifecycle', () => {
