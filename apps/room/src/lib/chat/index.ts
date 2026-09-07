@@ -7,5 +7,6 @@ export * from './codeDetection.ts';
 export * from './languageDetection.ts';
 export * from './highlighter.ts';
 export * from './historySync.ts';
+export * from './systemEvents.ts';
 export { default as CodeMessageBlock } from './CodeMessageBlock.svelte';
-
+export { default as SystemMessageBadge } from './SystemMessageBadge.svelte';

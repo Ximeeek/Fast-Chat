@@ -6,6 +6,21 @@ export type MessageSegment =
 	| { type: 'code'; code: string; language: string | null };
 
 /**
+ * Categories of ephemeral room system notifications and events.
+ */
+export type SystemEventType =
+	| 'join'
+	| 'leave'
+	| 'mute'
+	| 'unmute'
+	| 'lock'
+	| 'unlock'
+	| 'owner'
+	| 'security'
+	| 'closing'
+	| 'info';
+
+/**
  * In-memory representation of a chat message within the client room session.
  */
 export interface ChatMessage {
@@ -21,6 +36,8 @@ export interface ChatMessage {
 	isSelf: boolean;
 	/** True if the message is a system notification/announcement */
 	isSystem?: boolean;
+	/** Category of system event if message is a system announcement */
+	systemType?: SystemEventType;
 	/** Remote WebRTC peer identifier if received from a remote participant */
 	senderPeerId?: string;
 	/** True if the message was received via historical peer synchronization */

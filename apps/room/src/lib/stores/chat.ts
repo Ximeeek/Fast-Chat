@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { ChatMessage } from '../chat/types.ts';
+import type { ChatMessage, SystemEventType } from '../chat/types.ts';
 import { generateUsername } from '../chat/username.ts';
 
 export interface ChatState {
@@ -107,7 +107,7 @@ export function createChatStore() {
 		/**
 		 * Appends an ephemeral system announcement/log to the in-memory chat history.
 		 */
-		addSystemMessage: (content: string): void => {
+		addSystemMessage: (content: string, systemType?: SystemEventType): void => {
 			update((state) => ({
 				...state,
 				messages: [
@@ -118,7 +118,8 @@ export function createChatStore() {
 						segments: [{ type: 'text', text: content }],
 						timestamp: Date.now(),
 						isSelf: false,
-						isSystem: true
+						isSystem: true,
+						...(systemType ? { systemType } : {})
 					}
 				]
 			}));

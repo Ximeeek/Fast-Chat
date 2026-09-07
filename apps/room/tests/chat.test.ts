@@ -21,6 +21,7 @@ import {
 } from '../src/lib/chat/transport.ts';
 import { ChatHistorySyncManager } from '../src/lib/chat/historySync.ts';
 import { formatChatLog, downloadChatLog } from '../src/lib/chat/export.ts';
+import { getSystemEventType, getSystemEventStyle } from '../src/lib/chat/systemEvents.ts';
 
 import {
 	countLines,
@@ -439,6 +440,56 @@ describe('In-Memory Chat Store Lifecycle', () => {
 		const log = formatChatLog('1234-5678-9012', state.messages);
 		assert.match(log, /\[SYSTEM\]: Room created\./);
 		assert.match(log, /\[SYSTEM\]: Peer peer-123 joined the room\./);
+	});
+
+	test('addSystemMessage supports explicit systemType and records on message object', () => {
+		chatStore.reset();
+		chatStore.addSystemMessage('Peer peer-abc joined the room.', 'join');
+		chatStore.addSystemMessage('Peer peer-xyz left the room.', 'leave');
+
+		let state!: ChatState;
+		const unsub = chatStore.subscribe((s) => {
+			state = s;
+		});
+		unsub();
+
+		assert.equal(state.messages[0].systemType, 'join');
+		assert.equal(state.messages[1].systemType, 'leave');
+	});
+
+	test('getSystemEventType accurately resolves event categories from prose text or explicit type', () => {
+		// Explicit types bypass heuristic text checks
+		assert.equal(getSystemEventType('custom message', 'join'), 'join');
+		assert.equal(getSystemEventType('custom message', 'leave'), 'leave');
+
+		// Inferred types from event phrasing
+		assert.equal(getSystemEventType('Room created.'), 'join');
+		assert.equal(getSystemEventType('Joined the room.'), 'join');
+		assert.equal(getSystemEventType('Peer swift-fox-42 joined the room.'), 'join');
+		assert.equal(getSystemEventType('Peer swift-fox-42 left the room.'), 'leave');
+		assert.equal(getSystemEventType('You were kicked from the room by the room owner.'), 'leave');
+		assert.equal(getSystemEventType('Rekey grace period expired without valid password. Peer connections closed.'), 'leave');
+		assert.equal(getSystemEventType('You have been muted by the moderator.'), 'mute');
+		assert.equal(getSystemEventType('Your mute has been lifted.'), 'unmute');
+		assert.equal(getSystemEventType('The room owner locked the room to new participants.'), 'lock');
+		assert.equal(getSystemEventType('The room owner unlocked room entry.'), 'unlock');
+		assert.equal(getSystemEventType('Room owner disconnected. You are now the room owner.'), 'owner');
+		assert.equal(getSystemEventType('Room password configured. Rotated active encryption key to K1.'), 'security');
+		assert.equal(getSystemEventType('Room closing countdown started.'), 'closing');
+		assert.equal(getSystemEventType('Arbitrary announcement'), 'info');
+	});
+
+	test('getSystemEventStyle uses non-aggressive soft palettes for leave and join events', () => {
+		const leaveStyle = getSystemEventStyle('leave');
+		// Non-aggressive styling: uses soft rose instead of harsh/aggressive red
+		assert.ok(leaveStyle.containerClass.includes('rose'));
+		assert.ok(!leaveStyle.containerClass.includes('red-600'));
+		assert.ok(leaveStyle.iconClass.includes('rose'));
+
+		const joinStyle = getSystemEventStyle('join');
+		// Subtle emerald styling for joins
+		assert.ok(joinStyle.containerClass.includes('emerald'));
+		assert.ok(joinStyle.iconClass.includes('emerald'));
 	});
 });
 

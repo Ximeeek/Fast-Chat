@@ -22,6 +22,7 @@
 		getLanguageDisplayName,
 		SUPPORTED_LANGUAGES,
 		CodeMessageBlock,
+		SystemMessageBadge,
 		createPastedBlock,
 		updatePastedBlockContent,
 		setPastedBlockLanguageMode,
@@ -493,7 +494,7 @@
 				}
 				webRtcManager.disconnectAll();
 				rekeyManager.cancel();
-				chatStore.addSystemMessage('Rekey verification failed: incorrect password. Peer connections closed.');
+				chatStore.addSystemMessage('Rekey verification failed: incorrect password. Peer connections closed.', 'leave');
 				setTimeout(() => {
 					isRekeyPromptOpen = false;
 				}, 1500);
@@ -506,7 +507,7 @@
 				clearInterval(rekeyCountdownInterval);
 				rekeyCountdownInterval = null;
 			}
-			chatStore.addSystemMessage('Room password verified. Encryption key updated to K1.');
+			chatStore.addSystemMessage('Room password verified. Encryption key updated to K1.', 'security');
 		} catch (err) {
 			rekeyError = err instanceof Error ? err.message : 'Password verification failed';
 		} finally {
@@ -560,7 +561,7 @@
 		}
 		chatStore.initUsername();
 		if ($roomStore.isOwner && $roomStore.lifecycle === 'joined') {
-			chatStore.addSystemMessage('Room created.');
+			chatStore.addSystemMessage('Room created.', 'join');
 		}
 		webRtcManager.init();
 		rekeyManager = new RekeyManager({ timeoutMs: 15000 });
@@ -572,7 +573,7 @@
 				clearInterval(rekeyCountdownInterval);
 				rekeyCountdownInterval = null;
 			}
-			chatStore.addSystemMessage('Rekey grace period expired without valid password. Peer connections closed.');
+			chatStore.addSystemMessage('Rekey grace period expired without valid password. Peer connections closed.', 'leave');
 		});
 
 		chatHistorySync = new ChatHistorySyncManager(webRtcManager);
@@ -737,22 +738,22 @@
 			switch (msg.type) {
 				case 'ROOM_CREATED':
 					details = `Room created: ${msg.code}`;
-					chatStore.addSystemMessage('Room created.');
+					chatStore.addSystemMessage('Room created.', 'join');
 					break;
 				case 'JOIN_OK':
 					details = `Joined room: ${msg.code}`;
-					chatStore.addSystemMessage('Joined the room.');
+					chatStore.addSystemMessage('Joined the room.', 'join');
 					break;
 				case 'PEER_JOINED': {
 					const peer = msg.peer_id || msg.peerId || 'Unknown peer';
 					details = `Peer connected: ${peer}`;
-					chatStore.addSystemMessage(`Peer ${peer} joined the room.`);
+					chatStore.addSystemMessage(`Peer ${peer} joined the room.`, 'join');
 					break;
 				}
 				case 'PEER_LEFT': {
 					const peer = msg.peer_id || msg.peerId || 'Unknown peer';
 					details = `Peer disconnected: ${peer}`;
-					chatStore.addSystemMessage(`Peer ${peer} left the room.`);
+					chatStore.addSystemMessage(`Peer ${peer} left the room.`, 'leave');
 					chatHistorySync?.removePeer(peer);
 					fileTransferSync?.handlePeerLeft(peer);
 					break;
@@ -764,7 +765,8 @@
 					chatStore.addSystemMessage(
 						isLocal
 							? 'Room owner disconnected. You are now the room owner.'
-							: `Room owner disconnected. Ownership transferred to ${newOwner}.`
+							: `Room owner disconnected. Ownership transferred to ${newOwner}.`,
+						'owner'
 					);
 					if (isLocal) {
 						ownerPromotionBanner = true;
@@ -788,7 +790,7 @@
 						stagedOwnerPassword = null;
 						try {
 							await rekeyManager.submitPassword(ownerPassword);
-							chatStore.addSystemMessage('Room password configured. Rotated active encryption key to K1.');
+							chatStore.addSystemMessage('Room password configured. Rotated active encryption key to K1.', 'security');
 						} catch (err) {
 							console.error('Failed to auto-derive rekey key for owner:', err);
 						}
@@ -817,7 +819,8 @@
 					chatStore.addSystemMessage(
 						isLocal
 							? 'You have been muted by the moderator.'
-							: `Participant ${peer} has been muted.`
+							: `Participant ${peer} has been muted.`,
+						'mute'
 					);
 					break;
 				}
@@ -828,7 +831,8 @@
 					chatStore.addSystemMessage(
 						isLocal
 							? 'Your mute has been lifted.'
-							: `Mute for participant ${peer} has been lifted.`
+							: `Mute for participant ${peer} has been lifted.`,
+						'unmute'
 					);
 					break;
 				}
@@ -838,13 +842,14 @@
 					chatStore.addSystemMessage(
 						locked
 							? 'The room owner locked the room to new participants.'
-							: 'The room owner unlocked room entry.'
+							: 'The room owner unlocked room entry.',
+						locked ? 'lock' : 'unlock'
 					);
 					break;
 				}
 				case 'ROOM_CLOSING':
 					details = `Room closing grace period started`;
-					chatStore.addSystemMessage('Room closing countdown started.');
+					chatStore.addSystemMessage('Room closing countdown started.', 'closing');
 					break;
 				case 'ROOM_CLOSED':
 					details = `Room closed: ${msg.reason}`;
@@ -1657,15 +1662,7 @@
 									</div>
 								{/if}
 								{#if msg.isSystem}
-
-									<div class="flex items-center justify-center my-2">
-										<div class="px-3.5 py-1.5 rounded-full bg-cyan-950/40 border border-cyan-500/30 text-cyan-300 text-[11px] font-mono flex items-center gap-2 shadow-[0_0_15px_rgba(0,229,255,0.1)] max-w-[90%] text-center">
-											<svg class="w-3.5 h-3.5 text-cyan-400 shrink-0 fill-current" viewBox="0 0 24 24">
-												<path d="M12 2l3 7h7l-5.5 4.5 2 7.5L12 17l-6.5 4 2-7.5L2 9h7z"/>
-											</svg>
-											<span>{msg.segments?.[0]?.type === 'text' ? msg.segments[0].text : ''}</span>
-										</div>
-									</div>
+									<SystemMessageBadge message={msg} />
 								{:else}
 									<div class="flex flex-col {msg.isSelf ? 'items-end' : 'items-start'}">
 										<div class="flex items-center space-x-1.5 mb-1.5 text-[10px] text-zinc-500 font-mono">
