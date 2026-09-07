@@ -356,9 +356,8 @@ export class SignalingClient {
 	public transferOwnership(newOwnerPeerId: string): void {
 		this.send({
 			type: 'TRANSFER_OWNERSHIP',
-			new_owner_peer_id: newOwnerPeerId,
-			newOwnerPeerId: newOwnerPeerId
-		} as any);
+			new_owner_peer_id: newOwnerPeerId
+		});
 	}
 
 	/**
@@ -380,9 +379,8 @@ export class SignalingClient {
 		this.send({
 			type: 'SET_CHAT_VISIBILITY_BLOCKED',
 			peer_id: peerId,
-			peerId,
 			blocked
-		} as any);
+		});
 	}
 
 	/**
@@ -393,9 +391,8 @@ export class SignalingClient {
 		this.send({
 			type: 'SET_FILE_VISIBILITY_BLOCKED',
 			peer_id: peerId,
-			peerId,
 			blocked
-		} as any);
+		});
 	}
 
 	/**
