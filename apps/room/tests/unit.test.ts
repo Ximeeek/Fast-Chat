@@ -675,6 +675,28 @@ describe('Room View Error Fallbacks & Watchdog Template Integrity', () => {
 			'Expected handleDismissActionError click handler'
 		);
 	});
+
+	test('room page mounts BrowserTransferNotice to inform users of 1 GB cap when direct streaming is unsupported', () => {
+		const roomPage = readFileSync(join(process.cwd(), 'src/routes/room/[code]/+page.svelte'), 'utf8');
+		const noticeComponent = readFileSync(join(process.cwd(), 'src/lib/transfer/BrowserTransferNotice.svelte'), 'utf8');
+
+		assert.ok(
+			roomPage.includes("import BrowserTransferNotice from '$lib/transfer/BrowserTransferNotice.svelte'"),
+			'Expected BrowserTransferNotice import in room page'
+		);
+		assert.ok(
+			roomPage.includes('<BrowserTransferNotice />'),
+			'Expected <BrowserTransferNotice /> rendered in room page template'
+		);
+		assert.ok(
+			noticeComponent.includes('isFileSystemAccessSupported'),
+			'Expected notice to evaluate isFileSystemAccessSupported'
+		);
+		assert.ok(
+			noticeComponent.includes('1 GB'),
+			'Expected notice to communicate 1 GB cap'
+		);
+	});
 });
 
 describe('Search Engine Privacy & Zero Storage Policy Audit', () => {

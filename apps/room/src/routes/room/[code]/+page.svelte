@@ -36,6 +36,7 @@
 
 	import { FileSender, FileReceiver, FileTransferSyncManager, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
+	import BrowserTransferNotice from '$lib/transfer/BrowserTransferNotice.svelte';
 	import { validateRoomCode, resolveRoomIdentifier } from '$lib/utils/roomCode';
 	import RoomCodeHero from '$lib/room/RoomCodeHero.svelte';
 	import RoomTimer from '$lib/room/RoomTimer.svelte';
@@ -1920,5 +1921,8 @@
 			onSubmit={handleParticipantRekeySubmit}
 			onLeave={handleParticipantRekeyLeave}
 		/>
+
+		<!-- Browser Storage Limitation Notice (When File System Access API is Unsupported) -->
+		<BrowserTransferNotice />
 	{/if}
 </main>
