@@ -72,6 +72,35 @@
 	let retryingPeers = $state<Record<string, boolean>>({});
 	let ownerPromotionBanner = $state(false);
 
+	let actionErrorTimeout: ReturnType<typeof setTimeout> | null = null;
+	let unsubActionError: (() => void) | null = null;
+	let connectionTimeoutReached = $state(false);
+	let connectionTimer: ReturnType<typeof setTimeout> | null = null;
+	let unsubWatchdog: (() => void) | null = null;
+
+	function startConnectionWatchdog() {
+		stopConnectionWatchdog();
+		connectionTimeoutReached = false;
+		connectionTimer = setTimeout(() => {
+			connectionTimeoutReached = true;
+		}, 15000);
+	}
+
+	function stopConnectionWatchdog() {
+		if (connectionTimer) {
+			clearTimeout(connectionTimer);
+			connectionTimer = null;
+		}
+	}
+
+	function handleDismissActionError() {
+		if (actionErrorTimeout) {
+			clearTimeout(actionErrorTimeout);
+			actionErrorTimeout = null;
+		}
+		roomStore.clearActionError();
+	}
+
 	let rekeyManager = $state<RekeyManager | null>(null);
 	let stagedOwnerPassword = $state<string | null>(null);
 	let isRekeyPromptOpen = $state(false);
@@ -185,7 +214,7 @@
 	);
 	const chatPlaceholder = $derived(
 		isLocalMuted
-			? (localMutedUntil ? `Jesteś wyciszony (pozostało: ${formatSeconds(muteCountdownSec ?? 0)})` : 'Jesteś wyciszony na tym kanale')
+			? (localMutedUntil ? `You are muted (remaining: ${formatSeconds(muteCountdownSec ?? 0)})` : 'You are muted in this room')
 			: isChatDisabled
 				? 'Type an encrypted message (No open WebRTC peer connections)...'
 				: composerBlocks.length > 0
@@ -220,12 +249,15 @@
 		if (!isValidCode) return;
 		isJoining = true;
 		joinError = null;
+		roomStore.clearError();
+		startConnectionWatchdog();
 
 		try {
 			await signalingClient.joinRoom(roomCode, {
 				password: roomPassword ? roomPassword.trim() : undefined
 			});
 		} catch (err) {
+			stopConnectionWatchdog();
 			joinError = err instanceof Error ? err.message : 'Failed to join room';
 		} finally {
 			isJoining = false;
@@ -783,8 +815,8 @@
 					details = `Peer muted: ${peer}`;
 					chatStore.addSystemMessage(
 						isLocal
-							? 'Zostałeś wyciszony przez moderatora.'
-							: `Uczestnik ${peer} został wyciszony.`
+							? 'You have been muted by the moderator.'
+							: `Participant ${peer} has been muted.`
 					);
 					break;
 				}
@@ -794,8 +826,8 @@
 					details = `Peer unmuted: ${peer}`;
 					chatStore.addSystemMessage(
 						isLocal
-							? 'Twoje wyciszenie zostało wyłączone.'
-							: `Wyciszenie uczestnika ${peer} zostało wyłączone.`
+							? 'Your mute has been lifted.'
+							: `Mute for participant ${peer} has been lifted.`
 					);
 					break;
 				}
@@ -804,8 +836,8 @@
 					details = `Room lock status: ${locked ? 'LOCKED' : 'UNLOCKED'}`;
 					chatStore.addSystemMessage(
 						locked
-							? 'Właściciel zablokował pokój przed nowymi uczestnikami.'
-							: 'Właściciel odblokował dołączanie do pokoju.'
+							? 'The room owner locked the room to new participants.'
+							: 'The room owner unlocked room entry.'
 					);
 					break;
 				}
@@ -834,13 +866,48 @@
 			];
 		});
 
+		unsubActionError = roomStore.subscribe((state) => {
+			if (state.actionError) {
+				if (actionErrorTimeout) clearTimeout(actionErrorTimeout);
+				actionErrorTimeout = setTimeout(() => {
+					roomStore.clearActionError();
+					actionErrorTimeout = null;
+				}, 5000);
+			}
+		});
+
+		unsubWatchdog = roomStore.subscribe((state) => {
+			if (
+				state.lifecycle === 'joined' ||
+				state.lifecycle === 'closing' ||
+				state.lifecycle === 'closed' ||
+				state.error
+			) {
+				stopConnectionWatchdog();
+				connectionTimeoutReached = false;
+			}
+		});
+
 		// Auto-join if not already connected to this room
 		if ($roomStore.code !== roomCode || $roomStore.lifecycle === 'idle') {
 			performJoin();
+		} else if (!$isRoomActive) {
+			startConnectionWatchdog();
 		}
 	});
 
 	onDestroy(() => {
+		if (actionErrorTimeout) {
+			clearTimeout(actionErrorTimeout);
+			actionErrorTimeout = null;
+		}
+		if (unsubActionError) {
+			unsubActionError();
+		}
+		stopConnectionWatchdog();
+		if (unsubWatchdog) {
+			unsubWatchdog();
+		}
 		if (chatHistorySync) {
 			chatHistorySync.destroy();
 			chatHistorySync = null;
@@ -982,14 +1049,14 @@
 						<line x1="9" y1="9" x2="15" y2="15"/>
 					</svg>
 				</div>
-				<h2 class="text-lg font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Zostałeś wyrzucony z pokoju</h2>
-				<p class="text-xs text-red-300 mb-6">Zostałeś usunięty z tego pokoju przez moderatora. Ponowne dołączenie jest zablokowane.</p>
+				<h2 class="text-lg font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Removed From Room</h2>
+				<p class="text-xs text-red-300 mb-6">You were removed from this room by the moderator. Rejoining is blocked.</p>
 				<div class="flex items-center justify-center gap-2.5">
 					<a
 						href="/create"
 						class="min-h-[40px] py-2 px-6 rounded-full bg-white hover:bg-zinc-200 text-black text-xs font-bold uppercase transition-all shadow-sm flex items-center"
 					>
-						Wróć do strony głównej
+						Return Home
 					</a>
 				</div>
 			{:else if joinError && joinError.includes('ROOM_LOCKED')}
@@ -999,20 +1066,20 @@
 						<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
 					</svg>
 				</div>
-				<h2 class="text-lg font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Pokój jest zablokowany</h2>
-				<p class="text-xs text-amber-300 mb-6">Właściciel zablokował dołączanie nowych uczestników do tego pokoju.</p>
+				<h2 class="text-lg font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Room Is Locked</h2>
+				<p class="text-xs text-amber-300 mb-6">The room owner has locked entry to new participants.</p>
 				<div class="flex items-center justify-center gap-2.5">
 					<button
 						onclick={() => performJoin(password)}
 						class="min-h-[40px] py-2 px-5 rounded-full bg-white hover:bg-zinc-200 text-black text-xs font-bold uppercase transition-all shadow-sm cursor-pointer"
 					>
-						Spróbuj ponownie
+						Try Again
 					</button>
 					<a
 						href="/create"
 						class="min-h-[40px] py-2 px-5 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs uppercase flex items-center transition-all"
 					>
-						Wróć do strony głównej
+						Return Home
 					</a>
 				</div>
 			{:else if joinError}
@@ -1039,10 +1106,56 @@
 						Return Home
 					</a>
 				</div>
+			{:else if $roomStore.error}
+				<div class="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mx-auto mb-4">
+					<svg class="w-6 h-6 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="12" cy="12" r="10"/>
+						<line x1="15" y1="9" x2="9" y2="15"/>
+						<line x1="9" y1="9" x2="15" y2="15"/>
+					</svg>
+				</div>
+				<h2 class="text-lg font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Session Error</h2>
+				<p class="text-xs text-red-300 mb-6 font-mono">{$roomStore.error.message || $roomStore.error.code}</p>
+				<div class="flex items-center justify-center gap-2.5">
+					<button
+						onclick={() => performJoin(password)}
+						class="min-h-[40px] py-2 px-5 rounded-full bg-white hover:bg-zinc-200 text-black text-xs font-bold uppercase transition-all shadow-sm cursor-pointer"
+					>
+						Retry Connection
+					</button>
+					<a
+						href="/create"
+						class="min-h-[40px] py-2 px-5 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs uppercase flex items-center transition-all"
+					>
+						Return Home
+					</a>
+				</div>
 			{:else}
 				<div class="inline-block w-9 h-9 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin mb-4 shadow-[0_0_15px_rgba(0,229,255,0.3)]"></div>
 				<h2 class="text-lg font-bold uppercase tracking-tight text-white font-['Orbitron',sans-serif]">Connecting to Mesh...</h2>
 				<p class="text-xs text-zinc-500 font-mono mt-1.5">{roomToken || roomCode}</p>
+
+				{#if connectionTimeoutReached}
+					<div class="mt-6 pt-6 border-t border-white/10 space-y-3">
+						<p class="text-xs text-amber-300/90 leading-relaxed">
+							Connection is taking longer than expected. You can retry the connection or return to the main page.
+						</p>
+						<div class="flex items-center justify-center gap-2.5">
+							<button
+								onclick={() => performJoin(password)}
+								class="min-h-[38px] py-2 px-5 rounded-full bg-white hover:bg-zinc-200 text-black text-xs font-bold uppercase transition-all shadow-sm cursor-pointer"
+							>
+								Retry Connection
+							</button>
+							<a
+								href="/create"
+								class="min-h-[38px] py-2 px-5 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs uppercase flex items-center transition-all"
+							>
+								Return Home
+							</a>
+						</div>
+					</div>
+				{/if}
 			{/if}
 		</div>
 	{:else}
@@ -1061,7 +1174,7 @@
 								<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
 								<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
 							</svg>
-							<span>Zablokowany</span>
+							<span>Locked</span>
 						</div>
 					{/if}
 
@@ -1165,6 +1278,28 @@
 				</div>
 			{/if}
 
+			<!-- Action Error Toast / Banner -->
+			{#if $roomStore.actionError}
+				<div role="alert" class="p-3 sm:p-3.5 border-b border-amber-500/30 bg-amber-950/40 text-amber-200 text-xs font-mono flex items-center justify-between gap-3 px-4">
+					<div class="flex items-center gap-2.5">
+						<svg class="w-4 h-4 text-amber-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="10"/>
+							<line x1="12" y1="8" x2="12" y2="12"/>
+							<line x1="12" y1="16" x2="12.01" y2="16"/>
+						</svg>
+						<span><strong>Action failed:</strong> {$roomStore.actionError.message || $roomStore.actionError.code}</span>
+					</div>
+					<button
+						type="button"
+						onclick={handleDismissActionError}
+						class="text-amber-400 hover:text-white text-xs uppercase font-bold cursor-pointer transition-colors shrink-0 px-2 py-1 rounded bg-white/5 hover:bg-white/10"
+						aria-label="Dismiss action error notification"
+					>
+						Dismiss
+					</button>
+				</div>
+			{/if}
+
 			<!-- Room Content Section -->
 			<div class="p-4 sm:p-6 space-y-6">
 				<!-- Hero Room Code Element -->
@@ -1191,7 +1326,7 @@
 											<line x1="12" y1="19" x2="12" y2="23"/>
 											<line x1="8" y1="23" x2="16" y2="23"/>
 										</svg>
-										Wyciszony{localMutedUntil ? ` (${formatSeconds(muteCountdownSec ?? 0)})` : ''}
+										Muted{localMutedUntil ? ` (${formatSeconds(muteCountdownSec ?? 0)})` : ''}
 									</span>
 								{/if}
 								{#if isLocalChatBlocked}
@@ -1200,7 +1335,7 @@
 											<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
 											<line x1="2" y1="2" x2="22" y2="22"/>
 										</svg>
-										Czat zablokowany
+										Chat blocked
 									</span>
 								{/if}
 								{#if isLocalFileBlocked}
@@ -1209,7 +1344,7 @@
 											<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
 											<line x1="2" y1="2" x2="22" y2="22"/>
 										</svg>
-										Pliki zablokowane
+										Files blocked
 									</span>
 								{/if}
 							</div>
@@ -1254,7 +1389,7 @@
 													<line x1="12" y1="19" x2="12" y2="23"/>
 													<line x1="8" y1="23" x2="16" y2="23"/>
 												</svg>
-												Wyciszony{peerMutedUntil ? ` (${formatSeconds(peerCountdown ?? 0)})` : ''}
+												Muted{peerMutedUntil ? ` (${formatSeconds(peerCountdown ?? 0)})` : ''}
 											</span>
 										{/if}
 										{#if isPeerChatBlocked}
@@ -1263,7 +1398,7 @@
 													<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
 													<line x1="2" y1="2" x2="22" y2="22"/>
 												</svg>
-												Czat zablokowany
+												Chat blocked
 											</span>
 										{/if}
 										{#if isPeerFileBlocked}
@@ -1272,7 +1407,7 @@
 													<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
 													<line x1="2" y1="2" x2="22" y2="22"/>
 												</svg>
-												Pliki zablokowane
+												Files blocked
 											</span>
 										{/if}
 									</div>
@@ -1301,10 +1436,10 @@
 													type="button"
 													onclick={() => toggleActionMenu(peer)}
 													class="px-2 py-0.5 text-[10px] rounded bg-[#111624] hover:bg-[#182033] text-zinc-300 hover:text-white border border-white/10 uppercase font-semibold transition-all cursor-pointer font-mono flex items-center gap-1"
-													aria-label="Akcje dla uczestnika {peer}"
+													aria-label="Actions for participant {peer}"
 													aria-expanded={activeActionMenuPeer === peer}
 												>
-													<span>Akcje</span>
+													<span>Actions</span>
 													<svg class="w-3 h-3 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 														<polyline points="6 9 12 15 18 9"/>
 													</svg>
@@ -1327,18 +1462,18 @@
 																		<line x1="12" y1="19" x2="12" y2="23"/>
 																		<line x1="8" y1="23" x2="16" y2="23"/>
 																	</svg>
-																	<span>Wyłącz wyciszenie</span>
+																	<span>Unmute</span>
 																</button>
 															{:else}
 																<div class="px-3 py-1 text-[10px] text-zinc-500 uppercase font-bold border-b border-white/5">
-																	Wycisz uczestnika
+																	Mute participant
 																</div>
 																<button
 																	type="button"
 																	onclick={() => handleMutePeer(peer, 60)}
 																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer"
 																>
-																	<span>Na 1 minutę</span>
+																	<span>For 1 minute</span>
 																	<span class="text-[10px] text-zinc-500">1m</span>
 																</button>
 																<button
@@ -1346,7 +1481,7 @@
 																	onclick={() => handleMutePeer(peer, 300)}
 																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer"
 																>
-																	<span>Na 5 minut</span>
+																	<span>For 5 minutes</span>
 																	<span class="text-[10px] text-zinc-500">5m</span>
 																</button>
 																<button
@@ -1354,7 +1489,7 @@
 																	onclick={() => handleMutePeer(peer, 900)}
 																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer"
 																>
-																	<span>Na 15 minut</span>
+																	<span>For 15 minutes</span>
 																	<span class="text-[10px] text-zinc-500">15m</span>
 																</button>
 																<button
@@ -1362,7 +1497,7 @@
 																	onclick={() => handleMutePeer(peer, 3600)}
 																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer"
 																>
-																	<span>Na 1 godzinę</span>
+																	<span>For 1 hour</span>
 																	<span class="text-[10px] text-zinc-500">1h</span>
 																</button>
 																<button
@@ -1370,7 +1505,7 @@
 																	onclick={() => handleMutePeer(peer, null)}
 																	class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer border-b border-white/5"
 																>
-																	<span>Na stałe</span>
+																	<span>Permanently</span>
 																	<span class="text-[10px] text-zinc-500">∞</span>
 																</button>
 															{/if}
@@ -1382,8 +1517,8 @@
 																onclick={() => handleToggleChatVisibility(peer, !isPeerChatBlocked)}
 																class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer border-b border-white/5"
 															>
-																<span>{isPeerChatBlocked ? 'Odblokuj widoczność czatu' : 'Zablokuj widoczność czatu'}</span>
-																<span class="text-[10px] text-zinc-500">{isPeerChatBlocked ? 'WŁ' : 'WYŁ'}</span>
+																<span>{isPeerChatBlocked ? 'Unblock chat visibility' : 'Block chat visibility'}</span>
+																<span class="text-[10px] text-zinc-500">{isPeerChatBlocked ? 'ON' : 'OFF'}</span>
 															</button>
 														{/if}
 
@@ -1393,8 +1528,8 @@
 																onclick={() => handleToggleFileVisibility(peer, !isPeerFileBlocked)}
 																class="w-full px-3 py-1.5 text-left text-zinc-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between cursor-pointer border-b border-white/5"
 															>
-																<span>{isPeerFileBlocked ? 'Odblokuj widoczność plików' : 'Zablokuj widoczność plików'}</span>
-																<span class="text-[10px] text-zinc-500">{isPeerFileBlocked ? 'WŁ' : 'WYŁ'}</span>
+																<span>{isPeerFileBlocked ? 'Unblock file visibility' : 'Block file visibility'}</span>
+																<span class="text-[10px] text-zinc-500">{isPeerFileBlocked ? 'ON' : 'OFF'}</span>
 															</button>
 														{/if}
 
@@ -1407,7 +1542,7 @@
 																<svg class="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
 																	<path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/>
 																</svg>
-																<span>Przekaż własność</span>
+																<span>Transfer ownership</span>
 															</button>
 														{/if}
 
@@ -1422,7 +1557,7 @@
 																	<line x1="15" y1="9" x2="9" y2="15"/>
 																	<line x1="9" y1="9" x2="15" y2="15"/>
 																</svg>
-																<span>Wyrzuć z pokoju</span>
+																<span>Kick from room</span>
 															</button>
 														{/if}
 													</div>
@@ -1539,7 +1674,7 @@
 								<line x1="12" y1="19" x2="12" y2="23"/>
 								<line x1="8" y1="23" x2="16" y2="23"/>
 							</svg>
-							<span>Zostałeś wyciszony przez moderatora. Wysyłanie wiadomości i plików jest zablokowane.{localMutedUntil ? ` Pozostały czas: ${formatSeconds(muteCountdownSec ?? 0)}` : ''}</span>
+							<span>You have been muted by the moderator. Message and file transmissions are disabled.{localMutedUntil ? ` Remaining time: ${formatSeconds(muteCountdownSec ?? 0)}` : ''}</span>
 						</div>
 					{:else if isChatDisabled}
 						<div role="alert" class="p-2.5 bg-red-950/20 border-t border-red-500/20 text-red-300 font-mono text-[11px] flex items-center gap-2">

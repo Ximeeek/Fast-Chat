@@ -167,23 +167,23 @@
 								<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
 								<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
 							</svg>
-							<span>Blokada dołączania do pokoju</span>
+							<span>Room Entry Lock</span>
 						</div>
 						{#if isLocked}
 							<span class="text-[9px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 font-mono uppercase font-bold border border-red-500/30">
-								Zablokowany
+								Locked
 							</span>
 						{:else}
 							<span class="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono uppercase font-bold border border-emerald-500/30">
-								Otwarty
+								Open
 							</span>
 						{/if}
 					</div>
 
 					<p class="text-zinc-400 text-[11px] leading-relaxed">
 						{isLocked
-							? 'Dołączanie do pokoju jest obecnie zablokowane. Nowi uczestnicy nie mogą wejść, a obecni kontynuują bez przerw.'
-							: 'Pokój jest otwarty dla nowych uczestników posiadających identyfikator pokoju.'}
+							? 'Room entry is currently locked. New participants cannot join, while existing members continue uninterrupted.'
+							: 'Room is open to new participants who have the room identifier.'}
 					</p>
 
 					<div class="pt-1">
@@ -197,13 +197,13 @@
 									<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
 									<path d="M7 11V7a5 5 0 0 1 9.9-1"/>
 								</svg>
-								<span>Odblokuj dołączanie</span>
+								<span>Unlock Entry</span>
 							{:else}
 								<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 									<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
 									<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
 								</svg>
-								<span>Zablokuj dołączanie</span>
+								<span>Lock Entry</span>
 							{/if}
 						</button>
 					</div>

@@ -620,6 +620,63 @@ describe('In-Memory Room Store Lifecycle', () => {
 	});
 });
 
+describe('Room View Error Fallbacks & Watchdog Template Integrity', () => {
+	test('room page contains explicit recovery branch for fatal $roomStore.error with retry and home buttons', () => {
+		const roomPage = readFileSync(join(process.cwd(), 'src/routes/room/[code]/+page.svelte'), 'utf8');
+
+		assert.ok(
+			roomPage.includes('{:else if $roomStore.error}'),
+			'Expected explicit {:else if $roomStore.error} template branch'
+		);
+		assert.ok(
+			roomPage.includes('Session Error'),
+			'Expected Session Error heading in fatal error branch'
+		);
+		assert.ok(
+			roomPage.includes('Retry Connection'),
+			'Expected Retry Connection button in fatal error branch'
+		);
+		assert.ok(
+			roomPage.includes('Return Home'),
+			'Expected Return Home button in fatal error branch'
+		);
+	});
+
+	test('room page contains connection timeout watchdog fallback under mesh connecting spinner', () => {
+		const roomPage = readFileSync(join(process.cwd(), 'src/routes/room/[code]/+page.svelte'), 'utf8');
+
+		assert.ok(
+			roomPage.includes('{#if connectionTimeoutReached}'),
+			'Expected {#if connectionTimeoutReached} conditional under spinner'
+		);
+		assert.ok(
+			roomPage.includes('Connection is taking longer than expected'),
+			'Expected helpful escape notice when connection stalls'
+		);
+		assert.ok(
+			roomPage.includes('startConnectionWatchdog'),
+			'Expected startConnectionWatchdog helper method'
+		);
+	});
+
+	test('room page contains non-fatal actionError toast banner with auto-dismiss and manual dismiss', () => {
+		const roomPage = readFileSync(join(process.cwd(), 'src/routes/room/[code]/+page.svelte'), 'utf8');
+
+		assert.ok(
+			roomPage.includes('{#if $roomStore.actionError}'),
+			'Expected {#if $roomStore.actionError} banner'
+		);
+		assert.ok(
+			roomPage.includes('Action failed:'),
+			'Expected Action failed text prefix in action error toast'
+		);
+		assert.ok(
+			roomPage.includes('handleDismissActionError'),
+			'Expected handleDismissActionError click handler'
+		);
+	});
+});
+
 describe('Search Engine Privacy & Zero Storage Policy Audit', () => {
 	test('no localStorage or sessionStorage present in src directory', () => {
 		function scanDir(dir: string): void {
