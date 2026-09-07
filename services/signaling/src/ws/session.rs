@@ -1,4 +1,4 @@
-use crate::room::code::RoomCode;
+use crate::room::id::RoomId;
 use crate::ws::protocol::ServerMessage;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -29,10 +29,12 @@ impl fmt::Display for ConnectionId {
 }
 
 /// In-memory registry of active WebSocket peer outbound channels and per-connection room mappings.
+/// Keyed by immutable `RoomId` to ensure signaling relays and moderation operate independently
+/// of public room code rotation.
 #[derive(Debug, Clone, Default)]
 pub struct PeerSessionRegistry {
-    rooms: Arc<DashMap<RoomCode, DashMap<String, UnboundedSender<ServerMessage>>>>,
-    connection_rooms: Arc<DashMap<ConnectionId, (RoomCode, String)>>,
+    rooms: Arc<DashMap<RoomId, DashMap<String, UnboundedSender<ServerMessage>>>>,
+    connection_rooms: Arc<DashMap<ConnectionId, (RoomId, String)>>,
 }
 
 impl PeerSessionRegistry {
@@ -49,46 +51,46 @@ impl PeerSessionRegistry {
         self.connection_rooms.contains_key(conn_id)
     }
 
-    /// Retrieves the current room code and peer ID registered to a connection, if any.
-    pub fn get_connection_session(&self, conn_id: &ConnectionId) -> Option<(RoomCode, String)> {
+    /// Retrieves the current room ID and peer ID registered to a connection, if any.
+    pub fn get_connection_session(&self, conn_id: &ConnectionId) -> Option<(RoomId, String)> {
         self.connection_rooms.get(conn_id).map(|r| r.value().clone())
     }
 
-    /// Registers a connection to a specific room and peer ID, and saves its outbound channel.
+    /// Registers a connection to a specific room ID and peer ID, and saves its outbound channel.
     pub fn register_connection(
         &self,
         conn_id: ConnectionId,
-        code: RoomCode,
+        room_id: RoomId,
         peer_id: String,
         tx: UnboundedSender<ServerMessage>,
     ) {
-        self.connection_rooms.insert(conn_id, (code.clone(), peer_id.clone()));
-        self.register(&code, peer_id, tx);
+        self.connection_rooms.insert(conn_id, (room_id, peer_id.clone()));
+        self.register(&room_id, peer_id, tx);
     }
 
     /// Unregisters a connection and removes its outbound channel from the associated room.
     pub fn unregister_connection(
         &self,
         conn_id: &ConnectionId,
-    ) -> Option<(RoomCode, String, Option<UnboundedSender<ServerMessage>>)> {
-        if let Some((_, (code, peer_id))) = self.connection_rooms.remove(conn_id) {
-            let tx = self.unregister(&code, &peer_id);
-            Some((code, peer_id, tx))
+    ) -> Option<(RoomId, String, Option<UnboundedSender<ServerMessage>>)> {
+        if let Some((_, (room_id, peer_id))) = self.connection_rooms.remove(conn_id) {
+            let tx = self.unregister(&room_id, &peer_id);
+            Some((room_id, peer_id, tx))
         } else {
             None
         }
     }
 
     /// Registers an outbound channel for a peer in the specified room.
-    pub fn register(&self, code: &RoomCode, peer_id: String, tx: UnboundedSender<ServerMessage>) {
-        let entry = self.rooms.entry(code.clone()).or_default();
+    pub fn register(&self, room_id: &RoomId, peer_id: String, tx: UnboundedSender<ServerMessage>) {
+        let entry = self.rooms.entry(*room_id).or_default();
         entry.insert(peer_id, tx);
     }
 
     /// Unregisters an outbound channel for a peer. Removes the room entry if no peers remain.
-    pub fn unregister(&self, code: &RoomCode, peer_id: &str) -> Option<UnboundedSender<ServerMessage>> {
+    pub fn unregister(&self, room_id: &RoomId, peer_id: &str) -> Option<UnboundedSender<ServerMessage>> {
         let mut remove_room = false;
-        let removed = if let Some(room_peers) = self.rooms.get(code) {
+        let removed = if let Some(room_peers) = self.rooms.get(room_id) {
             let res = room_peers.remove(peer_id).map(|(_, tx)| tx);
             if room_peers.is_empty() {
                 remove_room = true;
@@ -99,7 +101,7 @@ impl PeerSessionRegistry {
         };
 
         if remove_room {
-            self.rooms.remove(code);
+            self.rooms.remove(room_id);
         }
 
         removed
@@ -107,25 +109,21 @@ impl PeerSessionRegistry {
 
     /// Sends a message directly to a target peer in the specified room.
     /// Returns `true` if the message was successfully dispatched, `false` if target not found.
-    pub fn send_to_peer(&self, code: &RoomCode, target_peer_id: &str, msg: ServerMessage) -> bool {
-        if let Some(room_peers) = self.rooms.get(code) {
-            if let Some(tx) = room_peers.get(target_peer_id) {
-                return tx.send(msg).is_ok();
-            }
-        }
-        false
+    pub fn send_to_peer(&self, room_id: &RoomId, target_peer_id: &str, msg: ServerMessage) -> bool {
+        self.rooms
+            .get(room_id)
+            .and_then(|room_peers| room_peers.get(target_peer_id).map(|tx| tx.send(msg).is_ok()))
+            .unwrap_or(false)
     }
 
     /// Broadcasts a message to all active peers in the room, optionally excluding a specific peer.
     /// Returns the number of peers to which the message was successfully dispatched.
-    pub fn broadcast(&self, code: &RoomCode, msg: ServerMessage, exclude_peer_id: Option<&str>) -> usize {
+    pub fn broadcast(&self, room_id: &RoomId, msg: ServerMessage, exclude_peer_id: Option<&str>) -> usize {
         let mut sent_count = 0;
-        if let Some(room_peers) = self.rooms.get(code) {
+        if let Some(room_peers) = self.rooms.get(room_id) {
             for entry in room_peers.iter() {
-                if let Some(exclude) = exclude_peer_id {
-                    if entry.key() == exclude {
-                        continue;
-                    }
+                if exclude_peer_id == Some(entry.key().as_str()) {
+                    continue;
                 }
                 if entry.value().send(msg.clone()).is_ok() {
                     sent_count += 1;
@@ -136,8 +134,8 @@ impl PeerSessionRegistry {
     }
 
     /// Lists all active peer IDs currently connected in the specified room.
-    pub fn list_peers(&self, code: &RoomCode) -> Vec<String> {
-        if let Some(room_peers) = self.rooms.get(code) {
+    pub fn list_peers(&self, room_id: &RoomId) -> Vec<String> {
+        if let Some(room_peers) = self.rooms.get(room_id) {
             room_peers.iter().map(|entry| entry.key().clone()).collect()
         } else {
             Vec::new()
@@ -145,16 +143,16 @@ impl PeerSessionRegistry {
     }
 
     /// Checks if a peer is currently connected in the specified room.
-    pub fn contains_peer(&self, code: &RoomCode, peer_id: &str) -> bool {
+    pub fn contains_peer(&self, room_id: &RoomId, peer_id: &str) -> bool {
         self.rooms
-            .get(code)
+            .get(room_id)
             .map(|peers| peers.contains_key(peer_id))
             .unwrap_or(false)
     }
 
     /// Evicts an entire room and its registered peer sessions.
-    pub fn remove_room(&self, code: &RoomCode) {
-        self.rooms.remove(code);
+    pub fn remove_room(&self, room_id: &RoomId) {
+        self.rooms.remove(room_id);
     }
 
     /// Returns the number of active rooms currently holding registered peer sessions.
@@ -171,22 +169,22 @@ mod tests {
     #[tokio::test]
     async fn test_session_registry_register_and_relay() {
         let registry = PeerSessionRegistry::new();
-        let code = RoomCode::new("1111-2222-3333").unwrap();
+        let room_id = RoomId::generate();
 
         let (tx_a, mut rx_a) = mpsc::unbounded_channel();
         let (tx_b, mut rx_b) = mpsc::unbounded_channel();
 
-        registry.register(&code, "alice".to_string(), tx_a);
-        registry.register(&code, "bob".to_string(), tx_b);
+        registry.register(&room_id, "alice".to_string(), tx_a);
+        registry.register(&room_id, "bob".to_string(), tx_b);
 
-        assert_eq!(registry.list_peers(&code).len(), 2);
-        assert!(registry.contains_peer(&code, "alice"));
-        assert!(registry.contains_peer(&code, "bob"));
-        assert!(!registry.contains_peer(&code, "charlie"));
+        assert_eq!(registry.list_peers(&room_id).len(), 2);
+        assert!(registry.contains_peer(&room_id, "alice"));
+        assert!(registry.contains_peer(&room_id, "bob"));
+        assert!(!registry.contains_peer(&room_id, "charlie"));
 
         // 1:1 Direct message relay from Alice to Bob
         let relay_msg = ServerMessage::sdp_offer("alice", serde_json::json!({"type": "offer"}));
-        let sent = registry.send_to_peer(&code, "bob", relay_msg.clone());
+        let sent = registry.send_to_peer(&room_id, "bob", relay_msg.clone());
         assert!(sent);
 
         let received_by_b = rx_b.recv().await.expect("Bob should receive offer");
@@ -195,25 +193,25 @@ mod tests {
 
         // Room broadcast excluding Alice
         let broadcast_msg = ServerMessage::peer_joined("bob");
-        let count = registry.broadcast(&code, broadcast_msg.clone(), Some("alice"));
+        let count = registry.broadcast(&room_id, broadcast_msg.clone(), Some("alice"));
         assert_eq!(count, 1);
         let b_broadcast = rx_b.recv().await.expect("Bob receives broadcast");
         assert_eq!(b_broadcast, broadcast_msg);
 
         // Unregister Alice
-        registry.unregister(&code, "alice");
-        assert!(!registry.contains_peer(&code, "alice"));
-        assert_eq!(registry.list_peers(&code), vec!["bob".to_string()]);
+        registry.unregister(&room_id, "alice");
+        assert!(!registry.contains_peer(&room_id, "alice"));
+        assert_eq!(registry.list_peers(&room_id), vec!["bob".to_string()]);
 
         // Unregister Bob -> room map pruned
-        registry.unregister(&code, "bob");
+        registry.unregister(&room_id, "bob");
         assert_eq!(registry.room_count(), 0);
     }
 
     #[tokio::test]
     async fn test_connection_registry_lifecycle() {
         let registry = PeerSessionRegistry::new();
-        let code = RoomCode::new("5555-6666-7777").unwrap();
+        let room_id = RoomId::generate();
         let conn_a = ConnectionId::generate();
         let conn_b = ConnectionId::generate();
         assert_ne!(conn_a, conn_b);
@@ -224,15 +222,15 @@ mod tests {
         assert!(!registry.is_connection_in_room(&conn_a));
         assert!(!registry.is_connection_in_room(&conn_b));
 
-        registry.register_connection(conn_a.clone(), code.clone(), "alice".to_string(), tx_a);
+        registry.register_connection(conn_a.clone(), room_id, "alice".to_string(), tx_a);
         assert!(registry.is_connection_in_room(&conn_a));
         assert_eq!(
             registry.get_connection_session(&conn_a),
-            Some((code.clone(), "alice".to_string()))
+            Some((room_id, "alice".to_string()))
         );
         assert!(!registry.is_connection_in_room(&conn_b));
 
-        registry.register_connection(conn_b.clone(), code.clone(), "bob".to_string(), tx_b);
+        registry.register_connection(conn_b.clone(), room_id, "bob".to_string(), tx_b);
         assert!(registry.is_connection_in_room(&conn_b));
 
         let unreg_a = registry.unregister_connection(&conn_a);

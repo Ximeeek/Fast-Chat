@@ -138,7 +138,8 @@ async fn test_room_creation_rate_limiting_ws() {
 
     // Now close room 1
     let parsed_code = fastchat_signaling::room::RoomCode::new(&room_code).unwrap();
-    state.room_manager.close_room(&parsed_code, "owner1").unwrap();
+    let room_id = state.room_manager.get_room_id_by_code(&parsed_code).unwrap();
+    state.room_manager.close_room(&room_id, "owner1").unwrap();
 
     // After closing first room, creating a new room from same IP immediately succeeds
     let (mut ws3, _) = connect_async(&ws_url).await.unwrap();
@@ -434,7 +435,7 @@ async fn test_join_room_escalating_lockout_and_success_counter_reset() {
     let ws_url = format!("ws://{addr}/ws");
 
     // 1. Create a legitimate room to join
-    let legitimate_code = state
+    let (_room_id, legitimate_code) = state
         .room_manager
         .create_room(Some("owner_alice".to_string()), None, fastchat_signaling::room::PasswordStatus::none())
         .unwrap();

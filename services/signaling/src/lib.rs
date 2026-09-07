@@ -88,14 +88,14 @@ async fn create_room_handler(
         PasswordStatus::none()
     };
 
-    let code = state
+    let (room_id, code) = state
         .room_manager
         .create_room(owner_id, Some(rate_key), password_status)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let room_snapshot = state
         .room_manager
-        .get_room_state(&code)
+        .get_room_state(&room_id)
         .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Room not found after creation".to_string()))?;
 
     Ok((
@@ -116,7 +116,7 @@ async fn get_room_handler(
     let code = RoomCode::new(code_str).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let room = state
         .room_manager
-        .get_room_state(&code)
+        .get_room_state_by_code(&code)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Room not found".to_string()))?;
 
     Ok(Json(room))
@@ -128,9 +128,13 @@ async fn extend_room_handler(
     Json(req): Json<PeerActionRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let code = RoomCode::new(code_str).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let room_id = state
+        .room_manager
+        .get_room_id_by_code(&code)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Room not found".to_string()))?;
     state
         .room_manager
-        .extend_room(&code, &req.peer_id)
+        .extend_room(&room_id, &req.peer_id)
         .map_err(|e| match e {
             room::RoomError::Unauthorized => (StatusCode::FORBIDDEN, e.to_string()),
             room::RoomError::NotInExtendableWindow => (StatusCode::BAD_REQUEST, e.to_string()),
@@ -147,9 +151,13 @@ async fn close_room_handler(
     Json(req): Json<PeerActionRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let code = RoomCode::new(code_str).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let room_id = state
+        .room_manager
+        .get_room_id_by_code(&code)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Room not found".to_string()))?;
     state
         .room_manager
-        .close_room(&code, &req.peer_id)
+        .close_room(&room_id, &req.peer_id)
         .map_err(|e| match e {
             room::RoomError::Unauthorized => (StatusCode::FORBIDDEN, e.to_string()),
             room::RoomError::PeerNotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),

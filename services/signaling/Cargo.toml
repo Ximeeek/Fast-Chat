@@ -18,6 +18,7 @@ thiserror = "2.0"
 hmac = "0.12"
 sha2 = "0.10"
 reqwest = { version = "0.12", features = ["json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

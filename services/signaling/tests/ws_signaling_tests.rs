@@ -2214,6 +2214,148 @@ async fn test_ws_detonate_room_flow() {
     }
 }
 
+#[tokio::test]
+async fn test_ws_session_finds_room_by_room_id_independently_of_code() {
+    let config = Config::default();
+    let (addr, state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
 
+    // 1. Peer A (Alice) connects and creates a room
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect peer A");
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: None,
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
 
+    let created_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let created: ServerMessage = serde_json::from_str(&created_raw).unwrap();
+    let initial_code_str = match created {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated for Alice, got {created:?}"),
+    };
 
+    let initial_code = fastchat_signaling::room::RoomCode::new(&initial_code_str).unwrap();
+    let room_id = state
+        .room_manager
+        .get_room_id_by_code(&initial_code)
+        .expect("RoomId should exist for initial code");
+
+    // 2. Simulate room code rotation:
+    //    Mutate current_code in RoomState and swap index in code_to_id map.
+    let new_code_str = "9999-8888-7777".to_string();
+    let new_code = fastchat_signaling::room::RoomCode::new(&new_code_str).unwrap();
+    {
+        let mut room = state.room_manager.rooms.get_mut(&room_id).unwrap();
+        room.set_current_code(new_code.clone());
+    }
+    state.room_manager.code_to_id.remove(&initial_code);
+    state.room_manager.code_to_id.insert(new_code.clone(), room_id);
+
+    // Verify lookup invariants after simulated rotation
+    assert!(state.room_manager.get_room_id_by_code(&initial_code).is_none());
+    assert_eq!(state.room_manager.get_room_id_by_code(&new_code), Some(room_id));
+
+    // 3. Alice (connected WS session) executes SET_ROOM_LOCKED without knowing about the old code.
+    //    Because session state is bound to RoomId, this operation must succeed transparently.
+    let lock_msg = ClientMessage::SetRoomLocked { locked: true };
+    ws_a.send(Message::Text(serde_json::to_string(&lock_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let locked_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let locked: ServerMessage = serde_json::from_str(&locked_raw).unwrap();
+    match locked {
+        ServerMessage::RoomLocked { room_code, locked, .. } => {
+            assert_eq!(room_code, new_code_str);
+            assert!(locked);
+        }
+        _ => panic!("Expected RoomLocked with rotated code, got {locked:?}"),
+    }
+
+    // 4. Bob attempts to join using the old room code -> must fail with ROOM_NOT_FOUND
+    let (mut ws_b_old, _) = connect_async(&ws_url).await.unwrap();
+    let join_old = ClientMessage::JoinRoom {
+        code: initial_code_str.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b_old
+        .send(Message::Text(serde_json::to_string(&join_old).unwrap().into()))
+        .await
+        .unwrap();
+
+    let old_resp_raw = ws_b_old.next().await.unwrap().unwrap().into_text().unwrap();
+    let old_resp: ServerMessage = serde_json::from_str(&old_resp_raw).unwrap();
+    match old_resp {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "ROOM_NOT_FOUND"),
+        _ => panic!("Expected ROOM_NOT_FOUND for old code, got {old_resp:?}"),
+    }
+
+    // 5. Bob attempts to join with new code while locked -> rejected with ROOM_LOCKED
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_new = ClientMessage::JoinRoom {
+        code: new_code_str.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_new).unwrap().into()))
+        .await
+        .unwrap();
+
+    let lock_resp_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let lock_resp: ServerMessage = serde_json::from_str(&lock_resp_raw).unwrap();
+    match lock_resp {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "ROOM_LOCKED"),
+        _ => panic!("Expected ROOM_LOCKED error for Bob, got {lock_resp:?}"),
+    }
+
+    // 6. Alice unlocks the room -> Bob can join successfully with new code
+    let unlock_msg = ClientMessage::SetRoomLocked { locked: false };
+    ws_a.send(Message::Text(serde_json::to_string(&unlock_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let unlocked_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let unlocked: ServerMessage = serde_json::from_str(&unlocked_raw).unwrap();
+    assert!(matches!(unlocked, ServerMessage::RoomLocked { locked: false, .. }));
+
+    // Bob joins with new code
+    let (mut ws_b_ok, _) = connect_async(&ws_url).await.unwrap();
+    ws_b_ok
+        .send(Message::Text(serde_json::to_string(&join_new).unwrap().into()))
+        .await
+        .unwrap();
+
+    let join_ok_raw = ws_b_ok.next().await.unwrap().unwrap().into_text().unwrap();
+    let join_ok: ServerMessage = serde_json::from_str(&join_ok_raw).unwrap();
+    assert!(matches!(join_ok, ServerMessage::JoinOk { .. }));
+
+    // Alice consumes PEER_JOINED for Bob
+    let _ = ws_a.next().await.unwrap().unwrap();
+
+    // 7. Alice detonates the room
+    let detonate_msg = ClientMessage::DetonateRoom;
+    ws_a.send(Message::Text(serde_json::to_string(&detonate_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Both peers receive ROOM_DETONATED
+    let a_detonated_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_detonated: ServerMessage = serde_json::from_str(&a_detonated_raw).unwrap();
+    assert!(matches!(a_detonated, ServerMessage::RoomDetonated { .. }));
+
+    let b_detonated_raw = ws_b_ok.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_detonated: ServerMessage = serde_json::from_str(&b_detonated_raw).unwrap();
+    assert!(matches!(b_detonated, ServerMessage::RoomDetonated { .. }));
+
+    // 8. Verify dual-map cleanup: both rooms and code_to_id have zero remaining traces
+    assert_eq!(state.room_manager.room_count(), 0);
+    assert!(state.room_manager.rooms.get(&room_id).is_none());
+    assert!(state.room_manager.code_to_id.get(&new_code).is_none());
+    assert!(state.room_manager.code_to_id.get(&initial_code).is_none());
+    assert!(state.room_manager.code_to_id.is_empty());
+}

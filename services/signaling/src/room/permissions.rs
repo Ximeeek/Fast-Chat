@@ -81,6 +81,7 @@ mod tests {
         let config = Config::default();
         let code = RoomCode::new("1234-5678-9012").unwrap();
         let mut room = RoomState::new(
+            crate::room::RoomId::generate(),
             code,
             Some("owner-peer".to_string()),
             None,

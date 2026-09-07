@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use fastchat_signaling::config::Config;
 use fastchat_signaling::room::{
-    broadcast::RoomBroadcaster, code::RoomCode, manager::RoomManager, PasswordStatus,
+    broadcast::RoomBroadcaster, code::RoomCode, id::RoomId, manager::RoomManager, PasswordStatus,
     RoomError, RoomLifecycleState, RoomState,
 };
 use std::collections::HashSet;
@@ -15,13 +15,13 @@ struct RecordingBroadcaster {
 }
 
 impl RoomBroadcaster for RecordingBroadcaster {
-    fn broadcast_room_closed(&self, _code: &RoomCode, _reason: &str) {
+    fn broadcast_room_closed(&self, _id: &RoomId, _code: &RoomCode, _reason: &str) {
         self.closed_events.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn broadcast_room_detonated(&self, _code: &RoomCode) {}
+    fn broadcast_room_detonated(&self, _id: &RoomId, _code: &RoomCode) {}
 
-    fn broadcast_state_changed(&self, _code: &RoomCode, _new_state: RoomLifecycleState) {
+    fn broadcast_state_changed(&self, _id: &RoomId, _code: &RoomCode, _new_state: RoomLifecycleState) {
         self.state_change_events.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -60,6 +60,7 @@ fn test_configurable_participant_limit() {
     };
 
     let mut room = RoomState::new(
+        RoomId::generate(),
         RoomCode::new("1111-2222-3333").unwrap(),
         Some("owner".to_string()),
         None,
@@ -106,11 +107,11 @@ fn test_lifecycle_full_state_machine_with_extension_and_server_time() {
     let broadcaster = Arc::new(RecordingBroadcaster::default());
     let manager = RoomManager::with_broadcaster(config.clone(), broadcaster.clone());
 
-    let code = manager
+    let (room_id, code) = manager
         .create_room(Some("owner_alice".to_string()), None, PasswordStatus::none())
         .expect("Creation failed");
 
-    let initial = manager.get_room_state(&code).unwrap();
+    let initial = manager.get_room_state(&room_id).unwrap();
     let start_ts = initial.created_at;
 
     // Initial state: Creating, timer set to start_ts + 600
@@ -119,32 +120,32 @@ fn test_lifecycle_full_state_machine_with_extension_and_server_time() {
 
     // 1. Peer joins -> room transitions to Active
     manager
-        .join_room(&code, "bob".to_string(), false, None)
+        .join_room(&room_id, "bob".to_string(), false, None)
         .expect("Bob should join");
-    let room = manager.get_room_state(&code).unwrap();
+    let room = manager.get_room_state(&room_id).unwrap();
     assert_eq!(room.state, RoomLifecycleState::Active);
 
     // 2. Server time tick at +400s (remaining 200s > 120s threshold) -> Still Active
     manager.tick_lifecycle(start_ts + 400);
-    let room = manager.get_room_state(&code).unwrap();
+    let room = manager.get_room_state(&room_id).unwrap();
     assert_eq!(room.state, RoomLifecycleState::Active);
     assert_eq!(broadcaster.state_change_events.load(Ordering::SeqCst), 0);
 
     // 3. Server time tick at +480s (remaining 120s <= 120s threshold) -> ExtendableWindow
     manager.tick_lifecycle(start_ts + 480);
-    let room = manager.get_room_state(&code).unwrap();
+    let room = manager.get_room_state(&room_id).unwrap();
     assert_eq!(room.state, RoomLifecycleState::ExtendableWindow);
     assert_eq!(broadcaster.state_change_events.load(Ordering::SeqCst), 1);
 
     // 4. Non-owner (Bob) attempts to extend -> Unauthorized
-    let bob_res = manager.extend_room(&code, "bob");
+    let bob_res = manager.extend_room(&room_id, "bob");
     assert_eq!(bob_res, Err(RoomError::Unauthorized));
 
     // 5. Owner (Alice) extends room -> Adds 300s (expires_at = start_ts + 900) & returns to Active
     manager
-        .extend_room(&code, "owner_alice")
+        .extend_room(&room_id, "owner_alice")
         .expect("Extension failed");
-    let room = manager.get_room_state(&code).unwrap();
+    let room = manager.get_room_state(&room_id).unwrap();
     assert_eq!(room.state, RoomLifecycleState::Active);
     assert_eq!(room.expires_at, start_ts + 900);
     assert_eq!(room.extension_count, 1);
@@ -152,13 +153,13 @@ fn test_lifecycle_full_state_machine_with_extension_and_server_time() {
 
     // 6. Advance to second ExtendableWindow (start_ts + 780s, remaining 120s)
     manager.tick_lifecycle(start_ts + 780);
-    let room = manager.get_room_state(&code).unwrap();
+    let room = manager.get_room_state(&room_id).unwrap();
     assert_eq!(room.state, RoomLifecycleState::ExtendableWindow);
     assert_eq!(broadcaster.state_change_events.load(Ordering::SeqCst), 3);
 
     // 7. Advance past expiration (start_ts + 901s) -> Closing state with 10s grace period
     manager.tick_lifecycle(start_ts + 901);
-    let room = manager.get_room_state(&code).unwrap();
+    let room = manager.get_room_state(&room_id).unwrap();
     assert_eq!(room.state, RoomLifecycleState::Closing);
     assert_eq!(room.closing_deadline, Some(start_ts + 901 + 10));
     assert_eq!(broadcaster.state_change_events.load(Ordering::SeqCst), 4);
@@ -172,7 +173,8 @@ fn test_lifecycle_full_state_machine_with_extension_and_server_time() {
     // 9. Tick after grace period expires (start_ts + 912s) -> Destroyed, purged from DashMap
     manager.tick_lifecycle(start_ts + 912);
     assert_eq!(manager.room_count(), 0);
-    assert!(manager.get_room_state(&code).is_none());
+    assert!(manager.get_room_state(&room_id).is_none());
+    assert!(manager.get_room_state_by_code(&code).is_none());
     assert_eq!(broadcaster.closed_events.load(Ordering::SeqCst), 1);
 }
 
@@ -182,25 +184,27 @@ fn test_manual_close_by_owner_initiates_closing_grace_period() {
     let broadcaster = Arc::new(RecordingBroadcaster::default());
     let manager = RoomManager::with_broadcaster(config, broadcaster.clone());
 
-    let code = manager
+    let (room_id, code) = manager
         .create_room(Some("owner".to_string()), None, PasswordStatus::none())
         .unwrap();
 
-    let start_ts = manager.get_room_state(&code).unwrap().created_at;
+    let start_ts = manager.get_room_state(&room_id).unwrap().created_at;
 
     // Impostor tries to close room -> Unauthorized
-    let err = manager.close_room(&code, "stranger");
+    let err = manager.close_room(&room_id, "stranger");
     assert_eq!(err, Err(RoomError::Unauthorized));
 
     // Owner closes room manually
-    manager.close_room(&code, "owner").expect("Close failed");
-    let room = manager.get_room_state(&code).unwrap();
+    manager.close_room(&room_id, "owner").expect("Close failed");
+    let room = manager.get_room_state(&room_id).unwrap();
     assert_eq!(room.state, RoomLifecycleState::Closing);
     assert_eq!(room.closing_deadline, Some(start_ts + 10));
 
     // Tick after grace period (start_ts + 11s) -> Pruned
     manager.tick_lifecycle(start_ts + 11);
     assert_eq!(manager.room_count(), 0);
+    assert!(manager.get_room_state(&room_id).is_none());
+    assert!(manager.get_room_state_by_code(&code).is_none());
     assert_eq!(broadcaster.closed_events.load(Ordering::SeqCst), 1);
 }
 
@@ -210,7 +214,7 @@ fn test_zero_disk_persistence() {
     let config = Config::default();
     let manager = RoomManager::new(config);
 
-    let code = manager
+    let (room_id, code) = manager
         .create_room(Some("ephemeral_peer".to_string()), None, PasswordStatus::none())
         .unwrap();
 
@@ -222,5 +226,6 @@ fn test_zero_disk_persistence() {
     // A fresh manager has 0 rooms
     let fresh_manager = RoomManager::new(Config::default());
     assert_eq!(fresh_manager.room_count(), 0);
-    assert!(fresh_manager.get_room_state(&code).is_none());
+    assert!(fresh_manager.get_room_state(&room_id).is_none());
+    assert!(fresh_manager.get_room_state_by_code(&code).is_none());
 }

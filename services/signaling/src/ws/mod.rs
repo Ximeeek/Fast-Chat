@@ -2,6 +2,7 @@ pub mod protocol;
 pub mod session;
 
 use crate::room::code::RoomCode;
+use crate::room::id::RoomId;
 use crate::room::state::{PasswordStatus, RoomError, RoomLifecycleState};
 use crate::state::AppState;
 use crate::ws::protocol::{format_hex, ClientMessage, ServerMessage};
@@ -99,7 +100,7 @@ pub async fn handle_socket(
     debug!(connection_id = %connection_id, "Incoming WebSocket connection accepted");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
-    let mut current_session: Option<(RoomCode, String, bool)> = None;
+    let mut current_session: Option<(RoomId, String, bool)> = None;
     let mut flood_bucket = crate::limiter::TokenBucket::new(
         state.config.flood_bucket_capacity,
         state.config.flood_refill_per_sec,
@@ -172,46 +173,48 @@ pub async fn handle_socket(
     // Unregister session and notify remaining room participants on disconnect
     let unreg_result = state.sessions.unregister_connection(&connection_id);
     let session_to_cleanup = current_session
-        .map(|(code, peer, _)| (code, peer))
-        .or_else(|| unreg_result.map(|(code, peer, _)| (code, peer)));
+        .map(|(room_id, peer, _)| (room_id, peer))
+        .or_else(|| unreg_result.map(|(room_id, peer, _)| (room_id, peer)));
 
-    if let Some((code, peer_id)) = session_to_cleanup {
+    if let Some((room_id, peer_id)) = session_to_cleanup {
         debug!(
             connection_id = %connection_id,
-            room = %code,
+            room_id = %room_id,
             peer = %peer_id,
             "WebSocket peer disconnected; cleaning up session"
         );
 
-        if let Some(outcome) = state.room_manager.leave_room(&code, &peer_id) {
+        if let Some(outcome) = state.room_manager.leave_room(&room_id, &peer_id) {
             if outcome.room_destroyed {
                 info!(
-                    room = %code,
+                    room_id = %room_id,
+                    room = %outcome.current_code,
                     peer = %peer_id,
                     "Last peer disconnected; room automatically destroyed"
                 );
                 state.sessions.broadcast(
-                    &code,
-                    ServerMessage::room_closed(code.to_string(), "room_empty"),
+                    &room_id,
+                    ServerMessage::room_closed(outcome.current_code.to_string(), "room_empty"),
                     None,
                 );
             } else {
                 state.sessions.broadcast(
-                    &code,
+                    &room_id,
                     ServerMessage::peer_left(peer_id.clone()),
                     None,
                 );
 
                 if let Some(new_owner) = outcome.new_owner_id {
                     info!(
-                        room = %code,
+                        room_id = %room_id,
+                        room = %outcome.current_code,
                         previous_owner = %peer_id,
                         new_owner = %new_owner,
                         "Broadcasting ROOM_OWNER_CHANGED to remaining participants"
                     );
                     state.sessions.broadcast(
-                        &code,
-                        ServerMessage::room_owner_changed(code.to_string(), new_owner),
+                        &room_id,
+                        ServerMessage::room_owner_changed(outcome.current_code.to_string(), new_owner),
                         None,
                     );
                 }
@@ -223,7 +226,7 @@ pub async fn handle_socket(
 /// Dispatches decoded client messages to corresponding protocol handlers.
 async fn handle_client_message(
     raw_text: &str,
-    current_session: &mut Option<(RoomCode, String, bool)>,
+    current_session: &mut Option<(RoomId, String, bool)>,
     connection_id: &session::ConnectionId,
     tx: &mpsc::UnboundedSender<ServerMessage>,
     state: &AppState,
@@ -314,18 +317,18 @@ async fn handle_client_message(
                 PasswordStatus::none()
             };
 
-            let code = match state
+            let (room_id, code) = match state
                 .room_manager
                 .create_room(Some(assigned_peer_id.clone()), Some(*rate_key), password_status)
             {
-                Ok(c) => c,
+                Ok(res) => res,
                 Err(e) => {
                     let _ = tx.send(ServerMessage::error("CREATION_FAILED", e.to_string()));
                     return;
                 }
             };
 
-            let room_snapshot = match state.room_manager.get_room_state(&code) {
+            let room_snapshot = match state.room_manager.get_room_state(&room_id) {
                 Some(r) => r,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -339,11 +342,12 @@ async fn handle_client_message(
             let salt_hex = format_hex(&room_snapshot.crypto_salt);
             state
                 .sessions
-                .register_connection(connection_id.clone(), code.clone(), assigned_peer_id.clone(), tx.clone());
-            *current_session = Some((code.clone(), assigned_peer_id.clone(), true));
+                .register_connection(connection_id.clone(), room_id, assigned_peer_id.clone(), tx.clone());
+            *current_session = Some((room_id, assigned_peer_id.clone(), true));
 
             info!(
                 connection_id = %connection_id,
+                room_id = %room_id,
                 room = %code,
                 peer = %assigned_peer_id,
                 event = "ROOM_CREATED",
@@ -428,7 +432,16 @@ async fn handle_client_message(
                 }
             };
 
-            let room_snapshot = match state.room_manager.get_room_state(&code) {
+            let room_id = match state.room_manager.get_room_id_by_code(&code) {
+                Some(id) => id,
+                None => {
+                    state.limiter.join.record_failure(rate_key);
+                    let _ = tx.send(ServerMessage::error("ROOM_NOT_FOUND", "Room does not exist"));
+                    return;
+                }
+            };
+
+            let room_snapshot = match state.room_manager.get_room_state(&room_id) {
                 Some(r) => r,
                 None => {
                     state.limiter.join.record_failure(rate_key);
@@ -453,6 +466,7 @@ async fn handle_client_message(
                 warn!(
                     event = "ROOM_LOCKED_REJECTED",
                     connection_id = %connection_id,
+                    room_id = %room_id,
                     room = %code,
                     "Join attempt rejected: room is currently locked"
                 );
@@ -472,7 +486,7 @@ async fn handle_client_message(
                 room_snapshot.peers.iter().map(|p| p.id.clone()).collect();
 
             let join_res = state.room_manager.join_room_with_password(
-                &code,
+                &room_id,
                 assigned_peer_id.clone(),
                 false,
                 password.as_deref(),
@@ -485,11 +499,12 @@ async fn handle_client_message(
                     let salt_hex = format_hex(&room_snapshot.crypto_salt);
                     state
                         .sessions
-                        .register_connection(connection_id.clone(), code.clone(), assigned_peer_id.clone(), tx.clone());
-                    *current_session = Some((code.clone(), assigned_peer_id.clone(), false));
+                        .register_connection(connection_id.clone(), room_id, assigned_peer_id.clone(), tx.clone());
+                    *current_session = Some((room_id, assigned_peer_id.clone(), false));
 
                     info!(
                         connection_id = %connection_id,
+                        room_id = %room_id,
                         room = %code,
                         peer = %assigned_peer_id,
                         event = "JOIN_OK",
@@ -519,13 +534,14 @@ async fn handle_client_message(
                     // Broadcast PEER_JOINED to existing peers
                     info!(
                         connection_id = %connection_id,
+                        room_id = %room_id,
                         room = %code,
                         peer = %assigned_peer_id,
                         event = "PEER_JOINED",
                         "Broadcasting PEER_JOINED to existing peers"
                     );
                     state.sessions.broadcast(
-                        &code,
+                        &room_id,
                         ServerMessage::peer_joined(assigned_peer_id.clone()),
                         Some(&assigned_peer_id),
                     );
@@ -561,7 +577,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::SdpOffer { target_peer_id, sdp } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -574,7 +590,7 @@ async fn handle_client_message(
 
             info!(
                 connection_id = %connection_id,
-                room = %code,
+                room_id = %room_id,
                 from = %sender_id,
                 to = %target_peer_id,
                 event = "SDP_OFFER_RELAY",
@@ -582,7 +598,7 @@ async fn handle_client_message(
             );
 
             let sent = state.sessions.send_to_peer(
-                code,
+                room_id,
                 &target_peer_id,
                 ServerMessage::sdp_offer(sender_id.clone(), sdp),
             );
@@ -595,7 +611,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::SdpAnswer { target_peer_id, sdp } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -608,7 +624,7 @@ async fn handle_client_message(
 
             info!(
                 connection_id = %connection_id,
-                room = %code,
+                room_id = %room_id,
                 from = %sender_id,
                 to = %target_peer_id,
                 event = "SDP_ANSWER_RELAY",
@@ -616,7 +632,7 @@ async fn handle_client_message(
             );
 
             let sent = state.sessions.send_to_peer(
-                code,
+                room_id,
                 &target_peer_id,
                 ServerMessage::sdp_answer(sender_id.clone(), sdp),
             );
@@ -633,7 +649,7 @@ async fn handle_client_message(
             candidates,
             candidate,
         } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -646,7 +662,7 @@ async fn handle_client_message(
 
             info!(
                 connection_id = %connection_id,
-                room = %code,
+                room_id = %room_id,
                 from = %sender_id,
                 to = %target_peer_id,
                 event = "ICE_CANDIDATES_RELAY",
@@ -654,7 +670,7 @@ async fn handle_client_message(
             );
 
             let sent = state.sessions.send_to_peer(
-                code,
+                room_id,
                 &target_peer_id,
                 ServerMessage::ice_candidates(sender_id.clone(), candidates, candidate),
             );
@@ -667,7 +683,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::Rekey { password, salt } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -678,7 +694,7 @@ async fn handle_client_message(
                 }
             };
 
-            let is_owner = state.room_manager.is_owner(code, sender_id);
+            let is_owner = state.room_manager.is_owner(room_id, sender_id);
             if !is_owner {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -706,20 +722,21 @@ async fn handle_client_message(
                 None
             };
 
-            match state.room_manager.rekey_room(code, sender_id, &password, salt_bytes) {
-                Ok(status) => {
+            match state.room_manager.rekey_room(room_id, sender_id, &password, salt_bytes) {
+                Ok((current_code, status)) => {
                     let salt_hex = status.salt.map(|s| format_hex(&s)).unwrap_or_default();
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
+                        room = %current_code,
                         peer = %sender_id,
                         event = "REKEY",
                         "Broadcasting REKEY event with public salt to all room participants"
                     );
 
                     state.sessions.broadcast(
-                        code,
-                        ServerMessage::rekey(code.to_string(), salt_hex),
+                        room_id,
+                        ServerMessage::rekey(current_code.to_string(), salt_hex),
                         None,
                     );
                 }
@@ -741,7 +758,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::SetRoomPassword { password } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -754,7 +771,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::SetRoomPassword)
+                .has_permission(room_id, sender_id, crate::room::Permission::SetRoomPassword)
             {
                 let _ = tx.send(ServerMessage::error(
                     "NOT_ROOM_OWNER",
@@ -771,20 +788,21 @@ async fn handle_client_message(
                 return;
             }
 
-            match state.room_manager.rekey_room(code, sender_id, &password, None) {
-                Ok(status) => {
+            match state.room_manager.rekey_room(room_id, sender_id, &password, None) {
+                Ok((current_code, status)) => {
                     let salt_hex = status.salt.map(|s| format_hex(&s)).unwrap_or_default();
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
+                        room = %current_code,
                         peer = %sender_id,
                         event = "SET_ROOM_PASSWORD",
                         "Room password configured by owner; broadcasting REKEY event"
                     );
 
                     state.sessions.broadcast(
-                        code,
-                        ServerMessage::rekey(code.to_string(), salt_hex),
+                        room_id,
+                        ServerMessage::rekey(current_code.to_string(), salt_hex),
                         None,
                     );
                 }
@@ -806,7 +824,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::VerifyPassword { password } => {
-            let (code, _, _) = match current_session {
+            let (room_id, _, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -817,7 +835,7 @@ async fn handle_client_message(
                 }
             };
 
-            let is_valid = state.room_manager.verify_room_password(code, &password);
+            let is_valid = state.room_manager.verify_room_password(room_id, &password);
             let _ = tx.send(ServerMessage::password_verified(is_valid));
         }
         ClientMessage::RequestIceServers => {
@@ -867,7 +885,7 @@ async fn handle_client_message(
             state.limiter.turn_bandwidth.record_usage(rate_key, bytes);
         }
         ClientMessage::KickPeer { peer_id: target_peer_id } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -880,7 +898,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::KickPeer)
+                .has_permission(room_id, sender_id, crate::room::Permission::KickPeer)
             {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -897,11 +915,11 @@ async fn handle_client_message(
                 return;
             }
 
-            match state.room_manager.kick_peer(code, sender_id, &target_peer_id) {
+            match state.room_manager.kick_peer(room_id, sender_id, &target_peer_id) {
                 Ok(_) => {
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
                         operator = %sender_id,
                         target = %target_peer_id,
                         event = "KICK_PEER",
@@ -910,14 +928,14 @@ async fn handle_client_message(
 
                     // 1. Notify kicked peer with terminal KICKED_FROM_ROOM error so their WS loop closes
                     state.sessions.send_to_peer(
-                        code,
+                        room_id,
                         &target_peer_id,
                         ServerMessage::error("KICKED_FROM_ROOM", "You were kicked from this room"),
                     );
 
                     // 2. Broadcast PEER_LEFT to all remaining participants
                     state.sessions.broadcast(
-                        code,
+                        room_id,
                         ServerMessage::peer_left(target_peer_id.clone()),
                         Some(&target_peer_id),
                     );
@@ -943,7 +961,7 @@ async fn handle_client_message(
             peer_id: target_peer_id,
             duration_seconds,
         } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -956,7 +974,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::MutePeer)
+                .has_permission(room_id, sender_id, crate::room::Permission::MutePeer)
             {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -967,12 +985,12 @@ async fn handle_client_message(
 
             match state
                 .room_manager
-                .mute_peer(code, sender_id, &target_peer_id, duration_seconds)
+                .mute_peer(room_id, sender_id, &target_peer_id, duration_seconds)
             {
                 Ok(muted_until) => {
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
                         operator = %sender_id,
                         target = %target_peer_id,
                         muted_until = ?muted_until,
@@ -981,7 +999,7 @@ async fn handle_client_message(
                     );
 
                     state.sessions.broadcast(
-                        code,
+                        room_id,
                         ServerMessage::peer_muted(target_peer_id, muted_until),
                         None,
                     );
@@ -1006,7 +1024,7 @@ async fn handle_client_message(
         ClientMessage::UnmutePeer {
             peer_id: target_peer_id,
         } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -1019,7 +1037,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::MutePeer)
+                .has_permission(room_id, sender_id, crate::room::Permission::MutePeer)
             {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -1028,11 +1046,11 @@ async fn handle_client_message(
                 return;
             }
 
-            match state.room_manager.unmute_peer(code, sender_id, &target_peer_id) {
+            match state.room_manager.unmute_peer(room_id, sender_id, &target_peer_id) {
                 Ok(()) => {
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
                         operator = %sender_id,
                         target = %target_peer_id,
                         event = "UNMUTE_PEER",
@@ -1040,7 +1058,7 @@ async fn handle_client_message(
                     );
 
                     state.sessions.broadcast(
-                        code,
+                        room_id,
                         ServerMessage::peer_unmuted(target_peer_id),
                         None,
                     );
@@ -1063,7 +1081,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::TransferOwnership { new_owner_peer_id } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -1076,7 +1094,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::TransferOwnership)
+                .has_permission(room_id, sender_id, crate::room::Permission::TransferOwnership)
             {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -1095,12 +1113,13 @@ async fn handle_client_message(
 
             match state
                 .room_manager
-                .transfer_ownership(code, sender_id, &new_owner_peer_id)
+                .transfer_ownership(room_id, sender_id, &new_owner_peer_id)
             {
-                Ok(()) => {
+                Ok(current_code) => {
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
+                        room = %current_code,
                         operator = %sender_id,
                         new_owner = %new_owner_peer_id,
                         event = "TRANSFER_OWNERSHIP",
@@ -1108,8 +1127,8 @@ async fn handle_client_message(
                     );
 
                     state.sessions.broadcast(
-                        code,
-                        ServerMessage::room_owner_changed(code.to_string(), new_owner_peer_id),
+                        room_id,
+                        ServerMessage::room_owner_changed(current_code.to_string(), new_owner_peer_id),
                         None,
                     );
                 }
@@ -1131,7 +1150,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::SetRoomLocked { locked } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -1144,7 +1163,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::LockRoom)
+                .has_permission(room_id, sender_id, crate::room::Permission::LockRoom)
             {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -1155,12 +1174,13 @@ async fn handle_client_message(
 
             match state
                 .room_manager
-                .set_room_locked(code, sender_id, locked)
+                .set_room_locked(room_id, sender_id, locked)
             {
-                Ok(()) => {
+                Ok(current_code) => {
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
+                        room = %current_code,
                         operator = %sender_id,
                         locked = locked,
                         event = "SET_ROOM_LOCKED",
@@ -1168,8 +1188,8 @@ async fn handle_client_message(
                     );
 
                     state.sessions.broadcast(
-                        code,
-                        ServerMessage::room_locked(code.to_string(), locked),
+                        room_id,
+                        ServerMessage::room_locked(current_code.to_string(), locked),
                         None,
                     );
                 }
@@ -1188,7 +1208,7 @@ async fn handle_client_message(
             peer_id: target_peer_id,
             blocked,
         } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -1201,7 +1221,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::ManageChatVisibility)
+                .has_permission(room_id, sender_id, crate::room::Permission::ManageChatVisibility)
             {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -1212,12 +1232,12 @@ async fn handle_client_message(
 
             match state
                 .room_manager
-                .set_chat_visibility_blocked(code, sender_id, &target_peer_id, blocked)
+                .set_chat_visibility_blocked(room_id, sender_id, &target_peer_id, blocked)
             {
                 Ok(()) => {
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
                         operator = %sender_id,
                         target = %target_peer_id,
                         blocked = blocked,
@@ -1226,7 +1246,7 @@ async fn handle_client_message(
                     );
 
                     state.sessions.broadcast(
-                        code,
+                        room_id,
                         ServerMessage::chat_visibility_blocked(target_peer_id, blocked),
                         None,
                     );
@@ -1252,7 +1272,7 @@ async fn handle_client_message(
             peer_id: target_peer_id,
             blocked,
         } => {
-            let (code, sender_id, _) = match current_session {
+            let (room_id, sender_id, _) = match current_session {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -1265,7 +1285,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::ManageFileVisibility)
+                .has_permission(room_id, sender_id, crate::room::Permission::ManageFileVisibility)
             {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -1276,12 +1296,12 @@ async fn handle_client_message(
 
             match state
                 .room_manager
-                .set_file_visibility_blocked(code, sender_id, &target_peer_id, blocked)
+                .set_file_visibility_blocked(room_id, sender_id, &target_peer_id, blocked)
             {
                 Ok(()) => {
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
                         operator = %sender_id,
                         target = %target_peer_id,
                         blocked = blocked,
@@ -1290,7 +1310,7 @@ async fn handle_client_message(
                     );
 
                     state.sessions.broadcast(
-                        code,
+                        room_id,
                         ServerMessage::file_visibility_blocked(target_peer_id, blocked),
                         None,
                     );
@@ -1313,7 +1333,7 @@ async fn handle_client_message(
             }
         }
         ClientMessage::DetonateRoom => {
-            let (code, sender_id, _) = match current_session.as_ref() {
+            let (room_id, sender_id, _) = match current_session.as_ref() {
                 Some(s) => s,
                 None => {
                     let _ = tx.send(ServerMessage::error(
@@ -1326,7 +1346,7 @@ async fn handle_client_message(
 
             if !state
                 .room_manager
-                .has_permission(code, sender_id, crate::room::Permission::DetonateRoom)
+                .has_permission(room_id, sender_id, crate::room::Permission::DetonateRoom)
             {
                 let _ = tx.send(ServerMessage::error(
                     "UNAUTHORIZED",
@@ -1335,11 +1355,11 @@ async fn handle_client_message(
                 return;
             }
 
-            match state.room_manager.detonate_room(code, sender_id) {
+            match state.room_manager.detonate_room(room_id, sender_id) {
                 Ok(()) => {
                     info!(
                         connection_id = %connection_id,
-                        room = %code,
+                        room_id = %room_id,
                         operator = %sender_id,
                         event = "DETONATE_ROOM",
                         "Room detonated by authorized owner"

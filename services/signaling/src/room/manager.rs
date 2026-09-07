@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::limiter::RateKey;
 use crate::room::broadcast::{LoggingBroadcaster, RoomBroadcaster};
 use crate::room::code::{RoomCode, RoomCodeError};
+use crate::room::id::RoomId;
 use crate::room::state::{LifecycleAction, PasswordStatus, RoomError, RoomLifecycleState, RoomState};
 use chrono::Utc;
 use dashmap::DashMap;
@@ -16,14 +17,22 @@ pub struct PeerLeaveOutcome {
     pub was_owner: bool,
     pub new_owner_id: Option<String>,
     pub room_destroyed: bool,
+    pub current_code: RoomCode,
 }
 
 /// In-memory manager orchestrating all room states without persistent storage.
 /// FastChat guarantees zero disk footprint and zero database storage.
+///
+/// Room state storage is partitioned into two concurrent data structures:
+/// - `rooms`: Primary map indexed by immutable `RoomId` (UUID v4), preserved across all code rotations.
+/// - `code_to_id`: Secondary auxiliary index mapping public 12-digit `RoomCode` to `RoomId`,
+///   used exclusively for peer discovery during `JOIN_ROOM`.
 #[derive(Debug)]
 pub struct RoomManager {
-    /// Lock-free concurrent hash map storing all active room states.
-    pub rooms: DashMap<RoomCode, RoomState>,
+    /// Lock-free concurrent hash map storing all active room states keyed by immutable RoomId.
+    pub rooms: DashMap<RoomId, RoomState>,
+    /// Auxiliary lookup mapping public RoomCode to RoomId for JOIN_ROOM discovery.
+    pub code_to_id: DashMap<RoomCode, RoomId>,
     /// Global application configuration.
     pub config: Config,
     /// Broadcaster interface to notify clients of lifecycle events.
@@ -35,6 +44,7 @@ impl RoomManager {
     pub fn new(config: Config) -> Self {
         Self {
             rooms: DashMap::new(),
+            code_to_id: DashMap::new(),
             config,
             broadcaster: Arc::new(LoggingBroadcaster),
         }
@@ -44,22 +54,26 @@ impl RoomManager {
     pub fn with_broadcaster(config: Config, broadcaster: Arc<dyn RoomBroadcaster>) -> Self {
         Self {
             rooms: DashMap::new(),
+            code_to_id: DashMap::new(),
             config,
             broadcaster,
         }
     }
 
-    /// Creates a new ephemeral room with a unique 12-digit code.
+    /// Creates a new ephemeral room with a unique `RoomId` and an initial 12-digit `RoomCode`.
+    /// Inserts entries into both primary `rooms` storage and secondary `code_to_id` index.
     /// Sets initial expiration timer to `config.initial_room_duration_secs` (10m).
     pub fn create_room(
         &self,
         owner_peer_id: Option<String>,
         owner_rate_key: Option<RateKey>,
         password_status: PasswordStatus,
-    ) -> Result<RoomCode, RoomCodeError> {
-        let code = RoomCode::generate_unique(&self.rooms)?;
+    ) -> Result<(RoomId, RoomCode), RoomCodeError> {
+        let code = RoomCode::generate_unique(&self.code_to_id)?;
+        let room_id = RoomId::generate();
         let now_ts = Utc::now().timestamp();
         let state = RoomState::new(
+            room_id,
             code.clone(),
             owner_peer_id,
             owner_rate_key,
@@ -68,9 +82,10 @@ impl RoomManager {
             now_ts,
         );
 
-        self.rooms.insert(code.clone(), state);
-        info!(room = %code, "Created new ephemeral room in-memory");
-        Ok(code)
+        self.rooms.insert(room_id, state);
+        self.code_to_id.insert(code.clone(), room_id);
+        info!(room_id = %room_id, room = %code, "Created new ephemeral room in-memory");
+        Ok((room_id, code))
     }
 
     /// Counts active rooms owned by the specified rate key.
@@ -89,26 +104,37 @@ impl RoomManager {
         self.count_active_rooms_by_owner(key, now_ts)
     }
 
-    /// Retrieves a cloned snapshot of the current state of a room, if it exists.
-    pub fn get_room_state(&self, code: &RoomCode) -> Option<RoomState> {
-        self.rooms.get(code).map(|r| r.value().clone())
+    /// Resolves `RoomId` from public `RoomCode` using the secondary lookup map.
+    pub fn get_room_id_by_code(&self, code: &RoomCode) -> Option<RoomId> {
+        self.code_to_id.get(code).map(|r| *r.value())
     }
 
-    /// Adds a peer to the specified room.
+    /// Retrieves a cloned snapshot of the current state of a room by `RoomId`, if it exists.
+    pub fn get_room_state(&self, id: &RoomId) -> Option<RoomState> {
+        self.rooms.get(id).map(|r| r.value().clone())
+    }
+
+    /// Retrieves a cloned snapshot of the current state of a room by public `RoomCode`, if it exists.
+    pub fn get_room_state_by_code(&self, code: &RoomCode) -> Option<RoomState> {
+        let id = self.get_room_id_by_code(code)?;
+        self.get_room_state(&id)
+    }
+
+    /// Adds a peer to the specified room by `RoomId`.
     pub fn join_room(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         peer_id: String,
         is_owner: bool,
         rate_key: Option<RateKey>,
     ) -> Result<(), RoomError> {
-        self.join_room_with_password(code, peer_id, is_owner, None, rate_key)
+        self.join_room_with_password(id, peer_id, is_owner, None, rate_key)
     }
 
-    /// Adds a peer to the specified room with password verification.
+    /// Adds a peer to the specified room by `RoomId` with password verification.
     pub fn join_room_with_password(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         peer_id: String,
         is_owner: bool,
         password: Option<&str>,
@@ -116,83 +142,105 @@ impl RoomManager {
     ) -> Result<(), RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(peer_id.clone()))?;
 
         let now_ts = Utc::now().timestamp();
         room.add_peer_with_password(peer_id, is_owner, password, now_ts, &self.config, rate_key)
     }
 
-    /// Performs rekeying on an active room, configuring or updating password protection.
-    pub fn rekey_room(
+    /// Adds a peer by resolving public `RoomCode` through secondary index to `RoomId`.
+    pub fn join_room_by_code(
         &self,
         code: &RoomCode,
+        peer_id: String,
+        is_owner: bool,
+        password: Option<&str>,
+        rate_key: Option<RateKey>,
+    ) -> Result<RoomId, RoomError> {
+        let id = self
+            .get_room_id_by_code(code)
+            .ok_or_else(|| RoomError::PeerNotFound(peer_id.clone()))?;
+        self.join_room_with_password(&id, peer_id, is_owner, password, rate_key)?;
+        Ok(id)
+    }
+
+    /// Performs rekeying on an active room by `RoomId`, configuring or updating password protection.
+    pub fn rekey_room(
+        &self,
+        id: &RoomId,
         peer_id: &str,
         password: &str,
         salt: Option<[u8; 16]>,
-    ) -> Result<PasswordStatus, RoomError> {
+    ) -> Result<(RoomCode, PasswordStatus), RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(peer_id.to_string()))?;
 
         room.rekey_by_owner(peer_id, password, salt)?;
-        info!(room = %code, peer = %peer_id, "Room rekeyed by owner with password protection");
-        Ok(room.password_status.clone())
+        let current_code = room.current_code.clone();
+        let status = room.password_status.clone();
+        info!(room_id = %id, room = %current_code, peer = %peer_id, "Room rekeyed by owner with password protection");
+        Ok((current_code, status))
     }
 
     /// Extends a room's lifetime by 5 minutes.
     /// Must be invoked by the room owner while in `ExtendableWindow` (remaining <= 2m).
-    pub fn extend_room(&self, code: &RoomCode, peer_id: &str) -> Result<(), RoomError> {
+    pub fn extend_room(&self, id: &RoomId, peer_id: &str) -> Result<(), RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(peer_id.to_string()))?;
 
         room.extend_by_owner(peer_id, &self.config)?;
+        let code = room.current_code.clone();
         self.broadcaster
-            .broadcast_state_changed(code, RoomLifecycleState::Active);
-        info!(room = %code, peer = %peer_id, "Room lifetime extended by 5 minutes");
+            .broadcast_state_changed(id, &code, RoomLifecycleState::Active);
+        info!(room_id = %id, room = %code, peer = %peer_id, "Room lifetime extended by 5 minutes");
         Ok(())
     }
 
     /// Manually closes a room by its owner. Transitions to `Closing` with a 10s grace period.
-    pub fn close_room(&self, code: &RoomCode, peer_id: &str) -> Result<(), RoomError> {
+    pub fn close_room(&self, id: &RoomId, peer_id: &str) -> Result<(), RoomError> {
         let now_ts = Utc::now().timestamp();
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(peer_id.to_string()))?;
 
         room.close_by_owner(peer_id, now_ts, &self.config)?;
+        let code = room.current_code.clone();
         self.broadcaster
-            .broadcast_state_changed(code, RoomLifecycleState::Closing);
-        info!(room = %code, peer = %peer_id, "Room manual closing initiated by owner");
+            .broadcast_state_changed(id, &code, RoomLifecycleState::Closing);
+        info!(room_id = %id, room = %code, peer = %peer_id, "Room manual closing initiated by owner");
         Ok(())
     }
 
     /// Immediately and permanently destroys a room without any grace period.
     ///
     /// The caller must hold `Permission::DetonateRoom`.
-    /// The room is instantly evicted from the in-memory DashMap, evaporating all ephemeral
-    /// state (peer lists, mute statuses, visibility blocks, and cryptographic salt),
-    /// and a ROOM_DETONATED broadcast is dispatched to disconnect all participants immediately.
-    pub fn detonate_room(&self, code: &RoomCode, operator_peer_id: &str) -> Result<(), RoomError> {
-        {
+    /// The room is instantly evicted from both `rooms` and `code_to_id` DashMaps,
+    /// evaporating all ephemeral state, and a ROOM_DETONATED broadcast is dispatched immediately.
+    pub fn detonate_room(&self, id: &RoomId, operator_peer_id: &str) -> Result<(), RoomError> {
+        let code = {
             let room = self
                 .rooms
-                .get(code)
+                .get(id)
                 .ok_or_else(|| RoomError::PeerNotFound(operator_peer_id.to_string()))?;
 
             if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::DetonateRoom) {
                 return Err(RoomError::Unauthorized);
             }
-        }
+            room.current_code.clone()
+        };
 
-        // Atomically evict room record from DashMap
-        self.rooms.remove(code);
-        self.broadcaster.broadcast_room_detonated(code);
+        // Atomically evict room record from both DashMaps
+        self.rooms.remove(id);
+        self.code_to_id.remove(&code);
+        self.broadcaster.broadcast_room_detonated(id, &code);
         info!(
+            room_id = %id,
             room = %code,
             operator = %operator_peer_id,
             "Room detonated and destroyed immediately by owner"
@@ -201,9 +249,9 @@ impl RoomManager {
     }
 
     /// Checks atomically whether a peer is the registered owner of the room.
-    pub fn is_owner(&self, code: &RoomCode, peer_id: &str) -> bool {
+    pub fn is_owner(&self, id: &RoomId, peer_id: &str) -> bool {
         self.rooms
-            .get(code)
+            .get(id)
             .map(|r| r.is_owner(peer_id))
             .unwrap_or(false)
     }
@@ -211,12 +259,12 @@ impl RoomManager {
     /// Evaluates whether a peer holds the specified permission within a room.
     pub fn has_permission(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         peer_id: &crate::room::permissions::PeerId,
         permission: crate::room::permissions::Permission,
     ) -> bool {
         self.rooms
-            .get(code)
+            .get(id)
             .map(|r| r.has_permission(peer_id, permission))
             .unwrap_or(false)
     }
@@ -224,16 +272,16 @@ impl RoomManager {
     /// Resolves the role assigned to a peer within a room, if the room exists.
     pub fn get_role(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         peer_id: &crate::room::permissions::PeerId,
     ) -> Option<crate::room::permissions::Role> {
-        self.rooms.get(code).map(|r| r.get_role(peer_id))
+        self.rooms.get(id).map(|r| r.get_role(peer_id))
     }
 
     /// Verifies whether the provided password matches the room's password requirement.
-    pub fn verify_room_password(&self, code: &RoomCode, password: &str) -> bool {
+    pub fn verify_room_password(&self, id: &RoomId, password: &str) -> bool {
         self.rooms
-            .get(code)
+            .get(id)
             .map(|r| r.password_status.has_password && r.verify_password(Some(password)))
             .unwrap_or(false)
     }
@@ -242,13 +290,13 @@ impl RoomManager {
     /// Kicked peer's rate key is added to the in-memory room blocklist.
     pub fn kick_peer(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         operator_peer_id: &str,
         target_peer_id: &str,
     ) -> Result<Option<RateKey>, RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(target_peer_id.to_string()))?;
 
         if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::KickPeer) {
@@ -259,8 +307,10 @@ impl RoomManager {
             return Err(RoomError::Unauthorized);
         }
 
+        let code = room.current_code.clone();
         let kicked_peer = room.kick_peer(target_peer_id)?;
         info!(
+            room_id = %id,
             room = %code,
             operator = %operator_peer_id,
             target = %target_peer_id,
@@ -272,14 +322,14 @@ impl RoomManager {
     /// Mutes a peer in the room if the operator holds `Permission::MutePeer`.
     pub fn mute_peer(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         operator_peer_id: &str,
         target_peer_id: &str,
         duration_secs: Option<u64>,
     ) -> Result<Option<i64>, RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(target_peer_id.to_string()))?;
 
         if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::MutePeer) {
@@ -287,8 +337,10 @@ impl RoomManager {
         }
 
         let now_ts = chrono::Utc::now().timestamp();
+        let code = room.current_code.clone();
         let until = room.mute_peer(target_peer_id, duration_secs, now_ts)?;
         info!(
+            room_id = %id,
             room = %code,
             operator = %operator_peer_id,
             target = %target_peer_id,
@@ -301,21 +353,23 @@ impl RoomManager {
     /// Unmutes a peer in the room if the operator holds `Permission::MutePeer`.
     pub fn unmute_peer(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         operator_peer_id: &str,
         target_peer_id: &str,
     ) -> Result<(), RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(target_peer_id.to_string()))?;
 
         if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::MutePeer) {
             return Err(RoomError::Unauthorized);
         }
 
+        let code = room.current_code.clone();
         room.unmute_peer(target_peer_id)?;
         info!(
+            room_id = %id,
             room = %code,
             operator = %operator_peer_id,
             target = %target_peer_id,
@@ -327,13 +381,13 @@ impl RoomManager {
     /// Transfers room ownership to another connected peer if the operator holds `Permission::TransferOwnership`.
     pub fn transfer_ownership(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         operator_peer_id: &str,
         new_owner_peer_id: &str,
-    ) -> Result<(), RoomError> {
+    ) -> Result<RoomCode, RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(new_owner_peer_id.to_string()))?;
 
         if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::TransferOwnership) {
@@ -352,25 +406,27 @@ impl RoomManager {
             return Err(RoomError::PeerNotFound(new_owner_peer_id.to_string()));
         }
 
+        let code = room.current_code.clone();
         info!(
+            room_id = %id,
             room = %code,
             operator = %operator_peer_id,
             new_owner = %new_owner_peer_id,
             "Room ownership transferred to peer"
         );
-        Ok(())
+        Ok(code)
     }
 
     /// Sets the room lock status if the operator holds `Permission::LockRoom`.
     pub fn set_room_locked(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         operator_peer_id: &str,
         locked: bool,
-    ) -> Result<(), RoomError> {
+    ) -> Result<RoomCode, RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(operator_peer_id.to_string()))?;
 
         if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::LockRoom) {
@@ -378,39 +434,43 @@ impl RoomManager {
         }
 
         room.set_locked(locked);
+        let code = room.current_code.clone();
         info!(
+            room_id = %id,
             room = %code,
             operator = %operator_peer_id,
             locked = locked,
             "Room lock status updated"
         );
-        Ok(())
+        Ok(code)
     }
 
     /// Checks whether a room is currently locked to new participants.
-    pub fn is_room_locked(&self, code: &RoomCode) -> bool {
-        self.rooms.get(code).map(|r| r.is_locked).unwrap_or(false)
+    pub fn is_room_locked(&self, id: &RoomId) -> bool {
+        self.rooms.get(id).map(|r| r.is_locked).unwrap_or(false)
     }
 
     /// Sets whether a peer is blocked from receiving chat messages if the operator holds `Permission::ManageChatVisibility`.
     pub fn set_chat_visibility_blocked(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         operator_peer_id: &str,
         target_peer_id: &str,
         blocked: bool,
     ) -> Result<(), RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(operator_peer_id.to_string()))?;
 
         if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::ManageChatVisibility) {
             return Err(RoomError::Unauthorized);
         }
 
+        let code = room.current_code.clone();
         room.set_chat_visibility_blocked(target_peer_id, blocked)?;
         info!(
+            room_id = %id,
             room = %code,
             operator = %operator_peer_id,
             target = %target_peer_id,
@@ -423,22 +483,24 @@ impl RoomManager {
     /// Sets whether a peer is blocked from receiving files if the operator holds `Permission::ManageFileVisibility`.
     pub fn set_file_visibility_blocked(
         &self,
-        code: &RoomCode,
+        id: &RoomId,
         operator_peer_id: &str,
         target_peer_id: &str,
         blocked: bool,
     ) -> Result<(), RoomError> {
         let mut room = self
             .rooms
-            .get_mut(code)
+            .get_mut(id)
             .ok_or_else(|| RoomError::PeerNotFound(operator_peer_id.to_string()))?;
 
         if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::ManageFileVisibility) {
             return Err(RoomError::Unauthorized);
         }
 
+        let code = room.current_code.clone();
         room.set_file_visibility_blocked(target_peer_id, blocked)?;
         info!(
+            room_id = %id,
             room = %code,
             operator = %operator_peer_id,
             target = %target_peer_id,
@@ -452,22 +514,26 @@ impl RoomManager {
     ///
     /// - If the departing peer was the owner and other peers remain, ownership is
     ///   automatically transferred to the oldest remaining participant.
-    /// - If the room has no remaining peers, it is immediately purged from memory.
-    pub fn leave_room(&self, code: &RoomCode, peer_id: &str) -> Option<PeerLeaveOutcome> {
-        let mut room_entry = self.rooms.get_mut(code)?;
+    /// - If the room has no remaining peers, it is immediately purged from both `rooms`
+    ///   and `code_to_id` maps.
+    pub fn leave_room(&self, id: &RoomId, peer_id: &str) -> Option<PeerLeaveOutcome> {
+        let mut room_entry = self.rooms.get_mut(id)?;
         let removed_peer = room_entry.remove_peer(peer_id).ok()?;
         let was_owner = removed_peer.is_owner;
+        let current_code = room_entry.current_code.clone();
 
         if room_entry.peers.is_empty() {
-            // Drop mutable reference before removing from DashMap
+            // Drop mutable reference before removing from DashMaps
             drop(room_entry);
-            self.rooms.remove(code);
-            self.broadcaster.broadcast_room_closed(code, "room_empty");
-            info!(room = %code, "Room emptied; automatically destroyed from memory");
+            self.rooms.remove(id);
+            self.code_to_id.remove(&current_code);
+            self.broadcaster.broadcast_room_closed(id, &current_code, "room_empty");
+            info!(room_id = %id, room = %current_code, "Room emptied; automatically destroyed from memory");
             return Some(PeerLeaveOutcome {
                 was_owner,
                 new_owner_id: None,
                 room_destroyed: true,
+                current_code,
             });
         }
 
@@ -477,7 +543,8 @@ impl RoomManager {
             let assigned_owner = room_entry.peers[0].id.clone();
             room_entry.set_owner(&assigned_owner);
             info!(
-                room = %code,
+                room_id = %id,
+                room = %current_code,
                 previous_owner = %peer_id,
                 new_owner = %assigned_owner,
                 "Room owner departed; transferred ownership to next participant"
@@ -489,53 +556,58 @@ impl RoomManager {
             was_owner,
             new_owner_id,
             room_destroyed: false,
+            current_code,
         })
     }
 
     /// Evaluates lifecycle across all rooms at a specific timestamp.
     /// Acts as the single source of truth for expiration timers:
     /// - Advances states to ExtendableWindow or Closing
-    /// - Purges Destroyed rooms from memory and triggers ROOM_CLOSED broadcast
+    /// - Purges Destroyed rooms from both primary and secondary DashMaps and triggers ROOM_CLOSED broadcast
     /// - Automatically expires temporary mutes and triggers PEER_UNMUTED broadcast.
-    pub fn tick_lifecycle(&self, now_ts: i64) -> Vec<(RoomCode, LifecycleAction)> {
+    pub fn tick_lifecycle(&self, now_ts: i64) -> Vec<(RoomId, LifecycleAction)> {
         let mut actions = Vec::new();
         let mut unmuted_peers = Vec::new();
 
         // Pass 1: Evaluate state under mutable reference and collect actions & expired mutes
         for mut entry in self.rooms.iter_mut() {
             let action = entry.value_mut().evaluate_lifecycle(now_ts, &self.config);
+            let id = *entry.key();
+            let code = entry.value().current_code.clone();
             if action != LifecycleAction::None {
-                actions.push((entry.key().clone(), action));
+                actions.push((id, code, action));
             }
 
             let unmuted = entry.value_mut().check_expired_mutes(now_ts);
             for peer_id in unmuted {
-                unmuted_peers.push((entry.key().clone(), peer_id));
+                unmuted_peers.push((id, peer_id));
             }
         }
 
         // Pass 2: Execute actions and notify broadcasters
-        for (code, action) in &actions {
+        for (id, code, action) in &actions {
             match action {
                 LifecycleAction::StateChanged(new_state) => {
-                    self.broadcaster.broadcast_state_changed(code, *new_state);
+                    self.broadcaster.broadcast_state_changed(id, code, *new_state);
                 }
                 LifecycleAction::Destroy => {
-                    self.rooms.remove(code);
-                    self.broadcaster
-                        .broadcast_room_closed(code, "lifetime_or_grace_period_expired");
-                    info!(room = %code, "Room purged from DashMap memory (destroyed)");
+                    if let Some((_, destroyed_room)) = self.rooms.remove(id) {
+                        self.code_to_id.remove(&destroyed_room.current_code);
+                        self.broadcaster
+                            .broadcast_room_closed(id, &destroyed_room.current_code, "lifetime_or_grace_period_expired");
+                        info!(room_id = %id, room = %destroyed_room.current_code, "Room purged from DashMap memory (destroyed)");
+                    }
                 }
                 LifecycleAction::None => {}
             }
         }
 
         // Pass 3: Broadcast expired mutes
-        for (code, peer_id) in unmuted_peers {
-            self.broadcaster.broadcast_peer_unmuted(&code, &peer_id);
+        for (id, peer_id) in unmuted_peers {
+            self.broadcaster.broadcast_peer_unmuted(&id, &peer_id);
         }
 
-        actions
+        actions.into_iter().map(|(id, _, action)| (id, action)).collect()
     }
 
     /// Returns current number of active rooms stored in memory.
@@ -576,19 +648,19 @@ mod tests {
     }
 
     impl RoomBroadcaster for MockBroadcaster {
-        fn broadcast_room_closed(&self, _code: &RoomCode, _reason: &str) {
+        fn broadcast_room_closed(&self, _id: &RoomId, _code: &RoomCode, _reason: &str) {
             self.closed_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn broadcast_room_detonated(&self, _code: &RoomCode) {
+        fn broadcast_room_detonated(&self, _id: &RoomId, _code: &RoomCode) {
             self.detonated_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn broadcast_state_changed(&self, _code: &RoomCode, _new_state: RoomLifecycleState) {
+        fn broadcast_state_changed(&self, _id: &RoomId, _code: &RoomCode, _new_state: RoomLifecycleState) {
             self.state_changes.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn broadcast_peer_unmuted(&self, _code: &RoomCode, _peer_id: &str) {
+        fn broadcast_peer_unmuted(&self, _id: &RoomId, _peer_id: &str) {
             self.unmuted_count.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -598,16 +670,24 @@ mod tests {
         let config = Config::default();
         let manager = RoomManager::new(config);
 
-        let code = manager
+        let (room_id, code) = manager
             .create_room(Some("alice".to_string()), None, PasswordStatus::none())
             .expect("Room creation failed");
 
         assert_eq!(manager.room_count(), 1);
+        assert_eq!(manager.code_to_id.len(), 1);
 
-        let state = manager.get_room_state(&code).expect("Room should exist");
-        assert_eq!(state.code, code);
+        let state = manager.get_room_state(&room_id).expect("Room should exist");
+        assert_eq!(state.id, room_id);
+        assert_eq!(state.current_code, code);
         assert_eq!(state.peers.len(), 1);
         assert_eq!(state.peers[0].id, "alice");
+
+        let id_from_code = manager.get_room_id_by_code(&code).expect("Should find ID by code");
+        assert_eq!(id_from_code, room_id);
+
+        let state_from_code = manager.get_room_state_by_code(&code).expect("Should find state by code");
+        assert_eq!(state_from_code.id, room_id);
     }
 
     #[test]
@@ -620,7 +700,7 @@ mod tests {
 
         assert_eq!(manager.count_active_rooms_by_owner(&key_a, now), 0);
 
-        let code_a = manager
+        let (room_id_a, _) = manager
             .create_room(Some("alice".to_string()), Some(key_a), PasswordStatus::none())
             .unwrap();
         assert_eq!(manager.count_active_rooms_by_owner(&key_a, now), 1);
@@ -628,13 +708,13 @@ mod tests {
 
         // Bob joins room
         manager
-            .join_room(&code_a, "bob".to_string(), false, Some(key_b))
+            .join_room(&room_id_a, "bob".to_string(), false, Some(key_b))
             .unwrap();
         assert_eq!(manager.count_active_rooms_by_owner(&key_a, now), 1);
         assert_eq!(manager.count_active_rooms_by_owner(&key_b, now), 0);
 
         // Alice (owner) leaves -> ownership transfers to Bob
-        let outcome = manager.leave_room(&code_a, "alice").unwrap();
+        let outcome = manager.leave_room(&room_id_a, "alice").unwrap();
         assert_eq!(outcome.new_owner_id, Some("bob".to_string()));
 
         // Limiter now reflects Bob as owner, Alice is freed
@@ -642,7 +722,7 @@ mod tests {
         assert_eq!(manager.count_active_rooms_by_owner(&key_b, now), 1);
 
         // Close room -> Bob is freed
-        manager.close_room(&code_a, "bob").unwrap();
+        manager.close_room(&room_id_a, "bob").unwrap();
         assert_eq!(manager.count_active_rooms_by_owner(&key_b, now), 0);
     }
 
@@ -658,11 +738,11 @@ mod tests {
         let broadcaster = Arc::new(MockBroadcaster::default());
         let manager = RoomManager::with_broadcaster(config, broadcaster.clone());
 
-        let code = manager
+        let (room_id, code) = manager
             .create_room(Some("alice".to_string()), None, PasswordStatus::none())
             .unwrap();
 
-        let initial_state = manager.get_room_state(&code).unwrap();
+        let initial_state = manager.get_room_state(&room_id).unwrap();
         let start_time = initial_state.created_at;
 
         // 1. Tick at +300s -> no change (still Creating/Active)
@@ -673,22 +753,24 @@ mod tests {
         // 2. Tick at +480s (remaining 120s <= 120s) -> ExtendableWindow
         manager.tick_lifecycle(start_time + 480);
         assert_eq!(broadcaster.state_changes.load(Ordering::SeqCst), 1);
-        let room = manager.get_room_state(&code).unwrap();
+        let room = manager.get_room_state(&room_id).unwrap();
         assert_eq!(room.state, RoomLifecycleState::ExtendableWindow);
 
         // 3. Tick at +601s (past 600s) -> Closing
         manager.tick_lifecycle(start_time + 601);
         assert_eq!(broadcaster.state_changes.load(Ordering::SeqCst), 2);
-        let room = manager.get_room_state(&code).unwrap();
+        let room = manager.get_room_state(&room_id).unwrap();
         assert_eq!(room.state, RoomLifecycleState::Closing);
 
         // 4. Tick during grace period (+605s) -> still Closing, not destroyed
         manager.tick_lifecycle(start_time + 605);
         assert_eq!(manager.room_count(), 1);
 
-        // 5. Tick after grace period (+612s) -> Destroyed, removed from DashMap
+        // 5. Tick after grace period (+612s) -> Destroyed, removed from both DashMaps
         manager.tick_lifecycle(start_time + 612);
         assert_eq!(manager.room_count(), 0);
+        assert_eq!(manager.code_to_id.len(), 0);
+        assert!(manager.get_room_id_by_code(&code).is_none());
         assert_eq!(broadcaster.closed_count.load(Ordering::SeqCst), 1);
     }
 
@@ -701,60 +783,65 @@ mod tests {
         let key_bob = RateKey([2u8; 16]);
         let now = 1_000_000;
 
-        let code = manager
+        let (room_id, code) = manager
             .create_room(Some("alice".to_string()), Some(key_alice), PasswordStatus::none())
             .unwrap();
 
-        manager.join_room(&code, "bob".to_string(), false, Some(key_bob)).unwrap();
-        manager.join_room(&code, "charlie".to_string(), false, None).unwrap();
+        manager.join_room(&room_id, "bob".to_string(), false, Some(key_bob)).unwrap();
+        manager.join_room(&room_id, "charlie".to_string(), false, None).unwrap();
 
-        assert!(manager.is_owner(&code, "alice"));
-        assert!(!manager.is_owner(&code, "bob"));
-        assert!(!manager.is_owner(&code, "charlie"));
+        assert!(manager.is_owner(&room_id, "alice"));
+        assert!(!manager.is_owner(&room_id, "bob"));
+        assert!(!manager.is_owner(&room_id, "charlie"));
         assert_eq!(manager.count_active_rooms_by_owner(&key_alice, now), 1);
         assert_eq!(manager.count_active_rooms_by_owner(&key_bob, now), 0);
 
         // 1. Charlie (non-owner) leaves
-        let outcome_c = manager.leave_room(&code, "charlie").unwrap();
+        let outcome_c = manager.leave_room(&room_id, "charlie").unwrap();
         assert_eq!(
             outcome_c,
             PeerLeaveOutcome {
                 was_owner: false,
                 new_owner_id: None,
                 room_destroyed: false,
+                current_code: code.clone(),
             }
         );
-        assert!(manager.is_owner(&code, "alice"));
+        assert!(manager.is_owner(&room_id, "alice"));
         assert_eq!(manager.room_count(), 1);
         assert_eq!(manager.count_active_rooms_by_owner(&key_alice, now), 1);
 
         // 2. Alice (owner) leaves -> ownership transfers to bob
-        let outcome_a = manager.leave_room(&code, "alice").unwrap();
+        let outcome_a = manager.leave_room(&room_id, "alice").unwrap();
         assert_eq!(
             outcome_a,
             PeerLeaveOutcome {
                 was_owner: true,
                 new_owner_id: Some("bob".to_string()),
                 room_destroyed: false,
+                current_code: code.clone(),
             }
         );
-        assert!(manager.is_owner(&code, "bob"));
-        assert!(!manager.is_owner(&code, "alice"));
+        assert!(manager.is_owner(&room_id, "bob"));
+        assert!(!manager.is_owner(&room_id, "alice"));
         assert_eq!(manager.room_count(), 1);
         assert_eq!(manager.count_active_rooms_by_owner(&key_alice, now), 0);
         assert_eq!(manager.count_active_rooms_by_owner(&key_bob, now), 1);
 
-        // 3. Bob leaves -> room empty -> auto destroyed immediately
-        let outcome_b = manager.leave_room(&code, "bob").unwrap();
+        // 3. Bob leaves -> room empty -> auto destroyed immediately from both DashMaps
+        let outcome_b = manager.leave_room(&room_id, "bob").unwrap();
         assert_eq!(
             outcome_b,
             PeerLeaveOutcome {
                 was_owner: true,
                 new_owner_id: None,
                 room_destroyed: true,
+                current_code: code.clone(),
             }
         );
         assert_eq!(manager.room_count(), 0);
+        assert_eq!(manager.code_to_id.len(), 0);
+        assert!(manager.get_room_id_by_code(&code).is_none());
         assert_eq!(broadcaster.closed_count.load(Ordering::SeqCst), 1);
         assert_eq!(manager.count_active_rooms_by_owner(&key_bob, now), 0);
     }
@@ -763,37 +850,37 @@ mod tests {
     fn test_manager_chat_and_file_visibility_authorization() {
         let config = Config::default();
         let manager = RoomManager::new(config);
-        let code = manager
+        let (room_id, _) = manager
             .create_room(Some("alice".to_string()), None, PasswordStatus::none())
             .unwrap();
 
         manager
-            .join_room(&code, "bob".to_string(), false, None)
+            .join_room(&room_id, "bob".to_string(), false, None)
             .unwrap();
 
         // 1. Bob (participant) attempts to block alice -> Unauthorized
-        let res_bob_chat = manager.set_chat_visibility_blocked(&code, "bob", "alice", true);
+        let res_bob_chat = manager.set_chat_visibility_blocked(&room_id, "bob", "alice", true);
         assert_eq!(res_bob_chat, Err(RoomError::Unauthorized));
 
-        let res_bob_file = manager.set_file_visibility_blocked(&code, "bob", "alice", true);
+        let res_bob_file = manager.set_file_visibility_blocked(&room_id, "bob", "alice", true);
         assert_eq!(res_bob_file, Err(RoomError::Unauthorized));
 
         // 2. Alice (owner) blocks bob from chat -> Success
-        let res_alice_chat = manager.set_chat_visibility_blocked(&code, "alice", "bob", true);
+        let res_alice_chat = manager.set_chat_visibility_blocked(&room_id, "alice", "bob", true);
         assert!(res_alice_chat.is_ok());
-        let room_snap = manager.get_room_state(&code).unwrap();
+        let room_snap = manager.get_room_state(&room_id).unwrap();
         assert!(room_snap.is_chat_blocked("bob"));
 
         // 3. Alice (owner) blocks bob from files -> Success
-        let res_alice_file = manager.set_file_visibility_blocked(&code, "alice", "bob", true);
+        let res_alice_file = manager.set_file_visibility_blocked(&room_id, "alice", "bob", true);
         assert!(res_alice_file.is_ok());
-        let room_snap2 = manager.get_room_state(&code).unwrap();
+        let room_snap2 = manager.get_room_state(&room_id).unwrap();
         assert!(room_snap2.is_file_blocked("bob"));
 
         // 4. Alice unblocks bob
-        assert!(manager.set_chat_visibility_blocked(&code, "alice", "bob", false).is_ok());
-        assert!(manager.set_file_visibility_blocked(&code, "alice", "bob", false).is_ok());
-        let room_snap3 = manager.get_room_state(&code).unwrap();
+        assert!(manager.set_chat_visibility_blocked(&room_id, "alice", "bob", false).is_ok());
+        assert!(manager.set_file_visibility_blocked(&room_id, "alice", "bob", false).is_ok());
+        let room_snap3 = manager.get_room_state(&room_id).unwrap();
         assert!(!room_snap3.is_chat_blocked("bob"));
         assert!(!room_snap3.is_file_blocked("bob"));
     }
@@ -804,32 +891,36 @@ mod tests {
         let broadcaster = Arc::new(MockBroadcaster::default());
         let manager = RoomManager::with_broadcaster(config.clone(), broadcaster.clone());
 
-        let code = manager
+        let (room_id, code) = manager
             .create_room(Some("alice".to_string()), None, PasswordStatus::none())
             .unwrap();
 
         manager
-            .join_room(&code, "bob".to_string(), false, None)
+            .join_room(&room_id, "bob".to_string(), false, None)
             .unwrap();
 
         // 1. Bob (non-owner participant) attempts to detonate -> Unauthorized
-        let detonate_res = manager.detonate_room(&code, "bob");
+        let detonate_res = manager.detonate_room(&room_id, "bob");
         assert_eq!(detonate_res, Err(RoomError::Unauthorized));
-        assert!(manager.get_room_state(&code).is_some());
+        assert!(manager.get_room_state(&room_id).is_some());
         assert_eq!(broadcaster.detonated_count.load(Ordering::SeqCst), 0);
 
         // 2. Alice (owner) detonates room -> Success
-        let detonate_res = manager.detonate_room(&code, "alice");
+        let detonate_res = manager.detonate_room(&room_id, "alice");
         assert!(detonate_res.is_ok());
 
-        // Room is instantly wiped from DashMap with no grace period or closing state
-        assert!(manager.get_room_state(&code).is_none());
+        // Room is instantly wiped from both rooms and code_to_id DashMaps
+        assert!(manager.get_room_state(&room_id).is_none());
         assert_eq!(manager.room_count(), 0);
+        assert_eq!(manager.code_to_id.len(), 0);
+        assert!(manager.get_room_id_by_code(&code).is_none());
         assert_eq!(broadcaster.detonated_count.load(Ordering::SeqCst), 1);
 
         // 3. Confirm that the exact same room code can be re-created and used with clean state
         let now_ts = Utc::now().timestamp();
+        let fresh_id = RoomId::generate();
         let fresh_room = RoomState::new(
+            fresh_id,
             code.clone(),
             Some("carol".to_string()),
             None,
@@ -837,8 +928,9 @@ mod tests {
             &config,
             now_ts,
         );
-        manager.rooms.insert(code.clone(), fresh_room);
-        let fresh_snap = manager.get_room_state(&code).expect("Fresh room should exist");
+        manager.rooms.insert(fresh_id, fresh_room);
+        manager.code_to_id.insert(code.clone(), fresh_id);
+        let fresh_snap = manager.get_room_state(&fresh_id).expect("Fresh room should exist");
         assert_eq!(fresh_snap.owner_peer_id(), Some("carol"));
         assert_eq!(fresh_snap.peers.len(), 1);
         assert_eq!(fresh_snap.state, RoomLifecycleState::Creating);

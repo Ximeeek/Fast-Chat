@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::limiter::RateKey;
 use crate::room::code::RoomCode;
+use crate::room::id::RoomId;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -128,7 +129,9 @@ pub enum LifecycleAction {
 /// All fields live exclusively in RAM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomState {
-    pub code: RoomCode,
+    pub id: RoomId,
+    #[serde(alias = "code")]
+    pub current_code: RoomCode,
     pub state: RoomLifecycleState,
     pub peers: Vec<Peer>,
     pub crypto_salt: [u8; 32],
@@ -151,6 +154,7 @@ impl RoomState {
     /// Creates a new room in the `Creating` lifecycle state.
     /// The server sets `expires_at = now + initial_duration_secs`.
     pub fn new(
+        id: RoomId,
         code: RoomCode,
         owner_peer_id: Option<String>,
         owner_rate_key: Option<RateKey>,
@@ -175,7 +179,8 @@ impl RoomState {
         }
 
         Self {
-            code,
+            id,
+            current_code: code,
             state: RoomLifecycleState::Creating,
             peers,
             crypto_salt,
@@ -189,6 +194,16 @@ impl RoomState {
             chat_blocked_peers: std::collections::HashSet::new(),
             file_blocked_peers: std::collections::HashSet::new(),
         }
+    }
+
+    /// Returns a reference to the current public room code.
+    pub fn code(&self) -> &RoomCode {
+        &self.current_code
+    }
+
+    /// Updates the current public room code.
+    pub fn set_current_code(&mut self, new_code: RoomCode) {
+        self.current_code = new_code;
     }
 
     /// Sets room lock status. When locked, new participants cannot join.
@@ -647,7 +662,9 @@ mod tests {
     fn test_room_creation() {
         let config = Config::default();
         let now = 1_000_000;
+        let room_id = RoomId::generate();
         let room = RoomState::new(
+            room_id,
             sample_code(),
             Some("owner-peer".to_string()),
             None,
@@ -656,6 +673,8 @@ mod tests {
             now,
         );
 
+        assert_eq!(room.id, room_id);
+        assert_eq!(room.current_code, sample_code());
         assert_eq!(room.state, RoomLifecycleState::Creating);
         assert_eq!(room.created_at, now);
         assert_eq!(room.expires_at, now + 600);
@@ -672,6 +691,7 @@ mod tests {
         };
 
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("owner".to_string()),
             None,
@@ -697,6 +717,7 @@ mod tests {
         let config = Config::default(); // initial 600s, threshold 120s, ext 300s, grace 10s
         let start_time = 10_000;
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("owner".to_string()),
             None,
@@ -758,6 +779,7 @@ mod tests {
         let config = Config::default();
         let start_time = 10_000;
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("owner".to_string()),
             None,
@@ -786,6 +808,7 @@ mod tests {
     fn test_password_and_rekey_flow() {
         let config = Config::default();
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("owner".to_string()),
             None,
@@ -829,6 +852,7 @@ mod tests {
         let key_alice = RateKey([1u8; 16]);
         let key_bob = RateKey([2u8; 16]);
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("alice".to_string()),
             Some(key_alice),
@@ -869,6 +893,7 @@ mod tests {
         let key_alice = RateKey([1u8; 16]);
         let key_bob = RateKey([2u8; 16]);
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("alice".to_string()),
             Some(key_alice),
@@ -892,6 +917,7 @@ mod tests {
     fn test_mute_peer_temporary_and_permanent_flow() {
         let config = Config::default();
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("alice".to_string()),
             None,
@@ -934,6 +960,7 @@ mod tests {
     fn test_room_lock_blocks_join() {
         let config = Config::default();
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("alice".to_string()),
             None,
@@ -964,6 +991,7 @@ mod tests {
     fn test_chat_and_file_visibility_blocking() {
         let config = Config::default();
         let mut room = RoomState::new(
+            RoomId::generate(),
             sample_code(),
             Some("alice".to_string()),
             None,
