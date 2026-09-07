@@ -1362,7 +1362,7 @@ async fn test_ws_set_room_password_owner_alone() {
 }
 
 #[tokio::test]
-async fn test_ws_kick_peer_and_reentry_blocked() {
+async fn test_ws_kick_peer_and_reentry_allowed() {
     let (addr, _state) = spawn_test_server(Config::default()).await;
     let ws_url = format!("ws://{addr}/ws");
 
@@ -1455,7 +1455,7 @@ async fn test_ws_kick_peer_and_reentry_blocked() {
         _ => panic!("Expected PeerLeft for bob, got {peer_left:?}"),
     }
 
-    // 7. Bob attempts to rejoin THIS room -> rejected with KICKED_FROM_ROOM
+    // 7. Bob attempts to rejoin THIS room -> allowed
     let (mut ws_b_retry, _) = connect_async(&ws_url).await.unwrap();
     let rejoin_attempt = ClientMessage::JoinRoom {
         code: room_code.clone(),
@@ -1467,11 +1467,16 @@ async fn test_ws_kick_peer_and_reentry_blocked() {
         .await
         .unwrap();
 
-    let retry_err_raw = ws_b_retry.next().await.unwrap().unwrap().into_text().unwrap();
-    let retry_err: ServerMessage = serde_json::from_str(&retry_err_raw).unwrap();
-    match retry_err {
-        ServerMessage::Error { code, .. } => assert_eq!(code, "KICKED_FROM_ROOM"),
-        _ => panic!("Expected KICKED_FROM_ROOM rejection on rejoin, got {retry_err:?}"),
+    let retry_resp_raw = ws_b_retry.next().await.unwrap().unwrap().into_text().unwrap();
+    let retry_resp: ServerMessage = serde_json::from_str(&retry_resp_raw).unwrap();
+    assert!(matches!(retry_resp, ServerMessage::JoinOk { .. }));
+
+    // 8. Alice consumes PeerJoined(bob-retry)
+    let peer_rejoined_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let peer_rejoined: ServerMessage = serde_json::from_str(&peer_rejoined_raw).unwrap();
+    match peer_rejoined {
+        ServerMessage::PeerJoined { peer_id, .. } => assert_eq!(peer_id, "bob-retry"),
+        _ => panic!("Expected PeerJoined for bob-retry, got {peer_rejoined:?}"),
     }
 }
 

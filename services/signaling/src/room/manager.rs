@@ -235,17 +235,9 @@ impl RoomManager {
             room = %code,
             operator = %operator_peer_id,
             target = %target_peer_id,
-            "Peer kicked from room and rate key recorded"
+            "Peer kicked from room"
         );
         Ok(kicked_peer.rate_key)
-    }
-
-    /// Checks whether a given rate key was kicked from this room.
-    pub fn is_rate_key_kicked(&self, code: &RoomCode, rate_key: &RateKey) -> bool {
-        self.rooms
-            .get(code)
-            .map(|r| r.is_rate_key_kicked(rate_key))
-            .unwrap_or(false)
     }
 
     /// Mutes a peer in the room if the operator holds `Permission::MutePeer`.

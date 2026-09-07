@@ -1050,8 +1050,15 @@
 					</svg>
 				</div>
 				<h2 class="text-lg font-bold uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">Removed From Room</h2>
-				<p class="text-xs text-red-300 mb-6">You were removed from this room by the moderator. Rejoining is blocked.</p>
+				<p class="text-xs text-red-300 mb-6">You were removed from this room by the host.</p>
 				<div class="flex items-center justify-center gap-2.5">
+					<button
+						type="button"
+						onclick={() => window.location.reload()}
+						class="min-h-[40px] py-2 px-6 rounded-full bg-red-600 hover:bg-red-500 text-white text-xs font-bold uppercase transition-all shadow-sm flex items-center cursor-pointer"
+					>
+						Rejoin Room
+					</button>
 					<a
 						href="/create"
 						class="min-h-[40px] py-2 px-6 rounded-full bg-white hover:bg-zinc-200 text-black text-xs font-bold uppercase transition-all shadow-sm flex items-center"

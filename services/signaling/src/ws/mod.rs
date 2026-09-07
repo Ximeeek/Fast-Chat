@@ -448,20 +448,6 @@ async fn handle_client_message(
                 return;
             }
 
-            if state.room_manager.is_rate_key_kicked(&code, rate_key) {
-                warn!(
-                    event = "KICKED_PEER_REJECTED",
-                    connection_id = %connection_id,
-                    room = %code,
-                    "Join attempt rejected: rate key is in kicked list for this room"
-                );
-                let _ = tx.send(ServerMessage::error(
-                    "KICKED_FROM_ROOM",
-                    "You have been kicked from this room and cannot rejoin",
-                ));
-                return;
-            }
-
             if room_snapshot.is_locked {
                 warn!(
                     event = "ROOM_LOCKED_REJECTED",
