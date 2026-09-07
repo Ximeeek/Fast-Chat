@@ -2585,4 +2585,257 @@ async fn test_sweeper_auto_rotation_controlled_time() {
     assert!(matches!(ok, ServerMessage::JoinOk { ref peer_id, .. } if peer_id == "bob"));
 }
 
+#[tokio::test]
+async fn test_central_code_redaction_audit_non_owners() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates a hopping room
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
+    let create_msg = ClientMessage::create_room_with_hopping(
+        Some("alice".to_string()),
+        None,
+        None,
+        Some(true),
+        None,
+    );
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let code_0 = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated for Alice, got {resp_a:?}"),
+    };
+
+    // 2. Bob joins the hopping room
+    let (mut ws_b, _) = connect_async(&ws_url).await.expect("Failed to connect Bob");
+    let join_b = ClientMessage::JoinRoom {
+        code: code_0.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Audit 1: Bob's JOIN_OK must have an empty/redacted room code
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    match resp_b {
+        ServerMessage::JoinOk { code, .. } => {
+            assert!(
+                code.is_empty(),
+                "Non-owner Bob must receive an empty redacted room code in JOIN_OK, got: {code}"
+            );
+        }
+        other => panic!("Expected JoinOk for Bob, got {other:?}"),
+    }
+
+    // Alice consumes PeerJoined and RoomCodeRotated
+    let _ = ws_a.next().await.unwrap();
+    let a_rot_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let code_1 = match serde_json::from_str::<ServerMessage>(&a_rot_raw).unwrap() {
+        ServerMessage::RoomCodeRotated { new_code, .. } => new_code,
+        other => panic!("Expected RoomCodeRotated on Alice, got {other:?}"),
+    };
+
+    // 3. Alice locks the room
+    let lock_msg = ClientMessage::SetRoomLocked { locked: true };
+    ws_a.send(Message::Text(serde_json::to_string(&lock_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Alice (owner) receives ROOM_LOCKED with current room code
+    let a_locked_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_locked: ServerMessage = serde_json::from_str(&a_locked_raw).unwrap();
+    match a_locked {
+        ServerMessage::RoomLocked { room_code, locked, .. } => {
+            assert_eq!(room_code, code_1);
+            assert!(locked);
+        }
+        other => panic!("Expected RoomLocked on Alice, got {other:?}"),
+    }
+
+    // Audit 2: Bob (non-owner) receives ROOM_LOCKED with empty/redacted room code
+    let b_locked_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_locked: ServerMessage = serde_json::from_str(&b_locked_raw).unwrap();
+    match b_locked {
+        ServerMessage::RoomLocked { room_code, room_code_camel, locked, .. } => {
+            assert!(room_code.is_empty(), "Bob's ROOM_LOCKED room_code must be redacted");
+            assert!(room_code_camel.is_empty(), "Bob's ROOM_LOCKED room_code_camel must be redacted");
+            assert!(locked);
+        }
+        other => panic!("Expected RoomLocked on Bob, got {other:?}"),
+    }
+
+    // 4. Alice sets a password on the room
+    let pw_msg = ClientMessage::SetRoomPassword {
+        password: "secret_hopping_pw".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&pw_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Alice (owner) receives REKEY with active code
+    let a_rekey_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_rekey: ServerMessage = serde_json::from_str(&a_rekey_raw).unwrap();
+    match a_rekey {
+        ServerMessage::Rekey { room_code, .. } => {
+            assert_eq!(room_code, code_1);
+        }
+        other => panic!("Expected Rekey on Alice, got {other:?}"),
+    }
+
+    // Audit 3: Bob (non-owner) receives REKEY with empty/redacted room code
+    let b_rekey_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_rekey: ServerMessage = serde_json::from_str(&b_rekey_raw).unwrap();
+    match b_rekey {
+        ServerMessage::Rekey { room_code, .. } => {
+            assert!(room_code.is_empty(), "Bob's REKEY room_code must be redacted");
+        }
+        other => panic!("Expected Rekey on Bob, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_hopping_ownership_transfer_migrates_code_visibility() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates hopping room
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
+    let create_msg = ClientMessage::create_room_with_hopping(
+        Some("alice".to_string()),
+        None,
+        None,
+        Some(true),
+        None,
+    );
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let code_0 = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated for Alice"),
+    };
+
+    // 2. Bob joins with code_0
+    let (mut ws_b, _) = connect_async(&ws_url).await.expect("Failed to connect Bob");
+    let join_b = ClientMessage::JoinRoom {
+        code: code_0,
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let _ = ws_b.next().await.unwrap(); // Bob JoinOk (code redacted)
+    let _ = ws_a.next().await.unwrap(); // Alice PeerJoined(bob)
+    let a_rot_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let code_1 = match serde_json::from_str::<ServerMessage>(&a_rot_raw).unwrap() {
+        ServerMessage::RoomCodeRotated { new_code, .. } => new_code,
+        other => panic!("Expected RoomCodeRotated on Alice, got {other:?}"),
+    };
+
+    // 3. Alice transfers ownership to Bob
+    let xfer_msg = ClientMessage::TransferOwnership {
+        new_owner_peer_id: "bob".to_string(),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&xfer_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Alice (now non-owner) receives ROOM_OWNER_CHANGED with REDACTED room code
+    let a_xfer_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_xfer: ServerMessage = serde_json::from_str(&a_xfer_raw).unwrap();
+    match a_xfer {
+        ServerMessage::RoomOwnerChanged { room_code, owner_peer_id, .. } => {
+            assert!(room_code.is_empty(), "Alice is now non-owner; room_code in RoomOwnerChanged must be redacted");
+            assert_eq!(owner_peer_id, "bob");
+        }
+        other => panic!("Expected RoomOwnerChanged on Alice, got {other:?}"),
+    }
+
+    // Bob (new owner) receives ROOM_OWNER_CHANGED with VISIBLE room code AND ROOM_CODE_ROTATED
+    let b_xfer_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_xfer: ServerMessage = serde_json::from_str(&b_xfer_raw).unwrap();
+    match b_xfer {
+        ServerMessage::RoomOwnerChanged { room_code, owner_peer_id, .. } => {
+            assert_eq!(room_code, code_1, "Bob is new owner; room_code must match active code");
+            assert_eq!(owner_peer_id, "bob");
+        }
+        other => panic!("Expected RoomOwnerChanged on Bob, got {other:?}"),
+    }
+
+    let b_rot_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_rot: ServerMessage = serde_json::from_str(&b_rot_raw).unwrap();
+    match b_rot {
+        ServerMessage::RoomCodeRotated { new_code, .. } => {
+            assert_eq!(new_code, code_1, "Bob must receive active code via RoomCodeRotated on promotion");
+        }
+        other => panic!("Expected RoomCodeRotated on Bob, got {other:?}"),
+    }
+
+    // 4. Charlie joins using code_1
+    let (mut ws_c, _) = connect_async(&ws_url).await.expect("Failed to connect Charlie");
+    let join_c = ClientMessage::JoinRoom {
+        code: code_1,
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Charlie receives JoinOk with empty/redacted code
+    let c_ok_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_ok: ServerMessage = serde_json::from_str(&c_ok_raw).unwrap();
+    match c_ok {
+        ServerMessage::JoinOk { code, .. } => {
+            assert!(code.is_empty(), "Charlie's JOIN_OK code must be redacted");
+        }
+        other => panic!("Expected JoinOk on Charlie, got {other:?}"),
+    }
+
+    // Bob (current owner) receives PeerJoined(charlie) and ROOM_CODE_ROTATED(code_2)
+    let mut bob_saw_charlie = false;
+    let mut code_2 = String::new();
+    for _ in 0..2 {
+        let msg_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+        let msg: ServerMessage = serde_json::from_str(&msg_raw).unwrap();
+        match msg {
+            ServerMessage::PeerJoined { peer_id, .. } => {
+                assert_eq!(peer_id, "charlie");
+                bob_saw_charlie = true;
+            }
+            ServerMessage::RoomCodeRotated { new_code, .. } => {
+                code_2 = new_code;
+            }
+            other => panic!("Unexpected message on Bob: {other:?}"),
+        }
+    }
+    assert!(bob_saw_charlie);
+    assert!(!code_2.is_empty());
+
+    // Alice (former owner) receives ONLY PeerJoined(charlie) and NOT RoomCodeRotated
+    let a_peer_joined_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_peer_joined: ServerMessage = serde_json::from_str(&a_peer_joined_raw).unwrap();
+    assert!(matches!(a_peer_joined, ServerMessage::PeerJoined { ref peer_id, .. } if peer_id == "charlie"));
+
+    let a_extra = tokio::time::timeout(std::time::Duration::from_millis(100), ws_a.next()).await;
+    assert!(
+        a_extra.is_err(),
+        "Former owner Alice must NOT receive subsequent room code rotation notifications"
+    );
+}
+
 

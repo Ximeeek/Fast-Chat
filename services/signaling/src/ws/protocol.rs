@@ -427,6 +427,59 @@ pub enum ServerMessage {
 }
 
 impl ServerMessage {
+    /// Redacts room code from server messages intended for non-owner participants when hopping is active.
+    pub fn redact_code(mut self, should_redact: bool) -> Self {
+        if !should_redact {
+            return self;
+        }
+        match &mut self {
+            ServerMessage::JoinOk { code, .. } => {
+                *code = String::new();
+            }
+            ServerMessage::RoomLocked {
+                room_code,
+                room_code_camel,
+                ..
+            } => {
+                *room_code = String::new();
+                *room_code_camel = String::new();
+            }
+            ServerMessage::RoomOwnerChanged {
+                room_code,
+                room_code_camel,
+                ..
+            } => {
+                *room_code = String::new();
+                *room_code_camel = String::new();
+            }
+            ServerMessage::Rekey { room_code, .. } => {
+                *room_code = String::new();
+            }
+            ServerMessage::RoomClosing { room_code, .. } => {
+                *room_code = String::new();
+            }
+            ServerMessage::RoomClosed { room_code, .. } => {
+                *room_code = String::new();
+            }
+            ServerMessage::RoomDetonated {
+                room_code,
+                room_code_camel,
+            } => {
+                *room_code = String::new();
+                *room_code_camel = String::new();
+            }
+            ServerMessage::RoomCodeRotated {
+                new_code,
+                new_code_camel,
+            } => {
+                *new_code = String::new();
+                *new_code_camel = String::new();
+            }
+            _ => {}
+        }
+        self
+    }
+
     pub fn room_code_rotated(new_code: impl Into<String>) -> Self {
         let code = new_code.into();
         Self::RoomCodeRotated {

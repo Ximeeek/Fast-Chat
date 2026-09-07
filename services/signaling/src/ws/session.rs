@@ -28,6 +28,13 @@ impl fmt::Display for ConnectionId {
     }
 }
 
+/// Routing metadata for a room defining hopping security settings and active owner.
+#[derive(Debug, Clone, Default)]
+pub struct RoomRoutingMeta {
+    pub hopping_enabled: bool,
+    pub owner_peer_id: Option<String>,
+}
+
 /// In-memory registry of active WebSocket peer outbound channels and per-connection room mappings.
 /// Keyed by immutable `RoomId` to ensure signaling relays and moderation operate independently
 /// of public room code rotation.
@@ -35,6 +42,7 @@ impl fmt::Display for ConnectionId {
 pub struct PeerSessionRegistry {
     rooms: Arc<DashMap<RoomId, DashMap<String, UnboundedSender<ServerMessage>>>>,
     connection_rooms: Arc<DashMap<ConnectionId, (RoomId, String)>>,
+    room_meta: Arc<DashMap<RoomId, RoomRoutingMeta>>,
 }
 
 impl PeerSessionRegistry {
@@ -43,6 +51,34 @@ impl PeerSessionRegistry {
         Self {
             rooms: Arc::new(DashMap::new()),
             connection_rooms: Arc::new(DashMap::new()),
+            room_meta: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Sets or updates routing metadata for a room.
+    pub fn set_room_meta(&self, room_id: RoomId, hopping_enabled: bool, owner_peer_id: Option<String>) {
+        self.room_meta.insert(
+            room_id,
+            RoomRoutingMeta {
+                hopping_enabled,
+                owner_peer_id,
+            },
+        );
+    }
+
+    /// Updates the owner peer ID for a room.
+    pub fn set_room_owner(&self, room_id: &RoomId, owner_peer_id: Option<String>) {
+        if let Some(mut meta) = self.room_meta.get_mut(room_id) {
+            meta.owner_peer_id = owner_peer_id;
+        }
+    }
+
+    /// Checks whether room code redaction should be applied for a specific recipient peer.
+    pub fn should_redact_for_peer(&self, room_id: &RoomId, target_peer_id: &str) -> bool {
+        if let Some(meta) = self.room_meta.get(room_id) {
+            meta.hopping_enabled && meta.owner_peer_id.as_deref() != Some(target_peer_id)
+        } else {
+            false
         }
     }
 
@@ -102,14 +138,18 @@ impl PeerSessionRegistry {
 
         if remove_room {
             self.rooms.remove(room_id);
+            self.room_meta.remove(room_id);
         }
 
         removed
     }
 
     /// Sends a message directly to a target peer in the specified room.
+    /// Redacts room code automatically if hopping is enabled and the recipient is not the room owner.
     /// Returns `true` if the message was successfully dispatched, `false` if target not found.
     pub fn send_to_peer(&self, room_id: &RoomId, target_peer_id: &str, msg: ServerMessage) -> bool {
+        let should_redact = self.should_redact_for_peer(room_id, target_peer_id);
+        let msg = msg.redact_code(should_redact);
         self.rooms
             .get(room_id)
             .and_then(|room_peers| room_peers.get(target_peer_id).map(|tx| tx.send(msg).is_ok()))
@@ -117,15 +157,19 @@ impl PeerSessionRegistry {
     }
 
     /// Broadcasts a message to all active peers in the room, optionally excluding a specific peer.
+    /// Redacts room code automatically on a per-peer basis for non-owners when hopping is enabled.
     /// Returns the number of peers to which the message was successfully dispatched.
     pub fn broadcast(&self, room_id: &RoomId, msg: ServerMessage, exclude_peer_id: Option<&str>) -> usize {
         let mut sent_count = 0;
         if let Some(room_peers) = self.rooms.get(room_id) {
             for entry in room_peers.iter() {
-                if exclude_peer_id == Some(entry.key().as_str()) {
+                let peer_id = entry.key().as_str();
+                if exclude_peer_id == Some(peer_id) {
                     continue;
                 }
-                if entry.value().send(msg.clone()).is_ok() {
+                let should_redact = self.should_redact_for_peer(room_id, peer_id);
+                let peer_msg = msg.clone().redact_code(should_redact);
+                if entry.value().send(peer_msg).is_ok() {
                     sent_count += 1;
                 }
             }
@@ -153,6 +197,7 @@ impl PeerSessionRegistry {
     /// Evicts an entire room and its registered peer sessions.
     pub fn remove_room(&self, room_id: &RoomId) {
         self.rooms.remove(room_id);
+        self.room_meta.remove(room_id);
     }
 
     /// Returns the number of active rooms currently holding registered peer sessions.

@@ -205,6 +205,7 @@ pub async fn handle_socket(
                 );
 
                 if let Some(new_owner) = outcome.new_owner_id {
+                    state.sessions.set_room_owner(&room_id, Some(new_owner.clone()));
                     info!(
                         room_id = %room_id,
                         room = %outcome.current_code,
@@ -214,9 +215,19 @@ pub async fn handle_socket(
                     );
                     state.sessions.broadcast(
                         &room_id,
-                        ServerMessage::room_owner_changed(outcome.current_code.to_string(), new_owner),
+                        ServerMessage::room_owner_changed(outcome.current_code.to_string(), new_owner.clone()),
                         None,
                     );
+
+                    if let Some(room) = state.room_manager.get_room_state(&room_id) {
+                        if room.is_hopping_enabled() {
+                            state.sessions.send_to_peer(
+                                &room_id,
+                                &new_owner,
+                                ServerMessage::room_code_rotated(outcome.current_code.to_string()),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -358,6 +369,9 @@ async fn handle_client_message(
             state
                 .sessions
                 .register_connection(connection_id.clone(), room_id, assigned_peer_id.clone(), tx.clone());
+            state
+                .sessions
+                .set_room_meta(room_id, hopping, Some(assigned_peer_id.clone()));
             *current_session = Some((room_id, assigned_peer_id.clone(), true));
 
             info!(
@@ -515,6 +529,9 @@ async fn handle_client_message(
                     state
                         .sessions
                         .register_connection(connection_id.clone(), room_id, assigned_peer_id.clone(), tx.clone());
+                    state
+                        .sessions
+                        .set_room_meta(room_id, room_snapshot.hopping_enabled, room_snapshot.get_owner_id());
                     *current_session = Some((room_id, assigned_peer_id.clone(), false));
 
                     info!(
@@ -526,14 +543,19 @@ async fn handle_client_message(
                         "Peer joined room successfully"
                     );
 
-                    // Send JOIN_OK to joining peer
+                    // Send JOIN_OK to joining peer (redacting room code for non-owners when hopping is enabled)
                     let owner_id = room_snapshot.get_owner_id();
                     let now_ts = chrono::Utc::now().timestamp();
                     let muted_peers = room_snapshot.get_muted_peers(now_ts);
                     let chat_blocked = room_snapshot.get_chat_blocked_peers();
                     let file_blocked = room_snapshot.get_file_blocked_peers();
+                    let code_for_joinok = if room_snapshot.hopping_enabled {
+                        String::new()
+                    } else {
+                        code.to_string()
+                    };
                     let _ = tx.send(ServerMessage::join_ok_with_visibility(
-                        code.to_string(),
+                        code_for_joinok,
                         assigned_peer_id.clone(),
                         false,
                         owner_id,
@@ -1157,6 +1179,7 @@ async fn handle_client_message(
                 .transfer_ownership(room_id, sender_id, &new_owner_peer_id)
             {
                 Ok(current_code) => {
+                    state.sessions.set_room_owner(room_id, Some(new_owner_peer_id.clone()));
                     info!(
                         connection_id = %connection_id,
                         room_id = %room_id,
@@ -1169,9 +1192,19 @@ async fn handle_client_message(
 
                     state.sessions.broadcast(
                         room_id,
-                        ServerMessage::room_owner_changed(current_code.to_string(), new_owner_peer_id),
+                        ServerMessage::room_owner_changed(current_code.to_string(), new_owner_peer_id.clone()),
                         None,
                     );
+
+                    if let Some(room) = state.room_manager.get_room_state(room_id) {
+                        if room.is_hopping_enabled() {
+                            state.sessions.send_to_peer(
+                                room_id,
+                                &new_owner_peer_id,
+                                ServerMessage::room_code_rotated(current_code.to_string()),
+                            );
+                        }
+                    }
                 }
                 Err(RoomError::PeerNotFound(p)) => {
                     let _ = tx.send(ServerMessage::error(
