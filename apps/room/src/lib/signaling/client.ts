@@ -1,4 +1,4 @@
-import { roomStore } from '../stores/room.ts';
+import { roomStore, isFatalErrorCode } from '../stores/room.ts';
 import type {
 	ClientSignalingMessage,
 	ServerSignalingMessage,
@@ -645,8 +645,10 @@ export class SignalingClient {
 					}
 					roomStore.setClosed('KICKED_FROM_ROOM');
 					roomStore.setError(msg.code, msg.message);
-				} else {
+				} else if (isFatalErrorCode(msg.code)) {
 					roomStore.setError(msg.code, msg.message);
+				} else {
+					roomStore.setActionError(msg.code, msg.message);
 				}
 				break;
 			case 'ICE_SERVERS': {

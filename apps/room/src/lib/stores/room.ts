@@ -13,6 +13,29 @@ export interface RoomError {
 	message: string;
 }
 
+export interface ActionError {
+	code: string;
+	message: string;
+	timestamp: number;
+}
+
+export const FATAL_ROOM_ERROR_CODES = [
+	'KICKED_FROM_ROOM',
+	'ROOM_LOCKED',
+	'ROOM_CLOSED',
+	'ROOM_NOT_FOUND',
+	'ROOM_FULL',
+	'RATE_LIMITED',
+	'RATE_LIMIT_EXCEEDED',
+	'CONNECTION_LOST'
+] as const;
+
+export type FatalRoomErrorCode = (typeof FATAL_ROOM_ERROR_CODES)[number];
+
+export function isFatalErrorCode(code: string): boolean {
+	return (FATAL_ROOM_ERROR_CODES as readonly string[]).includes(code);
+}
+
 export interface RoomState {
 	code: string | null;
 	peerId: string | null;
@@ -26,6 +49,7 @@ export interface RoomState {
 	closingDeadline: number | null;
 	closureReason: string | null;
 	error: RoomError | null;
+	actionError: ActionError | null;
 	iceServers: IceServerConfig[];
 	quotaExhausted: boolean;
 	hasPassword: boolean;
@@ -48,6 +72,7 @@ const initialRoomState: RoomState = {
 	closingDeadline: null,
 	closureReason: null,
 	error: null,
+	actionError: null,
 	iceServers: [],
 	quotaExhausted: false,
 	hasPassword: false,
@@ -79,7 +104,8 @@ function createRoomStore() {
 					chatBlockedPeers: [],
 					fileBlockedPeers: [],
 					lifecycle: 'joined',
-					error: null
+					error: null,
+					actionError: null
 				};
 			});
 		},
@@ -113,7 +139,8 @@ function createRoomStore() {
 					chatBlockedPeers: [...rawChatBlocked],
 					fileBlockedPeers: [...rawFileBlocked],
 					lifecycle: 'joined',
-					error: null
+					error: null,
+					actionError: null
 				};
 			});
 		},
@@ -220,7 +247,23 @@ function createRoomStore() {
 		setConnectionState: (connectionState: ConnectionState) => {
 			update((state) => ({ ...state, connectionState }));
 		},
+		setActionError: (code: string, message: string) => {
+			update((state) => ({
+				...state,
+				actionError: { code, message, timestamp: Date.now() }
+			}));
+		},
+		clearActionError: () => {
+			update((state) => ({ ...state, actionError: null }));
+		},
 		setError: (code: string, message: string) => {
+			if (!isFatalErrorCode(code)) {
+				update((state) => ({
+					...state,
+					actionError: { code, message, timestamp: Date.now() }
+				}));
+				return;
+			}
 			update((state) => ({
 				...state,
 				lifecycle: 'error',

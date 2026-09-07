@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
 import { SignalingClient } from '../src/lib/signaling/client.ts';
+import { roomStore, isRoomActive } from '../src/lib/stores/room.ts';
 import type { ClientSignalingMessage, ServerSignalingMessage } from '../src/lib/types/signaling.ts';
 
 const SERVER_PORT = 3457;
@@ -323,5 +324,62 @@ describe('Live Signaling Server E2E Deserialization: Visibility & Ownership Acti
 
 		clientA.disconnect();
 		clientB.disconnect();
+	});
+
+	test('SignalingClient routes non-fatal ERROR to actionError leaving active room intact, and fatal ERROR to setError', () => {
+		const client = new SignalingClient();
+		roomStore.reset();
+
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-alice',
+			is_owner: true,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-alice']
+		});
+
+		let active = false;
+		const unsub = isRoomActive.subscribe((a: boolean) => (active = a));
+		assert.equal(active, true);
+
+		// 1. Simulate inbound non-fatal error: INVALID_MESSAGE_FORMAT
+		(client as any).handleIncomingRawMessage(
+			JSON.stringify({
+				type: 'ERROR',
+				code: 'INVALID_MESSAGE_FORMAT',
+				message: 'Invalid message payload'
+			})
+		);
+
+		let state: any;
+		const unsubStore = roomStore.subscribe((s: any) => (state = s));
+		unsubStore();
+
+		assert.equal(state.lifecycle, 'joined', 'Lifecycle must remain joined');
+		assert.equal(active, true, 'isRoomActive must remain true');
+		assert.equal(state.error, null, 'Fatal error must be null');
+		assert.ok(state.actionError, 'Action error must be populated');
+		assert.equal(state.actionError.code, 'INVALID_MESSAGE_FORMAT');
+
+		// 2. Simulate inbound fatal error: ROOM_CLOSED
+		(client as any).handleIncomingRawMessage(
+			JSON.stringify({
+				type: 'ERROR',
+				code: 'ROOM_CLOSED',
+				message: 'Room has expired and closed'
+			})
+		);
+
+		const unsubStore2 = roomStore.subscribe((s: any) => (state = s));
+		unsubStore2();
+
+		assert.equal(state.lifecycle, 'error', 'Fatal error must transition lifecycle to error');
+		assert.equal(active, false, 'isRoomActive must be false');
+		assert.equal(state.error?.code, 'ROOM_CLOSED');
+
+		unsub();
 	});
 });

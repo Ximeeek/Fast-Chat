@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { validateRoomCode, normalizeRoomCode, formatRoomCodeInput, encodeRoomToken, decodeRoomToken, isRoomToken, resolveRoomIdentifier } from '../src/lib/utils/roomCode.ts';
-import { roomStore, peerCount, chatBlockedPeers, fileBlockedPeers, type RoomState } from '../src/lib/stores/room.ts';
+import { roomStore, isRoomActive, peerCount, chatBlockedPeers, fileBlockedPeers, type RoomState } from '../src/lib/stores/room.ts';
 import { formatChatLog } from '../src/lib/chat/export.ts';
 
 describe('Room Code Validation & Formatting', () => {
@@ -484,6 +484,139 @@ describe('In-Memory Room Store Lifecycle', () => {
 
 		assert.deepEqual(state.chatBlockedPeers, []);
 		assert.deepEqual(state.fileBlockedPeers, []);
+	});
+
+	test('roomStore.setError with fatal code transitions lifecycle to error and disables isRoomActive', () => {
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: false,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-owner']
+		});
+
+		let state!: RoomState;
+		let active!: boolean;
+		const unsub1 = roomStore.subscribe((s) => (state = s));
+		const unsub2 = isRoomActive.subscribe((a) => (active = a));
+
+		assert.equal(state.lifecycle, 'joined');
+		assert.equal(active, true);
+
+		// Fatal error: KICKED_FROM_ROOM
+		roomStore.setError('KICKED_FROM_ROOM', 'Removed by room owner');
+		assert.equal(state.lifecycle, 'error');
+		assert.equal(active, false);
+		assert.deepEqual(state.error, { code: 'KICKED_FROM_ROOM', message: 'Removed by room owner' });
+
+		// Reset and test other fatal error code: ROOM_LOCKED
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: false,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-owner']
+		});
+		assert.equal(active, true);
+
+		roomStore.setError('ROOM_LOCKED', 'Room entry locked');
+		assert.equal(state.lifecycle, 'error');
+		assert.equal(active, false);
+		assert.deepEqual(state.error, { code: 'ROOM_LOCKED', message: 'Room entry locked' });
+
+		unsub1();
+		unsub2();
+	});
+
+	test('roomStore.setActionError records action failure while preserving active joined lifecycle and mesh', () => {
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: true,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-client', 'peer-bob']
+		});
+
+		let state!: RoomState;
+		let active!: boolean;
+		const unsub1 = roomStore.subscribe((s) => (state = s));
+		const unsub2 = isRoomActive.subscribe((a) => (active = a));
+
+		assert.equal(state.lifecycle, 'joined');
+		assert.equal(active, true);
+		assert.equal(state.actionError, null);
+		assert.equal(state.error, null);
+
+		// Trigger non-fatal action error
+		roomStore.setActionError('INVALID_MESSAGE_FORMAT', 'Failed to parse command payload');
+
+		let activeState!: RoomState;
+		const unsubAfter = roomStore.subscribe((s) => (activeState = s));
+		unsubAfter();
+
+		assert.equal(activeState.lifecycle, 'joined', 'Lifecycle must NOT transition to error on non-fatal action error');
+		assert.equal(active, true, 'Room must remain active for messaging and WebRTC mesh');
+		assert.equal(activeState.error, null, 'Fatal error must remain null');
+		assert.ok(activeState.actionError !== null);
+		assert.equal(activeState.actionError.code, 'INVALID_MESSAGE_FORMAT');
+		assert.equal(activeState.actionError.message, 'Failed to parse command payload');
+
+		// Clear action error
+		roomStore.clearActionError();
+		let clearedState!: RoomState;
+		const unsubCleared = roomStore.subscribe((s) => (clearedState = s));
+		unsubCleared();
+
+		assert.equal(clearedState.actionError, null);
+		assert.equal(clearedState.lifecycle, 'joined');
+		assert.equal(active, true);
+
+		unsub1();
+		unsub2();
+	});
+
+	test('roomStore.setError with non-fatal code safely routes to actionError without terminating room', () => {
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '1234-5678-9012',
+			peer_id: 'peer-client',
+			is_owner: false,
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-client']
+		});
+
+		let state!: RoomState;
+		let active!: boolean;
+		const unsub1 = roomStore.subscribe((s) => (state = s));
+		const unsub2 = isRoomActive.subscribe((a) => (active = a));
+
+		// Call setError with non-fatal code
+		roomStore.setError('PERMISSION_DENIED', 'Only room owner can lock the room');
+
+		let afterState!: RoomState;
+		const unsubAfter = roomStore.subscribe((s) => (afterState = s));
+		unsubAfter();
+
+		assert.equal(afterState.lifecycle, 'joined', 'Non-fatal error must not break joined lifecycle');
+		assert.equal(active, true, 'Room must remain active');
+		assert.equal(afterState.error, null);
+		assert.ok(afterState.actionError !== null);
+		assert.equal(afterState.actionError.code, 'PERMISSION_DENIED');
+		assert.equal(afterState.actionError.message, 'Only room owner can lock the room');
+
+		unsub1();
+		unsub2();
 	});
 });
 
