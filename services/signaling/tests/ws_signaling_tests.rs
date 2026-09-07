@@ -2111,5 +2111,109 @@ async fn test_ws_chat_and_file_visibility_blocking_flow() {
     }
 }
 
+#[tokio::test]
+async fn test_ws_detonate_room_flow() {
+    let (addr, _state) = spawn_test_server(Config::default()).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::CreateRoom {
+        peer_id: Some("alice".to_string()),
+        has_password: Some(false),
+        password: None,
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let a_created_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_created: ServerMessage = serde_json::from_str(&a_created_raw).unwrap();
+    let room_code = match a_created {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated, got {a_created:?}"),
+    };
+
+    // 2. Bob joins room
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let _b_join_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    // Alice receives PeerJoined(bob)
+    let _a_peer_joined = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+
+    // 3. Bob (participant) attempts DETONATE_ROOM -> rejected server-side with UNAUTHORIZED
+    ws_b.send(Message::Text(serde_json::to_string(&ClientMessage::DetonateRoom).unwrap().into()))
+        .await
+        .unwrap();
+
+    let b_err_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_err: ServerMessage = serde_json::from_str(&b_err_raw).unwrap();
+    match b_err {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "UNAUTHORIZED"),
+        _ => panic!("Expected UNAUTHORIZED error for non-owner detonate attempt, got {b_err:?}"),
+    }
+
+    // 4. Alice (owner) sends DETONATE_ROOM -> both Alice and Bob receive ROOM_DETONATED
+    ws_a.send(Message::Text(serde_json::to_string(&ClientMessage::DetonateRoom).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Alice receives ROOM_DETONATED
+    let a_detonated_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_detonated: ServerMessage = serde_json::from_str(&a_detonated_raw).unwrap();
+    match a_detonated {
+        ServerMessage::RoomDetonated { room_code: rc, .. } => assert_eq!(rc, room_code),
+        _ => panic!("Expected RoomDetonated on Alice, got {a_detonated:?}"),
+    }
+
+    // Bob receives ROOM_DETONATED
+    let b_detonated_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_detonated: ServerMessage = serde_json::from_str(&b_detonated_raw).unwrap();
+    match b_detonated {
+        ServerMessage::RoomDetonated { room_code: rc, .. } => assert_eq!(rc, room_code),
+        _ => panic!("Expected RoomDetonated on Bob, got {b_detonated:?}"),
+    }
+
+    // 5. Both WebSockets are closed immediately by the server
+    let a_close = ws_a.next().await;
+    assert!(
+        matches!(a_close, Some(Ok(Message::Close(_))) | None),
+        "Expected Alice's connection to close immediately after ROOM_DETONATED"
+    );
+
+    let b_close = ws_b.next().await;
+    assert!(
+        matches!(b_close, Some(Ok(Message::Close(_))) | None),
+        "Expected Bob's connection to close immediately after ROOM_DETONATED"
+    );
+
+    // 6. Charlie tries to join detonated room -> ROOM_NOT_FOUND (room completely erased)
+    let (mut ws_c, _) = connect_async(&ws_url).await.unwrap();
+    let join_c = ClientMessage::JoinRoom {
+        code: room_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c).unwrap().into()))
+        .await
+        .unwrap();
+
+    let c_res_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let c_res: ServerMessage = serde_json::from_str(&c_res_raw).unwrap();
+    match c_res {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "ROOM_NOT_FOUND"),
+        _ => panic!("Expected ROOM_NOT_FOUND for detonated room, got {c_res:?}"),
+    }
+}
+
+
 
 

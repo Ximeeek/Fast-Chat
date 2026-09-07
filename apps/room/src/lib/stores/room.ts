@@ -244,6 +244,14 @@ function createRoomStore() {
 				connectionState: 'closed'
 			}));
 		},
+		setDetonated: () => {
+			update((state) => ({
+				...state,
+				lifecycle: 'closed',
+				closureReason: 'ROOM_DETONATED',
+				connectionState: 'closed'
+			}));
+		},
 		setConnectionState: (connectionState: ConnectionState) => {
 			update((state) => ({ ...state, connectionState }));
 		},

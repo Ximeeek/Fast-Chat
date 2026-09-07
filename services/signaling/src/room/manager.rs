@@ -171,6 +171,35 @@ impl RoomManager {
         Ok(())
     }
 
+    /// Immediately and permanently destroys a room without any grace period.
+    ///
+    /// The caller must hold `Permission::DetonateRoom`.
+    /// The room is instantly evicted from the in-memory DashMap, evaporating all ephemeral
+    /// state (peer lists, mute statuses, visibility blocks, and cryptographic salt),
+    /// and a ROOM_DETONATED broadcast is dispatched to disconnect all participants immediately.
+    pub fn detonate_room(&self, code: &RoomCode, operator_peer_id: &str) -> Result<(), RoomError> {
+        {
+            let room = self
+                .rooms
+                .get(code)
+                .ok_or_else(|| RoomError::PeerNotFound(operator_peer_id.to_string()))?;
+
+            if !room.has_permission(operator_peer_id, crate::room::permissions::Permission::DetonateRoom) {
+                return Err(RoomError::Unauthorized);
+            }
+        }
+
+        // Atomically evict room record from DashMap
+        self.rooms.remove(code);
+        self.broadcaster.broadcast_room_detonated(code);
+        info!(
+            room = %code,
+            operator = %operator_peer_id,
+            "Room detonated and destroyed immediately by owner"
+        );
+        Ok(())
+    }
+
     /// Checks atomically whether a peer is the registered owner of the room.
     pub fn is_owner(&self, code: &RoomCode, peer_id: &str) -> bool {
         self.rooms
@@ -541,6 +570,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct MockBroadcaster {
         closed_count: AtomicUsize,
+        detonated_count: AtomicUsize,
         state_changes: AtomicUsize,
         unmuted_count: AtomicUsize,
     }
@@ -548,6 +578,10 @@ mod tests {
     impl RoomBroadcaster for MockBroadcaster {
         fn broadcast_room_closed(&self, _code: &RoomCode, _reason: &str) {
             self.closed_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn broadcast_room_detonated(&self, _code: &RoomCode) {
+            self.detonated_count.fetch_add(1, Ordering::SeqCst);
         }
 
         fn broadcast_state_changed(&self, _code: &RoomCode, _new_state: RoomLifecycleState) {
@@ -762,5 +796,51 @@ mod tests {
         let room_snap3 = manager.get_room_state(&code).unwrap();
         assert!(!room_snap3.is_chat_blocked("bob"));
         assert!(!room_snap3.is_file_blocked("bob"));
+    }
+
+    #[test]
+    fn test_manager_detonate_room_authorized_and_unauthorized() {
+        let config = Config::default();
+        let broadcaster = Arc::new(MockBroadcaster::default());
+        let manager = RoomManager::with_broadcaster(config.clone(), broadcaster.clone());
+
+        let code = manager
+            .create_room(Some("alice".to_string()), None, PasswordStatus::none())
+            .unwrap();
+
+        manager
+            .join_room(&code, "bob".to_string(), false, None)
+            .unwrap();
+
+        // 1. Bob (non-owner participant) attempts to detonate -> Unauthorized
+        let detonate_res = manager.detonate_room(&code, "bob");
+        assert_eq!(detonate_res, Err(RoomError::Unauthorized));
+        assert!(manager.get_room_state(&code).is_some());
+        assert_eq!(broadcaster.detonated_count.load(Ordering::SeqCst), 0);
+
+        // 2. Alice (owner) detonates room -> Success
+        let detonate_res = manager.detonate_room(&code, "alice");
+        assert!(detonate_res.is_ok());
+
+        // Room is instantly wiped from DashMap with no grace period or closing state
+        assert!(manager.get_room_state(&code).is_none());
+        assert_eq!(manager.room_count(), 0);
+        assert_eq!(broadcaster.detonated_count.load(Ordering::SeqCst), 1);
+
+        // 3. Confirm that the exact same room code can be re-created and used with clean state
+        let now_ts = Utc::now().timestamp();
+        let fresh_room = RoomState::new(
+            code.clone(),
+            Some("carol".to_string()),
+            None,
+            PasswordStatus::none(),
+            &config,
+            now_ts,
+        );
+        manager.rooms.insert(code.clone(), fresh_room);
+        let fresh_snap = manager.get_room_state(&code).expect("Fresh room should exist");
+        assert_eq!(fresh_snap.owner_peer_id(), Some("carol"));
+        assert_eq!(fresh_snap.peers.len(), 1);
+        assert_eq!(fresh_snap.state, RoomLifecycleState::Creating);
     }
 }

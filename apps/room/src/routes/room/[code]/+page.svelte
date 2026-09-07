@@ -144,6 +144,14 @@
 	const canLockRoom = $derived(hasPermission(currentUserRole, Permission.LockRoom));
 	const canManageChatVisibility = $derived(hasPermission(currentUserRole, Permission.ManageChatVisibility));
 	const canManageFileVisibility = $derived(hasPermission(currentUserRole, Permission.ManageFileVisibility));
+	const canDetonateRoom = $derived(hasPermission(currentUserRole, Permission.DetonateRoom));
+
+	let isDetonateConfirmOpen = $state(false);
+
+	function handleDetonateRoom() {
+		isDetonateConfirmOpen = false;
+		signalingClient.detonateRoom();
+	}
 
 	const isLocalMuted = $derived(
 		Boolean($roomStore.peerId && $roomStore.mutedPeers[$roomStore.peerId] !== undefined)
@@ -855,6 +863,9 @@
 				case 'ROOM_CLOSED':
 					details = `Room closed: ${msg.reason}`;
 					break;
+				case 'ROOM_DETONATED':
+					details = 'Room detonated and destroyed immediately by owner';
+					break;
 				case 'ERROR':
 					details = `Error: [${msg.code}] ${msg.message}`;
 					if (msg.code === 'KICKED_FROM_ROOM') {
@@ -980,6 +991,39 @@
 			>
 				Return to Room Creation
 			</a>
+		</div>
+	{:else if $roomStore.closureReason === 'ROOM_DETONATED'}
+		<div class="w-full max-w-lg bg-[#0a0d16]/95 backdrop-blur-xl p-8 sm:p-10 rounded-2xl border border-red-500/40 text-center shadow-[0_0_60px_rgba(239,68,68,0.3)] relative z-10">
+			<div class="w-14 h-14 rounded-full bg-red-500/15 border border-red-500/40 flex items-center justify-center text-red-400 mx-auto mb-5 shadow-[0_0_25px_rgba(239,68,68,0.35)]">
+				<svg class="w-7 h-7 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<circle cx="12" cy="12" r="9"/>
+					<line x1="12" y1="8" x2="12" y2="12"/>
+					<line x1="12" y1="16" x2="12.01" y2="16"/>
+				</svg>
+			</div>
+			<div class="text-[10px] uppercase tracking-widest text-red-400 font-bold mb-1.5 text-center font-mono">
+				TERMINAL PURGE
+			</div>
+			<h1 class="text-xl sm:text-2xl font-black uppercase tracking-tight mb-2 text-white font-['Orbitron',sans-serif]">
+				Room Detonated
+			</h1>
+			<p class="text-xs text-red-200/90 mb-6 leading-relaxed max-w-sm mx-auto">
+				The room was permanently destroyed by the owner. All connections, ephemeral keys, and shared logs have been erased with zero trace.
+			</p>
+			<div class="flex items-center justify-center gap-3">
+				<a
+					href="/create"
+					class="min-h-[42px] py-2.5 px-6 rounded-full bg-red-600 hover:bg-red-500 text-white text-xs font-bold uppercase transition-all shadow-[0_0_20px_rgba(239,68,68,0.4)] flex items-center cursor-pointer"
+				>
+					Create a New Room
+				</a>
+				<a
+					href="/"
+					class="min-h-[42px] py-2.5 px-6 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs font-bold uppercase transition-all flex items-center cursor-pointer"
+				>
+					Return Home
+				</a>
+			</div>
 		</div>
 	{:else if $roomStore.lifecycle === 'closed'}
 		<div class="w-full max-w-lg bg-[#0a0d16]/95 backdrop-blur-xl p-8 sm:p-10 rounded-2xl border border-white/10 text-center shadow-[0_0_50px_rgba(0,0,0,0.85)] relative z-10">
@@ -1910,7 +1954,76 @@
 		<SecurityInfoPanel
 			isOpen={isSecurityInfoOpen}
 			onClose={() => (isSecurityInfoOpen = false)}
+			canDetonate={canDetonateRoom}
+			onDetonate={() => (isDetonateConfirmOpen = true)}
 		/>
+
+		<!-- Detonate Room Confirmation Modal -->
+		{#if isDetonateConfirmOpen}
+			<div
+				class="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 font-['Inter',sans-serif] transition-all"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="detonate-modal-title"
+			>
+				<div class="bg-[#0a0d16]/95 border border-red-500/40 rounded-2xl max-w-md w-full p-6 sm:p-7 space-y-5 text-zinc-100 shadow-[0_0_60px_rgba(239,68,68,0.35)] backdrop-blur-xl relative">
+					<!-- Warning Icon & Header -->
+					<div class="flex items-center space-x-3 border-b border-white/5 pb-3.5">
+						<div class="w-10 h-10 rounded-full bg-red-500/15 border border-red-500/40 flex items-center justify-center text-red-400 shrink-0">
+							<svg class="w-5 h-5 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M12 9v4"/>
+								<path d="M12 17h.01"/>
+								<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+							</svg>
+						</div>
+						<div>
+							<h3 id="detonate-modal-title" class="text-sm font-bold uppercase tracking-wider text-white font-['Orbitron',sans-serif]">
+								Detonate Room
+							</h3>
+							<span class="text-[10px] text-red-400 font-mono uppercase">
+								Permanent Irreversible Action
+							</span>
+						</div>
+					</div>
+
+					<p class="text-xs text-zinc-300 leading-relaxed">
+						Are you sure you want to detonate this room? This action will <strong>immediately disconnect all participants</strong> and purge all in-memory keys, file logs, and room records with zero grace period and zero trace.
+					</p>
+
+					<div class="p-3 rounded-xl bg-red-950/30 border border-red-500/30 text-[11px] text-red-300 leading-normal flex items-start gap-2">
+						<svg class="w-4 h-4 text-red-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="10"/>
+							<line x1="12" y1="8" x2="12" y2="12"/>
+							<line x1="12" y1="16" x2="12.01" y2="16"/>
+						</svg>
+						<span>This cannot be undone. Unlike standard closing, participants will have no grace period to download logs or files.</span>
+					</div>
+
+					<!-- Actions -->
+					<div class="flex items-center justify-end gap-2.5 pt-2">
+						<button
+							type="button"
+							onclick={() => (isDetonateConfirmOpen = false)}
+							class="min-h-[38px] px-4 py-2 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 hover:text-white border border-white/10 text-xs font-semibold uppercase transition-all cursor-pointer"
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							onclick={handleDetonateRoom}
+							class="min-h-[38px] px-5 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-bold uppercase text-xs transition-all shadow-[0_0_20px_rgba(239,68,68,0.4)] flex items-center gap-1.5 cursor-pointer"
+						>
+							<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<circle cx="12" cy="12" r="9"/>
+								<line x1="12" y1="8" x2="12" y2="12"/>
+								<line x1="12" y1="16" x2="12.01" y2="16"/>
+							</svg>
+							Confirm Detonation
+						</button>
+					</div>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Rekey Password Prompt Modal for Participants -->
 		<RekeyPromptModal

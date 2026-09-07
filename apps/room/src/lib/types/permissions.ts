@@ -10,7 +10,8 @@ export const Permission = {
 	TransferOwnership: 'TransferOwnership',
 	LockRoom: 'LockRoom',
 	ManageChatVisibility: 'ManageChatVisibility',
-	ManageFileVisibility: 'ManageFileVisibility'
+	ManageFileVisibility: 'ManageFileVisibility',
+	DetonateRoom: 'DetonateRoom'
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
@@ -47,7 +48,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
 		Permission.TransferOwnership,
 		Permission.LockRoom,
 		Permission.ManageChatVisibility,
-		Permission.ManageFileVisibility
+		Permission.ManageFileVisibility,
+		Permission.DetonateRoom
 	],
 	[Role.Participant]: []
 };

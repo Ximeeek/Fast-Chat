@@ -16,6 +16,7 @@ pub enum Permission {
     LockRoom,
     ManageChatVisibility,
     ManageFileVisibility,
+    DetonateRoom,
 }
 
 /// Roles assigned to peers participating in a signaling room.
@@ -41,6 +42,7 @@ pub fn role_permissions(role: Role) -> &'static [Permission] {
             Permission::LockRoom,
             Permission::ManageChatVisibility,
             Permission::ManageFileVisibility,
+            Permission::DetonateRoom,
         ],
         Role::Participant => &[],
     }
@@ -100,7 +102,8 @@ mod tests {
         assert!(owner_perms.contains(&Permission::LockRoom));
         assert!(owner_perms.contains(&Permission::ManageChatVisibility));
         assert!(owner_perms.contains(&Permission::ManageFileVisibility));
-        assert_eq!(owner_perms.len(), 7);
+        assert!(owner_perms.contains(&Permission::DetonateRoom));
+        assert_eq!(owner_perms.len(), 8);
 
         let participant_perms = role_permissions(Role::Participant);
         assert!(participant_perms.is_empty());
@@ -126,6 +129,7 @@ mod tests {
         assert!(has_permission(&room, "owner-peer", Permission::LockRoom));
         assert!(has_permission(&room, "owner-peer", Permission::ManageChatVisibility));
         assert!(has_permission(&room, "owner-peer", Permission::ManageFileVisibility));
+        assert!(has_permission(&room, "owner-peer", Permission::DetonateRoom));
 
         // Participant has no administrative permissions
         assert!(!has_permission(&room, "member-peer", Permission::SetRoomPassword));
@@ -135,6 +139,7 @@ mod tests {
         assert!(!has_permission(&room, "member-peer", Permission::LockRoom));
         assert!(!has_permission(&room, "member-peer", Permission::ManageChatVisibility));
         assert!(!has_permission(&room, "member-peer", Permission::ManageFileVisibility));
+        assert!(!has_permission(&room, "member-peer", Permission::DetonateRoom));
 
         // Unknown peer has no permissions
         assert!(!has_permission(&room, "unknown-peer", Permission::SetRoomPassword));

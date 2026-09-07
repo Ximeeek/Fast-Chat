@@ -19,6 +19,8 @@ impl RoomBroadcaster for RecordingBroadcaster {
         self.closed_events.fetch_add(1, Ordering::SeqCst);
     }
 
+    fn broadcast_room_detonated(&self, _code: &RoomCode) {}
+
     fn broadcast_state_changed(&self, _code: &RoomCode, _new_state: RoomLifecycleState) {
         self.state_change_events.fetch_add(1, Ordering::SeqCst);
     }

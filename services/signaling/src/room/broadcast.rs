@@ -11,6 +11,9 @@ pub trait RoomBroadcaster: Send + Sync + Debug {
     /// Broadcast that the room has been permanently closed and destroyed.
     fn broadcast_room_closed(&self, code: &RoomCode, reason: &str);
 
+    /// Broadcast that the room has been immediately detonated and destroyed by the owner.
+    fn broadcast_room_detonated(&self, code: &RoomCode);
+
     /// Broadcast a room lifecycle state change (e.g. entering ExtendableWindow or Closing).
     fn broadcast_state_changed(&self, code: &RoomCode, new_state: RoomLifecycleState);
 
@@ -39,6 +42,17 @@ impl RoomBroadcaster for WebSocketBroadcaster {
             "Broadcasting ROOM_CLOSED event to room participants over WebSocket"
         );
         let msg = ServerMessage::room_closed(code.to_string(), reason);
+        self.sessions.broadcast(code, msg, None);
+        self.sessions.remove_room(code);
+    }
+
+    fn broadcast_room_detonated(&self, code: &RoomCode) {
+        info!(
+            room = %code,
+            event = "ROOM_DETONATED",
+            "Broadcasting ROOM_DETONATED event to room participants over WebSocket"
+        );
+        let msg = ServerMessage::room_detonated(code.to_string());
         self.sessions.broadcast(code, msg, None);
         self.sessions.remove_room(code);
     }
@@ -82,6 +96,14 @@ impl RoomBroadcaster for LoggingBroadcaster {
             reason = %reason,
             event = "ROOM_CLOSED",
             "Broadcasting ROOM_CLOSED event to room participants"
+        );
+    }
+
+    fn broadcast_room_detonated(&self, code: &RoomCode) {
+        info!(
+            room = %code,
+            event = "ROOM_DETONATED",
+            "Broadcasting ROOM_DETONATED event to room participants"
         );
     }
 

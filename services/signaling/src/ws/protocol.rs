@@ -159,6 +159,10 @@ pub enum ClientMessage {
         peer_id: String,
         blocked: bool,
     },
+
+    /// Request by the room owner to immediately and permanently destroy the room.
+    #[serde(alias = "DETONATE_ROOM")]
+    DetonateRoom,
 }
 
 /// Muted status metadata for a participant in a room session.
@@ -341,6 +345,13 @@ pub enum ServerMessage {
     RoomClosed {
         room_code: String,
         reason: String,
+    },
+
+    /// Broadcast notification that the room has been immediately and permanently detonated by the owner.
+    RoomDetonated {
+        room_code: String,
+        #[serde(rename = "roomCode")]
+        room_code_camel: String,
     },
 
     /// Application-level heartbeat pong.
@@ -619,6 +630,14 @@ impl ServerMessage {
         Self::RoomClosed {
             room_code: room_code.into(),
             reason: reason.into(),
+        }
+    }
+
+    pub fn room_detonated(room_code: impl Into<String>) -> Self {
+        let code = room_code.into();
+        Self::RoomDetonated {
+            room_code: code.clone(),
+            room_code_camel: code,
         }
     }
 
@@ -1044,5 +1063,21 @@ mod tests {
         assert!(json.contains(r#""chatBlockedPeers":["bob"]"#));
         assert!(json.contains(r#""file_blocked_peers":["charlie"]"#));
         assert!(json.contains(r#""fileBlockedPeers":["charlie"]"#));
+    }
+
+    #[test]
+    fn test_client_message_detonate_room_deserialization() {
+        let json = r#"{"type":"DETONATE_ROOM"}"#;
+        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg, ClientMessage::DetonateRoom);
+    }
+
+    #[test]
+    fn test_server_message_room_detonated_serialization() {
+        let msg = ServerMessage::room_detonated("1234-5678-9012");
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"ROOM_DETONATED""#));
+        assert!(json.contains(r#""room_code":"1234-5678-9012""#));
+        assert!(json.contains(r#""roomCode":"1234-5678-9012""#));
     }
 }

@@ -109,8 +109,9 @@ pub async fn handle_socket(
         tokio::select! {
             Some(server_msg) = rx.recv() => {
                 let is_room_closed = matches!(server_msg, ServerMessage::RoomClosed { .. });
+                let is_room_detonated = matches!(server_msg, ServerMessage::RoomDetonated { .. });
                 let is_kicked = matches!(&server_msg, ServerMessage::Error { code, .. } if code == "KICKED_FROM_ROOM");
-                let should_close = is_room_closed || is_kicked;
+                let should_close = is_room_closed || is_room_detonated || is_kicked;
 
                 let json = match serde_json::to_string(&server_msg) {
                     Ok(s) => s,
@@ -1308,6 +1309,57 @@ async fn handle_client_message(
                 }
                 Err(e) => {
                     let _ = tx.send(ServerMessage::error("SET_FILE_VISIBILITY_FAILED", e.to_string()));
+                }
+            }
+        }
+        ClientMessage::DetonateRoom => {
+            let (code, sender_id, _) = match current_session.as_ref() {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(ServerMessage::error(
+                        "NOT_IN_ROOM",
+                        "Must join a room before detonating it",
+                    ));
+                    return;
+                }
+            };
+
+            if !state
+                .room_manager
+                .has_permission(code, sender_id, crate::room::Permission::DetonateRoom)
+            {
+                let _ = tx.send(ServerMessage::error(
+                    "UNAUTHORIZED",
+                    "Unauthorized to detonate this room",
+                ));
+                return;
+            }
+
+            match state.room_manager.detonate_room(code, sender_id) {
+                Ok(()) => {
+                    info!(
+                        connection_id = %connection_id,
+                        room = %code,
+                        operator = %sender_id,
+                        event = "DETONATE_ROOM",
+                        "Room detonated by authorized owner"
+                    );
+                    *current_session = None;
+                }
+                Err(RoomError::PeerNotFound(p)) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "PEER_NOT_FOUND",
+                        format!("Operator peer '{p}' not found in room"),
+                    ));
+                }
+                Err(RoomError::Unauthorized) => {
+                    let _ = tx.send(ServerMessage::error(
+                        "UNAUTHORIZED",
+                        "Unauthorized to detonate this room",
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::error("DETONATE_FAILED", e.to_string()));
                 }
             }
         }

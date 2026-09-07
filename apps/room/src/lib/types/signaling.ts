@@ -122,6 +122,9 @@ export type ClientSignalingMessage =
 			peer_id?: string;
 			peerId?: string;
 			blocked: boolean;
+	  }
+	| {
+			type: 'DETONATE_ROOM';
 	  };
 
 /**
@@ -242,6 +245,12 @@ export interface RoomClosedServerMessage {
 	reason: string;
 }
 
+export interface RoomDetonatedServerMessage {
+	type: 'ROOM_DETONATED';
+	room_code?: string;
+	roomCode?: string;
+}
+
 export interface PongServerMessage {
 	type: 'PONG';
 }
@@ -325,6 +334,7 @@ export type ServerSignalingMessage =
 	| PasswordVerifiedServerMessage
 	| RoomClosingServerMessage
 	| RoomClosedServerMessage
+	| RoomDetonatedServerMessage
 	| PongServerMessage
 	| ErrorServerMessage
 	| IceServersServerMessage

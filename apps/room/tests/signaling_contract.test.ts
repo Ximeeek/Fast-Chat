@@ -191,6 +191,11 @@ describe('SignalingClient Outgoing Message Contract Tests', () => {
 				name: 'ping',
 				invoke: () => client.ping(),
 				expectedType: 'PING'
+			},
+			{
+				name: 'detonateRoom',
+				invoke: () => client.detonateRoom(),
+				expectedType: 'DETONATE_ROOM'
 			}
 		];
 
@@ -381,5 +386,42 @@ describe('Live Signaling Server E2E Deserialization: Visibility & Ownership Acti
 		assert.equal(state.error?.code, 'ROOM_CLOSED');
 
 		unsub();
+	});
+
+	test('Inbound ROOM_DETONATED transitions roomStore to closed with closureReason ROOM_DETONATED and closes connection', () => {
+		const client = new SignalingClient();
+		let state: any;
+		let active: boolean | undefined;
+
+		const unsub = isRoomActive.subscribe((val) => (active = val));
+		const unsubStore = roomStore.subscribe((s) => (state = s));
+
+		roomStore.setCreated({
+			type: 'ROOM_CREATED',
+			code: '1234-5678-9012',
+			peer_id: 'alice',
+			peerId: 'alice',
+			salt: 'salt123',
+			crypto_salt: 'salt123',
+			expires_at: Math.floor(Date.now() / 1000) + 600,
+			expiresAt: Math.floor(Date.now() / 1000) + 600
+		});
+
+		assert.equal(active, true);
+
+		(client as any).handleIncomingRawMessage(
+			JSON.stringify({
+				type: 'ROOM_DETONATED',
+				room_code: '1234-5678-9012'
+			})
+		);
+
+		assert.equal(state.lifecycle, 'closed');
+		assert.equal(state.closureReason, 'ROOM_DETONATED');
+		assert.equal(state.connectionState, 'closed');
+		assert.equal(active, false);
+
+		unsub();
+		unsubStore();
 	});
 });

@@ -396,6 +396,16 @@ export class SignalingClient {
 	}
 
 	/**
+	 * Requests immediate, irreversible detonation and permanent destruction of the room.
+	 * Can only be invoked by the room owner holding DetonateRoom permission.
+	 */
+	public detonateRoom(): void {
+		this.send({
+			type: 'DETONATE_ROOM'
+		});
+	}
+
+	/**
 	 * Verifies the room password for an active room session during rekey.
 	 */
 	public async verifyPassword(password: string): Promise<boolean> {
@@ -634,6 +644,15 @@ export class SignalingClient {
 			}
 			case 'ROOM_CLOSED':
 				roomStore.setClosed(msg.reason);
+				break;
+			case 'ROOM_DETONATED':
+				this.isExplicitlyClosed = true;
+				this.stopHeartbeat();
+				if (this.ws) {
+					this.ws.close();
+					this.ws = null;
+				}
+				roomStore.setDetonated();
 				break;
 			case 'ERROR':
 				if (msg.code === 'KICKED_FROM_ROOM') {

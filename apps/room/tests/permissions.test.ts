@@ -17,7 +17,8 @@ describe('Role & Permission UI Helpers (UX Visibility)', () => {
 			'TransferOwnership',
 			'LockRoom',
 			'ManageChatVisibility',
-			'ManageFileVisibility'
+			'ManageFileVisibility',
+			'DetonateRoom'
 		];
 
 		for (const perm of expectedPermissions) {
@@ -26,7 +27,7 @@ describe('Role & Permission UI Helpers (UX Visibility)', () => {
 	});
 
 	test('ROLE_PERMISSIONS matrix grants all permissions to Owner and none to Participant', () => {
-		assert.equal(ROLE_PERMISSIONS[Role.Owner].length, 7);
+		assert.equal(ROLE_PERMISSIONS[Role.Owner].length, 8);
 		assert.deepEqual(ROLE_PERMISSIONS[Role.Participant], []);
 
 		for (const perm of Object.values(Permission)) {
@@ -43,6 +44,7 @@ describe('Role & Permission UI Helpers (UX Visibility)', () => {
 		assert.equal(hasPermission(Role.Owner, Permission.LockRoom), true);
 		assert.equal(hasPermission(Role.Owner, Permission.ManageChatVisibility), true);
 		assert.equal(hasPermission(Role.Owner, Permission.ManageFileVisibility), true);
+		assert.equal(hasPermission(Role.Owner, Permission.DetonateRoom), true);
 	});
 
 	test('hasPermission denies permissions to Participant role', () => {
@@ -53,6 +55,7 @@ describe('Role & Permission UI Helpers (UX Visibility)', () => {
 		assert.equal(hasPermission(Role.Participant, Permission.LockRoom), false);
 		assert.equal(hasPermission(Role.Participant, Permission.ManageChatVisibility), false);
 		assert.equal(hasPermission(Role.Participant, Permission.ManageFileVisibility), false);
+		assert.equal(hasPermission(Role.Participant, Permission.DetonateRoom), false);
 	});
 
 	test('hasPermission safely returns false for null, undefined, or unknown roles', () => {

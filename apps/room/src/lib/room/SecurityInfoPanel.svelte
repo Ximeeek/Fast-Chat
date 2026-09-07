@@ -2,11 +2,15 @@
 	interface Props {
 		isOpen: boolean;
 		onClose: () => void;
+		canDetonate?: boolean;
+		onDetonate?: () => void;
 	}
 
 	let {
 		isOpen,
-		onClose
+		onClose,
+		canDetonate = false,
+		onDetonate
 	}: Props = $props();
 </script>
 
@@ -101,6 +105,45 @@
 					</p>
 				</div>
 			</div>
+
+			{#if canDetonate && onDetonate}
+				<!-- Destructive Owner Action: Detonate Room -->
+				<div class="pt-2 border-t border-red-900/40">
+					<div class="p-3.5 rounded-xl bg-red-950/20 border border-red-500/30 space-y-2.5">
+						<div class="font-bold text-red-400 uppercase tracking-wider flex items-center justify-between text-[11px] font-['Orbitron',sans-serif]">
+							<span class="flex items-center gap-1.5">
+								<svg class="w-4 h-4 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M12 9v4"/>
+									<path d="M12 17h.01"/>
+									<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+								</svg>
+								EMERGENCY DESTRUCTION
+							</span>
+							<span class="text-[9px] px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 font-mono">
+								OWNER ONLY
+							</span>
+						</div>
+						<p class="text-zinc-400 text-[11px] leading-relaxed">
+							Instantly and irreversibly destroys this room without grace period. All participants are disconnected immediately and all ephemeral keys and in-memory tables are destroyed with zero trace.
+						</p>
+						<button
+							type="button"
+							onclick={() => {
+								onClose();
+								onDetonate();
+							}}
+							class="w-full min-h-[38px] px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 active:scale-[0.99] text-white font-bold uppercase text-xs transition-all shadow-[0_0_20px_rgba(239,68,68,0.3)] flex items-center justify-center gap-2 cursor-pointer"
+						>
+							<svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<circle cx="12" cy="12" r="9"/>
+								<line x1="12" y1="8" x2="12" y2="12"/>
+								<line x1="12" y1="16" x2="12.01" y2="16"/>
+							</svg>
+							Detonate Room
+						</button>
+					</div>
+				</div>
+			{/if}
 
 			<!-- Footer -->
 			<div class="pt-2 flex justify-end">

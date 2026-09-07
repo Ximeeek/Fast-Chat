@@ -398,6 +398,17 @@ describe('In-Memory Room Store Lifecycle', () => {
 		assert.equal(state.lifecycle, 'closed');
 		assert.equal(state.closureReason, 'Room lifetime expired');
 		assert.equal(state.connectionState, 'closed');
+
+		roomStore.setDetonated();
+
+		const unsub3 = roomStore.subscribe((s) => {
+			state = s;
+		});
+		unsub3();
+
+		assert.equal(state.lifecycle, 'closed');
+		assert.equal(state.closureReason, 'ROOM_DETONATED');
+		assert.equal(state.connectionState, 'closed');
 	});
 
 	test('chat and file visibility blocking updates room store state and derived stores', () => {
