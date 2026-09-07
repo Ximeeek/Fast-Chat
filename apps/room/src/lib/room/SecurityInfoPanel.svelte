@@ -2,56 +2,12 @@
 	interface Props {
 		isOpen: boolean;
 		onClose: () => void;
-		isOwner?: boolean;
-		hasPassword?: boolean;
-		onSetPassword?: (password: string) => Promise<void> | void;
-		canLockRoom?: boolean;
-		isLocked?: boolean;
-		onToggleLock?: () => void;
 	}
 
 	let {
 		isOpen,
-		onClose,
-		isOwner = false,
-		hasPassword = false,
-		onSetPassword,
-		canLockRoom = false,
-		isLocked = false,
-		onToggleLock
+		onClose
 	}: Props = $props();
-
-	let passwordInput = $state('');
-	let isSubmitting = $state(false);
-	let statusMessage = $state<string | null>(null);
-	let errorMessage = $state<string | null>(null);
-
-	async function handleSubmit(e: SubmitEvent) {
-		e.preventDefault();
-		const trimmed = passwordInput.trim();
-		if (!trimmed) {
-			errorMessage = 'Password cannot be empty';
-			statusMessage = null;
-			return;
-		}
-
-		errorMessage = null;
-		isSubmitting = true;
-		try {
-			if (onSetPassword) {
-				await onSetPassword(trimmed);
-				statusMessage = hasPassword
-					? 'Room password successfully updated.'
-					: 'Room password successfully configured.';
-				passwordInput = '';
-			}
-		} catch (err) {
-			errorMessage = err instanceof Error ? err.message : 'Failed to update password';
-			statusMessage = null;
-		} finally {
-			isSubmitting = false;
-		}
-	}
 </script>
 
 {#if isOpen}
@@ -88,127 +44,6 @@
 			<h2 id="security-modal-title" class="text-sm sm:text-base font-bold uppercase tracking-wide text-white font-['Orbitron',sans-serif]">
 				Why FastChat Room Is Secure
 			</h2>
-
-			{#if isOwner}
-				<!-- Room Password Management (Owner Only) -->
-				<section class="p-4 rounded-xl bg-[#0e1424] border border-cyan-500/30 space-y-3 shadow-[0_0_20px_rgba(0,229,255,0.05)]">
-					<div class="flex items-center justify-between">
-						<div class="font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-2 font-['Orbitron',sans-serif] text-[11px]">
-							<svg class="w-4 h-4 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
-								<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-							</svg>
-							<span>Room Password Protection</span>
-						</div>
-						{#if hasPassword}
-							<span class="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono uppercase font-bold border border-emerald-500/30">
-								Protected
-							</span>
-						{:else}
-							<span class="text-[9px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-mono uppercase font-bold border border-amber-500/30">
-								Unprotected
-							</span>
-						{/if}
-					</div>
-
-					<p class="text-zinc-400 text-[11px] leading-relaxed">
-						{hasPassword
-							? 'Change the room password. Existing participants will have 15s to enter the new password.'
-							: 'Set a room password to enforce end-to-end key rotation (REKEY) across all participants.'}
-					</p>
-
-					<form onsubmit={handleSubmit} class="space-y-2.5">
-						<div class="flex gap-2">
-							<input
-								type="password"
-								bind:value={passwordInput}
-								placeholder={hasPassword ? 'Enter new password' : 'Enter room password'}
-								disabled={isSubmitting}
-								class="flex-1 min-h-[38px] px-3 rounded-lg bg-[#05070c] border border-white/10 focus:border-cyan-400 focus:outline-none text-zinc-100 text-xs font-mono placeholder:text-zinc-600 disabled:opacity-50"
-							/>
-							<button
-								type="submit"
-								disabled={isSubmitting || !passwordInput.trim()}
-								class="min-h-[38px] px-4 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-black font-bold uppercase text-xs transition-all cursor-pointer disabled:cursor-not-allowed shrink-0 font-['Orbitron',sans-serif]"
-							>
-								{isSubmitting ? 'Updating...' : hasPassword ? 'Change Password' : 'Set Password'}
-							</button>
-						</div>
-
-						{#if errorMessage}
-							<div class="text-red-400 text-[11px] font-medium flex items-center gap-1.5">
-								<svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-									<circle cx="12" cy="12" r="10"/>
-									<line x1="12" y1="8" x2="12" y2="12"/>
-									<line x1="12" y1="16" x2="12.01" y2="16"/>
-								</svg>
-								<span>{errorMessage}</span>
-							</div>
-						{/if}
-
-						{#if statusMessage}
-							<div class="text-emerald-400 text-[11px] font-medium flex items-center gap-1.5">
-								<svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-									<path d="M20 6 9 17l-5-5"/>
-								</svg>
-								<span>{statusMessage}</span>
-							</div>
-						{/if}
-					</form>
-				</section>
-			{/if}
-
-			{#if canLockRoom}
-				<!-- Room Entry Lock (gated by canLockRoom / Permission::LockRoom) -->
-				<section class="p-4 rounded-xl bg-[#0e1424] border border-cyan-500/30 space-y-3 shadow-[0_0_20px_rgba(0,229,255,0.05)]">
-					<div class="flex items-center justify-between">
-						<div class="font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-2 font-['Orbitron',sans-serif] text-[11px]">
-							<svg class="w-4 h-4 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-								<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-							</svg>
-							<span>Room Entry Lock</span>
-						</div>
-						{#if isLocked}
-							<span class="text-[9px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 font-mono uppercase font-bold border border-red-500/30">
-								Locked
-							</span>
-						{:else}
-							<span class="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono uppercase font-bold border border-emerald-500/30">
-								Open
-							</span>
-						{/if}
-					</div>
-
-					<p class="text-zinc-400 text-[11px] leading-relaxed">
-						{isLocked
-							? 'Room entry is currently locked. New participants cannot join, while existing members continue uninterrupted.'
-							: 'Room is open to new participants who have the room identifier.'}
-					</p>
-
-					<div class="pt-1">
-						<button
-							type="button"
-							onclick={onToggleLock}
-							class="w-full min-h-[38px] px-4 rounded-lg font-bold uppercase text-xs transition-all cursor-pointer font-['Orbitron',sans-serif] flex items-center justify-center gap-2 {isLocked ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-[0_0_15px_rgba(16,185,129,0.3)]' : 'bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40'}"
-						>
-							{#if isLocked}
-								<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-									<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-									<path d="M7 11V7a5 5 0 0 1 9.9-1"/>
-								</svg>
-								<span>Unlock Entry</span>
-							{:else}
-								<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-									<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-									<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-								</svg>
-								<span>Lock Entry</span>
-							{/if}
-						</button>
-					</div>
-				</section>
-			{/if}
 
 			<!-- Security Points Grid -->
 			<div class="space-y-3 text-xs">

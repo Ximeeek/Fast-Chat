@@ -40,6 +40,7 @@
 	import RoomTimer from '$lib/room/RoomTimer.svelte';
 	import RoomClosingBanner from '$lib/room/RoomClosingBanner.svelte';
 	import SecurityInfoPanel from '$lib/room/SecurityInfoPanel.svelte';
+	import RoomAccessControls from '$lib/room/RoomAccessControls.svelte';
 	import RekeyPromptModal from '$lib/room/RekeyPromptModal.svelte';
 	import ConnectionBadge from '$lib/room/ConnectionBadge.svelte';
 	import { completedFiles } from '$lib/stores/transfer';
@@ -1185,6 +1186,16 @@
 						</div>
 					{/if}
 
+					{#if $roomStore.hasPassword}
+						<div class="inline-flex items-center space-x-1 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] text-emerald-300 uppercase font-bold font-mono">
+							<svg class="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+								<path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+							</svg>
+							<span>Protected</span>
+						</div>
+					{/if}
+
 					<ConnectionBadge />
 
 					<div class="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-[#0a0d16] border border-white/10 text-[10px] text-zinc-400 uppercase font-semibold font-mono">
@@ -1311,6 +1322,18 @@
 			<div class="p-4 sm:p-6 space-y-6">
 				<!-- Hero Room Code Element -->
 				<RoomCodeHero {roomCode} {roomToken} />
+
+				<!-- Room Access Controls (Password Protection & Entry Lock) -->
+				{#if $roomStore.isOwner || canLockRoom}
+					<RoomAccessControls
+						isOwner={$roomStore.isOwner}
+						hasPassword={$roomStore.hasPassword}
+						onSetPassword={handleOwnerSetPassword}
+						canLockRoom={canLockRoom}
+						isLocked={$roomStore.isLocked}
+						onToggleLock={handleToggleRoomLock}
+					/>
+				{/if}
 
 				<!-- Participants -->
 				<div>
@@ -1888,13 +1911,7 @@
 		<!-- Security Specifications Modal -->
 		<SecurityInfoPanel
 			isOpen={isSecurityInfoOpen}
-			isOwner={$roomStore.isOwner}
-			hasPassword={$roomStore.hasPassword}
-			onSetPassword={handleOwnerSetPassword}
 			onClose={() => (isSecurityInfoOpen = false)}
-			canLockRoom={canLockRoom}
-			isLocked={$roomStore.isLocked}
-			onToggleLock={handleToggleRoomLock}
 		/>
 
 		<!-- Rekey Password Prompt Modal for Participants -->
