@@ -39,6 +39,10 @@ pub enum ClientMessage {
         has_password: Option<bool>,
         #[serde(default)]
         password: Option<String>,
+        #[serde(default, alias = "hoppingEnabled")]
+        hopping_enabled: Option<bool>,
+        #[serde(default, alias = "autoRotateIntervalSeconds")]
+        auto_rotate_interval_seconds: Option<u64>,
     },
 
     /// Request to join an existing room.
@@ -163,6 +167,38 @@ pub enum ClientMessage {
     /// Request by the room owner to immediately and permanently destroy the room.
     #[serde(alias = "DETONATE_ROOM")]
     DetonateRoom,
+}
+
+impl ClientMessage {
+    pub fn create_room(
+        peer_id: Option<String>,
+        has_password: Option<bool>,
+        password: Option<String>,
+    ) -> Self {
+        Self::CreateRoom {
+            peer_id,
+            has_password,
+            password,
+            hopping_enabled: None,
+            auto_rotate_interval_seconds: None,
+        }
+    }
+
+    pub fn create_room_with_hopping(
+        peer_id: Option<String>,
+        has_password: Option<bool>,
+        password: Option<String>,
+        hopping_enabled: Option<bool>,
+        auto_rotate_interval_seconds: Option<u64>,
+    ) -> Self {
+        Self::CreateRoom {
+            peer_id,
+            has_password,
+            password,
+            hopping_enabled,
+            auto_rotate_interval_seconds,
+        }
+    }
 }
 
 /// Muted status metadata for a participant in a room session.
@@ -380,9 +416,25 @@ pub enum ServerMessage {
     PasswordVerified {
         valid: bool,
     },
+
+    /// Notification dispatched exclusively to the room owner containing the newly rotated room code.
+    #[serde(rename = "ROOM_CODE_ROTATED")]
+    RoomCodeRotated {
+        new_code: String,
+        #[serde(rename = "newCode")]
+        new_code_camel: String,
+    },
 }
 
 impl ServerMessage {
+    pub fn room_code_rotated(new_code: impl Into<String>) -> Self {
+        let code = new_code.into();
+        Self::RoomCodeRotated {
+            new_code: code.clone(),
+            new_code_camel: code,
+        }
+    }
+
     pub fn password_verified(valid: bool) -> Self {
         Self::PasswordVerified { valid }
     }
@@ -691,10 +743,12 @@ mod tests {
                 peer_id: Some("alice".to_string()),
                 has_password: None,
                 password: None,
+                hopping_enabled: None,
+                auto_rotate_interval_seconds: None,
             }
         );
 
-        let json_camel = r#"{"type":"CREATE_ROOM","peerId":"alice","hasPassword":true,"password":"secret"}"#;
+        let json_camel = r#"{"type":"CREATE_ROOM","peerId":"alice","hasPassword":true,"password":"secret","hoppingEnabled":true,"autoRotateIntervalSeconds":300}"#;
         let msg_camel: ClientMessage = serde_json::from_str(json_camel).unwrap();
         assert_eq!(
             msg_camel,
@@ -702,6 +756,8 @@ mod tests {
                 peer_id: Some("alice".to_string()),
                 has_password: Some(true),
                 password: Some("secret".to_string()),
+                hopping_enabled: Some(true),
+                auto_rotate_interval_seconds: Some(300),
             }
         );
     }

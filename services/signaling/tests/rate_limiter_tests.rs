@@ -89,11 +89,7 @@ async fn test_room_creation_rate_limiting_ws() {
     let (mut ws, _) = connect_async(&ws_url).await.unwrap();
 
     // 1st room creation succeeds
-    let create1 = ClientMessage::CreateRoom {
-        peer_id: Some("owner1".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create1 = ClientMessage::create_room(Some("owner1".to_string()), None, None);
     ws.send(Message::Text(serde_json::to_string(&create1).unwrap().into()))
         .await
         .unwrap();
@@ -106,11 +102,7 @@ async fn test_room_creation_rate_limiting_ws() {
 
     // Second connection from same IP attempting room creation is rejected
     let (mut ws2, _) = connect_async(&ws_url).await.unwrap();
-    let create2 = ClientMessage::CreateRoom {
-        peer_id: Some("owner2".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create2 = ClientMessage::create_room(Some("owner2".to_string()), None, None);
     ws2.send(Message::Text(serde_json::to_string(&create2).unwrap().into()))
         .await
         .unwrap();
@@ -143,11 +135,7 @@ async fn test_room_creation_rate_limiting_ws() {
 
     // After closing first room, creating a new room from same IP immediately succeeds
     let (mut ws3, _) = connect_async(&ws_url).await.unwrap();
-    let create3 = ClientMessage::CreateRoom {
-        peer_id: Some("owner3".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create3 = ClientMessage::create_room(Some("owner3".to_string()), None, None);
     ws3.send(Message::Text(serde_json::to_string(&create3).unwrap().into()))
         .await
         .unwrap();
@@ -283,11 +271,7 @@ async fn test_global_room_and_connection_ceiling() {
     let (mut ws1, _) = connect_async(&ws_url).await.unwrap();
 
     // Create room 1 (occupies room ceiling)
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("owner".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("owner".to_string()), None, None);
     ws1.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -544,11 +528,7 @@ async fn test_ownership_transfer_updates_active_room_limiter_for_both_parties() 
     req_a.headers_mut().insert("x-forwarded-for", ip_a.parse().unwrap());
     let (mut ws_a, _) = connect_async(req_a).await.unwrap();
 
-    let create_a = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_a = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_a).unwrap().into()))
         .await
         .unwrap();
@@ -567,11 +547,7 @@ async fn test_ownership_transfer_updates_active_room_limiter_for_both_parties() 
     req_a_second.headers_mut().insert("x-forwarded-for", ip_a.parse().unwrap());
     let (mut ws_a_second, _) = connect_async(req_a_second).await.unwrap();
 
-    let create_a_second = ClientMessage::CreateRoom {
-        peer_id: Some("alice2".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_a_second = ClientMessage::create_room(Some("alice2".to_string()), None, None);
     ws_a_second.send(Message::Text(serde_json::to_string(&create_a_second).unwrap().into()))
         .await
         .unwrap();
@@ -622,11 +598,7 @@ async fn test_ownership_transfer_updates_active_room_limiter_for_both_parties() 
     req_a_new.headers_mut().insert("x-forwarded-for", ip_a.parse().unwrap());
     let (mut ws_a_new, _) = connect_async(req_a_new).await.unwrap();
 
-    let create_a_new = ClientMessage::CreateRoom {
-        peer_id: Some("alice_new".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_a_new = ClientMessage::create_room(Some("alice_new".to_string()), None, None);
     ws_a_new.send(Message::Text(serde_json::to_string(&create_a_new).unwrap().into()))
         .await
         .unwrap();
@@ -642,11 +614,7 @@ async fn test_ownership_transfer_updates_active_room_limiter_for_both_parties() 
     req_b_second.headers_mut().insert("x-forwarded-for", ip_b.parse().unwrap());
     let (mut ws_b_second, _) = connect_async(req_b_second).await.unwrap();
 
-    let create_b_second = ClientMessage::CreateRoom {
-        peer_id: Some("bob_second".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_b_second = ClientMessage::create_room(Some("bob_second".to_string()), None, None);
     ws_b_second.send(Message::Text(serde_json::to_string(&create_b_second).unwrap().into()))
         .await
         .unwrap();
@@ -671,11 +639,7 @@ async fn test_ownership_transfer_updates_active_room_limiter_for_both_parties() 
     req_b_new.headers_mut().insert("x-forwarded-for", ip_b.parse().unwrap());
     let (mut ws_b_new, _) = connect_async(req_b_new).await.unwrap();
 
-    let create_b_new = ClientMessage::CreateRoom {
-        peer_id: Some("bob_new".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_b_new = ClientMessage::create_room(Some("bob_new".to_string()), None, None);
     ws_b_new.send(Message::Text(serde_json::to_string(&create_b_new).unwrap().into()))
         .await
         .unwrap();

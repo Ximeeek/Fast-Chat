@@ -33,6 +33,8 @@ pub struct RoomManager {
     pub rooms: DashMap<RoomId, RoomState>,
     /// Auxiliary lookup mapping public RoomCode to RoomId for JOIN_ROOM discovery.
     pub code_to_id: DashMap<RoomCode, RoomId>,
+    /// Serialized rotation locks per room ID ensuring rotations do not race.
+    pub rotation_locks: DashMap<RoomId, Arc<std::sync::Mutex<()>>>,
     /// Global application configuration.
     pub config: Config,
     /// Broadcaster interface to notify clients of lifecycle events.
@@ -45,6 +47,7 @@ impl RoomManager {
         Self {
             rooms: DashMap::new(),
             code_to_id: DashMap::new(),
+            rotation_locks: DashMap::new(),
             config,
             broadcaster: Arc::new(LoggingBroadcaster),
         }
@@ -55,6 +58,7 @@ impl RoomManager {
         Self {
             rooms: DashMap::new(),
             code_to_id: DashMap::new(),
+            rotation_locks: DashMap::new(),
             config,
             broadcaster,
         }
@@ -69,10 +73,22 @@ impl RoomManager {
         owner_rate_key: Option<RateKey>,
         password_status: PasswordStatus,
     ) -> Result<(RoomId, RoomCode), RoomCodeError> {
+        self.create_room_with_options(owner_peer_id, owner_rate_key, password_status, false, None)
+    }
+
+    /// Creates a new ephemeral room with hopping room codes and optional periodic rotation interval.
+    pub fn create_room_with_options(
+        &self,
+        owner_peer_id: Option<String>,
+        owner_rate_key: Option<RateKey>,
+        password_status: PasswordStatus,
+        hopping_enabled: bool,
+        auto_rotate_interval_seconds: Option<u64>,
+    ) -> Result<(RoomId, RoomCode), RoomCodeError> {
         let code = RoomCode::generate_unique(&self.code_to_id)?;
         let room_id = RoomId::generate();
         let now_ts = Utc::now().timestamp();
-        let state = RoomState::new(
+        let state = RoomState::with_hopping(
             room_id,
             code.clone(),
             owner_peer_id,
@@ -80,12 +96,68 @@ impl RoomManager {
             password_status,
             &self.config,
             now_ts,
+            hopping_enabled,
+            auto_rotate_interval_seconds,
         );
 
         self.rooms.insert(room_id, state);
         self.code_to_id.insert(code.clone(), room_id);
-        info!(room_id = %room_id, room = %code, "Created new ephemeral room in-memory");
+        info!(
+            room_id = %room_id,
+            room = %code,
+            hopping = hopping_enabled,
+            interval = ?auto_rotate_interval_seconds,
+            "Created new ephemeral room in-memory"
+        );
         Ok((room_id, code))
+    }
+
+    /// Rotates the room code for an active room with hopping enabled.
+    ///
+    /// Generates a new unique 12-digit code checking collision against the secondary `code_to_id` map,
+    /// atomically updates `code_to_id` by inserting the new code mapping before removing the old one,
+    /// and updates `room.current_code` and `room.last_rotation_at`.
+    ///
+    /// Rotations for the same room are strictly serialized via per-room mutex to prevent race conditions.
+    pub fn rotate_room_code(&self, id: &RoomId) -> Result<RoomCode, RoomError> {
+        let lock = self
+            .rotation_locks
+            .entry(*id)
+            .or_insert_with(|| Arc::new(std::sync::Mutex::new(())))
+            .clone();
+        let _guard = lock.lock().unwrap();
+
+        // 1. Verify room exists and hopping is enabled
+        let (old_code, hopping_enabled) = {
+            let room = self.rooms.get(id).ok_or_else(|| RoomError::PeerNotFound(String::new()))?;
+            (room.current_code.clone(), room.hopping_enabled)
+        };
+
+        if !hopping_enabled {
+            return Ok(old_code);
+        }
+
+        // 2. Generate new unique code avoiding collision with current keys in code_to_id
+        let new_code = RoomCode::generate_unique(&self.code_to_id)
+            .map_err(|_| RoomError::RoomTerminated)?;
+
+        // 3. Atomically update auxiliary map: insert new code before removing old code
+        self.code_to_id.insert(new_code.clone(), *id);
+        self.code_to_id.remove(&old_code);
+
+        // 4. Update room state
+        let mut room = self.rooms.get_mut(id).ok_or_else(|| RoomError::PeerNotFound(String::new()))?;
+        room.current_code = new_code.clone();
+        room.last_rotation_at = std::time::Instant::now();
+
+        info!(
+            room_id = %id,
+            previous_code = %old_code,
+            new_code = %new_code,
+            "Room code rotated successfully"
+        );
+
+        Ok(new_code)
     }
 
     /// Counts active rooms owned by the specified rate key.
@@ -235,9 +307,10 @@ impl RoomManager {
             room.current_code.clone()
         };
 
-        // Atomically evict room record from both DashMaps
+        // Atomically evict room record from DashMaps and rotation locks
         self.rooms.remove(id);
         self.code_to_id.remove(&code);
+        self.rotation_locks.remove(id);
         self.broadcaster.broadcast_room_detonated(id, &code);
         info!(
             room_id = %id,
@@ -527,6 +600,7 @@ impl RoomManager {
             drop(room_entry);
             self.rooms.remove(id);
             self.code_to_id.remove(&current_code);
+            self.rotation_locks.remove(id);
             self.broadcaster.broadcast_room_closed(id, &current_code, "room_empty");
             info!(room_id = %id, room = %current_code, "Room emptied; automatically destroyed from memory");
             return Some(PeerLeaveOutcome {
@@ -593,6 +667,7 @@ impl RoomManager {
                 LifecycleAction::Destroy => {
                     if let Some((_, destroyed_room)) = self.rooms.remove(id) {
                         self.code_to_id.remove(&destroyed_room.current_code);
+                        self.rotation_locks.remove(id);
                         self.broadcaster
                             .broadcast_room_closed(id, &destroyed_room.current_code, "lifetime_or_grace_period_expired");
                         info!(room_id = %id, room = %destroyed_room.current_code, "Room purged from DashMap memory (destroyed)");
@@ -935,4 +1010,72 @@ mod tests {
         assert_eq!(fresh_snap.peers.len(), 1);
         assert_eq!(fresh_snap.state, RoomLifecycleState::Creating);
     }
+
+    #[test]
+    fn test_hopping_code_rotation_updates_state_and_maps() {
+        let config = Config::default();
+        let manager = RoomManager::new(config);
+
+        let (room_id, initial_code) = manager
+            .create_room_with_options(
+                Some("alice".to_string()),
+                None,
+                PasswordStatus::none(),
+                true,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(manager.get_room_id_by_code(&initial_code), Some(room_id));
+        let state_before = manager.get_room_state(&room_id).unwrap();
+        assert!(state_before.is_hopping_enabled());
+        assert_eq!(state_before.current_code, initial_code);
+
+        // Rotate room code
+        let new_code = manager.rotate_room_code(&room_id).unwrap();
+        assert_ne!(new_code, initial_code);
+
+        // Verify old code is no longer mapped
+        assert_eq!(manager.get_room_id_by_code(&initial_code), None);
+
+        // Verify new code is mapped to the same room_id
+        assert_eq!(manager.get_room_id_by_code(&new_code), Some(room_id));
+
+        // Verify RoomState has new code
+        let state_after = manager.get_room_state(&room_id).unwrap();
+        assert_eq!(state_after.current_code, new_code);
+    }
+
+    #[test]
+    fn test_hopping_code_rapid_rotations_no_collisions() {
+        let config = Config::default();
+        let manager = RoomManager::new(config);
+
+        let (room_id, initial_code) = manager
+            .create_room_with_options(
+                Some("alice".to_string()),
+                None,
+                PasswordStatus::none(),
+                true,
+                None,
+            )
+            .unwrap();
+
+        let mut current = initial_code;
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(current.clone());
+
+        for _ in 0..50 {
+            let next_code = manager.rotate_room_code(&room_id).unwrap();
+            assert!(!seen.contains(&next_code), "Generated code collision!");
+            assert_eq!(manager.get_room_id_by_code(&current), None);
+            assert_eq!(manager.get_room_id_by_code(&next_code), Some(room_id));
+            seen.insert(next_code.clone());
+            current = next_code;
+        }
+
+        assert_eq!(manager.code_to_id.len(), 1);
+        assert_eq!(manager.get_room_state(&room_id).unwrap().current_code, current);
+    }
 }
+

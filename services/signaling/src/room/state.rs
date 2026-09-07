@@ -145,6 +145,12 @@ pub struct RoomState {
     #[serde(default)]
     pub is_locked: bool,
     #[serde(default)]
+    pub hopping_enabled: bool,
+    #[serde(default)]
+    pub auto_rotate_interval_seconds: Option<u64>,
+    #[serde(skip, default = "std::time::Instant::now")]
+    pub last_rotation_at: std::time::Instant,
+    #[serde(default)]
     pub chat_blocked_peers: std::collections::HashSet<String>,
     #[serde(default)]
     pub file_blocked_peers: std::collections::HashSet<String>,
@@ -161,6 +167,31 @@ impl RoomState {
         password_status: PasswordStatus,
         config: &Config,
         now_ts: i64,
+    ) -> Self {
+        Self::with_hopping(
+            id,
+            code,
+            owner_peer_id,
+            owner_rate_key,
+            password_status,
+            config,
+            now_ts,
+            false,
+            None,
+        )
+    }
+
+    /// Creates a new room with hopping room codes and optional periodic rotation interval.
+    pub fn with_hopping(
+        id: RoomId,
+        code: RoomCode,
+        owner_peer_id: Option<String>,
+        owner_rate_key: Option<RateKey>,
+        password_status: PasswordStatus,
+        config: &Config,
+        now_ts: i64,
+        hopping_enabled: bool,
+        auto_rotate_interval_seconds: Option<u64>,
     ) -> Self {
         let mut rng = rand::thread_rng();
         let mut crypto_salt = [0u8; 32];
@@ -191,6 +222,9 @@ impl RoomState {
             extension_count: 0,
             owner_rate_key,
             is_locked: false,
+            hopping_enabled,
+            auto_rotate_interval_seconds,
+            last_rotation_at: std::time::Instant::now(),
             chat_blocked_peers: std::collections::HashSet::new(),
             file_blocked_peers: std::collections::HashSet::new(),
         }
@@ -204,6 +238,32 @@ impl RoomState {
     /// Updates the current public room code.
     pub fn set_current_code(&mut self, new_code: RoomCode) {
         self.current_code = new_code;
+    }
+
+    /// Returns whether hopping room codes are active for this room.
+    pub fn is_hopping_enabled(&self) -> bool {
+        self.hopping_enabled
+    }
+
+    /// Checks if this room is eligible for automatic periodic code rotation.
+    pub fn check_auto_rotation(&self, now: std::time::Instant) -> bool {
+        if !self.hopping_enabled {
+            return false;
+        }
+        if let Some(interval_secs) = self.auto_rotate_interval_seconds {
+            if interval_secs == 0 {
+                return false;
+            }
+            if let Some(elapsed) = now.checked_duration_since(self.last_rotation_at) {
+                return elapsed >= std::time::Duration::from_secs(interval_secs);
+            }
+        }
+        false
+    }
+
+    /// Records that a code rotation occurred at the specified instant.
+    pub fn record_rotation(&mut self, now: std::time::Instant) {
+        self.last_rotation_at = now;
     }
 
     /// Sets room lock status. When locked, new participants cannot join.

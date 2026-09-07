@@ -35,11 +35,7 @@ async fn test_ws_create_and_join_room_flow() {
     // 1. Peer A connects and sends CREATE_ROOM
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect peer A");
 
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -157,11 +153,7 @@ async fn test_ws_sdp_and_ice_relay_flow() {
 
     // 1. Peer A creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -308,11 +300,7 @@ async fn test_ws_rekey_and_password_protection_flow() {
 
     // 1. Peer A (owner) creates room without initial password
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -462,11 +450,7 @@ async fn test_ws_lifecycle_closing_and_closed_broadcast_flow() {
 
     // 1. Alice creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -633,11 +617,7 @@ async fn test_two_independent_connections_same_ip_same_room_success() {
 
     // Peer A connects from 127.0.0.1 and creates a room
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect peer A");
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -696,11 +676,7 @@ async fn test_two_independent_connections_same_ip_different_rooms_success() {
 
     // Peer 1 connects from 127.0.0.1 and creates Room 1
     let (mut ws_1, _) = connect_async(&ws_url).await.expect("Failed to connect peer 1");
-    let create_1 = ClientMessage::CreateRoom {
-        peer_id: Some("peer_1".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_1 = ClientMessage::create_room(Some("peer_1".to_string()), None, None);
     ws_1.send(Message::Text(serde_json::to_string(&create_1).unwrap().into()))
         .await
         .unwrap();
@@ -713,11 +689,7 @@ async fn test_two_independent_connections_same_ip_different_rooms_success() {
 
     // Peer 2 connects from the same IP (127.0.0.1) and creates Room 2
     let (mut ws_2, _) = connect_async(&ws_url).await.expect("Failed to connect peer 2");
-    let create_2 = ClientMessage::CreateRoom {
-        peer_id: Some("peer_2".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_2 = ClientMessage::create_room(Some("peer_2".to_string()), None, None);
     ws_2.send(Message::Text(serde_json::to_string(&create_2).unwrap().into()))
         .await
         .unwrap();
@@ -739,11 +711,7 @@ async fn test_same_connection_double_join_rejected_with_already_in_room() {
 
     // Peer A creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect peer A");
-    let create_a = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_a = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_a).unwrap().into()))
         .await
         .unwrap();
@@ -800,11 +768,7 @@ async fn test_connection_disconnect_cleans_up_room_registration_allows_rejoin() 
 
     // Peer A creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect peer A");
-    let create_a = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_a = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_a).unwrap().into()))
         .await
         .unwrap();
@@ -880,11 +844,7 @@ async fn test_ws_owner_departure_transfers_ownership_and_empty_room_auto_destroy
 
     // 1. Alice creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect peer A");
-    let create_a = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_a = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_a).unwrap().into()))
         .await
         .unwrap();
@@ -1087,11 +1047,7 @@ async fn test_ws_set_room_password_owner_and_unauthorized_rejection() {
 
     // 1. Peer A (Alice) creates room without password
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: Some(false),
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), Some(false), None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -1229,11 +1185,7 @@ async fn test_ws_set_room_password_after_ownership_transfer() {
 
     // 1. Alice creates room without password
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -1326,11 +1278,7 @@ async fn test_ws_set_room_password_owner_alone() {
 
     // 1. Alice creates room without password and is alone (0 other peers)
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -1368,11 +1316,7 @@ async fn test_ws_kick_peer_and_reentry_allowed() {
 
     // 1. Alice creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -1491,11 +1435,7 @@ async fn test_ws_mute_and_sweeper_auto_unmute() {
 
     // 1. Alice creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -1665,11 +1605,7 @@ async fn test_ws_transfer_ownership_flow() {
 
     // 1. Alice creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -1791,11 +1727,7 @@ async fn test_ws_room_lock_flow() {
 
     // 1. Alice creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -1942,11 +1874,7 @@ async fn test_ws_chat_and_file_visibility_blocking_flow() {
 
     // 1. Alice connects and creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -2118,11 +2046,7 @@ async fn test_ws_detonate_room_flow() {
 
     // 1. Alice creates room
     let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: Some(false),
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), Some(false), None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -2222,11 +2146,7 @@ async fn test_ws_session_finds_room_by_room_id_independently_of_code() {
 
     // 1. Peer A (Alice) connects and creates a room
     let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect peer A");
-    let create_msg = ClientMessage::CreateRoom {
-        peer_id: Some("alice".to_string()),
-        has_password: None,
-        password: None,
-    };
+    let create_msg = ClientMessage::create_room(Some("alice".to_string()), None, None);
     ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
         .await
         .unwrap();
@@ -2359,3 +2279,228 @@ async fn test_ws_session_finds_room_by_room_id_independently_of_code() {
     assert!(state.room_manager.code_to_id.get(&initial_code).is_none());
     assert!(state.room_manager.code_to_id.is_empty());
 }
+
+#[tokio::test]
+async fn test_hopping_room_rotates_code_upon_peer_join() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice connects and creates a room with hopping enabled
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
+    let create_msg = ClientMessage::create_room_with_hopping(
+        Some("alice".to_string()),
+        None,
+        None,
+        Some(true),
+        None,
+    );
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let initial_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated for Alice, got {resp_a:?}"),
+    };
+
+    // 2. Bob joins using the initial room code
+    let (mut ws_b, _) = connect_async(&ws_url).await.expect("Failed to connect Bob");
+    let join_b = ClientMessage::JoinRoom {
+        code: initial_code.clone(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_b_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_b: ServerMessage = serde_json::from_str(&resp_b_raw).unwrap();
+    assert!(matches!(resp_b, ServerMessage::JoinOk { ref peer_id, .. } if peer_id == "bob"));
+
+    // 3. Alice (owner) receives PEER_JOINED and ROOM_CODE_ROTATED
+    let mut rotated_code = String::new();
+    let mut saw_peer_joined = false;
+    for _ in 0..2 {
+        let msg_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+        let msg: ServerMessage = serde_json::from_str(&msg_raw).unwrap();
+        match msg {
+            ServerMessage::PeerJoined { peer_id, .. } => {
+                assert_eq!(peer_id, "bob");
+                saw_peer_joined = true;
+            }
+            ServerMessage::RoomCodeRotated { new_code, .. } => {
+                rotated_code = new_code;
+            }
+            other => panic!("Unexpected message received by Alice: {other:?}"),
+        }
+    }
+    assert!(saw_peer_joined, "Alice should have received PEER_JOINED for Bob");
+    assert!(!rotated_code.is_empty(), "Alice should have received ROOM_CODE_ROTATED");
+    assert_ne!(rotated_code, initial_code, "New room code must differ from initial code");
+
+    // 4. Bob (non-owner) does NOT receive ROOM_CODE_ROTATED
+    // Verify Bob's socket has no pending message
+    let b_peek = tokio::time::timeout(std::time::Duration::from_millis(100), ws_b.next()).await;
+    assert!(b_peek.is_err(), "Bob should not receive any extra messages like code rotation");
+
+    // 5. Charlie attempts to join with the old initial_code -> rejected with ROOM_NOT_FOUND
+    let (mut ws_c, _) = connect_async(&ws_url).await.expect("Failed to connect Charlie");
+    let join_c_old = ClientMessage::JoinRoom {
+        code: initial_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c_old).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_c_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_c: ServerMessage = serde_json::from_str(&resp_c_raw).unwrap();
+    match resp_c {
+        ServerMessage::Error { code, .. } => assert_eq!(code, "ROOM_NOT_FOUND"),
+        other => panic!("Expected ROOM_NOT_FOUND when joining with old code, got {other:?}"),
+    }
+
+    // 6. Charlie joins with the new rotated_code -> succeeds!
+    let join_c_new = ClientMessage::JoinRoom {
+        code: rotated_code.clone(),
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c_new).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_c_ok_raw = ws_c.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_c_ok: ServerMessage = serde_json::from_str(&resp_c_ok_raw).unwrap();
+    assert!(matches!(resp_c_ok, ServerMessage::JoinOk { ref peer_id, .. } if peer_id == "charlie"));
+
+    // 7. Alice receives PEER_JOINED for charlie and another ROOM_CODE_ROTATED
+    let mut second_rotation = String::new();
+    let mut alice_saw_charlie = false;
+    for _ in 0..2 {
+        let msg_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+        let msg: ServerMessage = serde_json::from_str(&msg_raw).unwrap();
+        match msg {
+            ServerMessage::PeerJoined { peer_id, .. } => {
+                assert_eq!(peer_id, "charlie");
+                alice_saw_charlie = true;
+            }
+            ServerMessage::RoomCodeRotated { new_code, .. } => {
+                second_rotation = new_code;
+            }
+            other => panic!("Unexpected message for Alice on second join: {other:?}"),
+        }
+    }
+    assert!(alice_saw_charlie);
+    assert!(!second_rotation.is_empty());
+    assert_ne!(second_rotation, rotated_code);
+    assert_ne!(second_rotation, initial_code);
+}
+
+#[tokio::test]
+async fn test_hopping_code_existing_peers_remain_connected() {
+    let config = Config::default();
+    let (addr, _state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // Alice creates hopping room
+    let (mut ws_a, _) = connect_async(&ws_url).await.unwrap();
+    let create_msg = ClientMessage::create_room_with_hopping(
+        Some("alice".to_string()),
+        None,
+        None,
+        Some(true),
+        None,
+    );
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let code_0 = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated"),
+    };
+
+    // Bob joins with code_0
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_b = ClientMessage::JoinRoom {
+        code: code_0,
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_b).unwrap().into()))
+        .await
+        .unwrap();
+
+    let _ = ws_b.next().await.unwrap(); // Bob JoinOk
+    let _ = ws_a.next().await.unwrap(); // Alice PeerJoined
+    let a_rot_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap(); // Alice RoomCodeRotated
+    let code_1 = match serde_json::from_str::<ServerMessage>(&a_rot_raw).unwrap() {
+        ServerMessage::RoomCodeRotated { new_code, .. } => new_code,
+        other => panic!("Expected RoomCodeRotated, got {other:?}"),
+    };
+
+    // Charlie joins with code_1
+    let (mut ws_c, _) = connect_async(&ws_url).await.unwrap();
+    let join_c = ClientMessage::JoinRoom {
+        code: code_1,
+        peer_id: Some("charlie".to_string()),
+        password: None,
+    };
+    ws_c.send(Message::Text(serde_json::to_string(&join_c).unwrap().into()))
+        .await
+        .unwrap();
+
+    let _ = ws_c.next().await.unwrap(); // Charlie JoinOk
+    let _ = ws_a.next().await.unwrap(); // Alice PeerJoined(charlie)
+    let _ = ws_a.next().await.unwrap(); // Alice RoomCodeRotated(code_2)
+    let _ = ws_b.next().await.unwrap(); // Bob PeerJoined(charlie)
+
+    // Now Alice sends SDP offer to Bob through signaling server
+    let sdp_offer = ClientMessage::SdpOffer {
+        target_peer_id: "bob".to_string(),
+        sdp: serde_json::json!({ "type": "offer", "sdp": "v=0\r\no=alice..." }),
+    };
+    ws_a.send(Message::Text(serde_json::to_string(&sdp_offer).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Bob receives the SDP offer despite multiple room code rotations
+    let b_sdp_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let b_sdp: ServerMessage = serde_json::from_str(&b_sdp_raw).unwrap();
+    match b_sdp {
+        ServerMessage::SdpOffer { sender_peer_id, sdp, .. } => {
+            assert_eq!(sender_peer_id, "alice");
+            assert_eq!(sdp["type"], "offer");
+        }
+        other => panic!("Expected SdpOffer on Bob, got {other:?}"),
+    }
+
+    // Bob sends SDP answer to Alice
+    let sdp_answer = ClientMessage::SdpAnswer {
+        target_peer_id: "alice".to_string(),
+        sdp: serde_json::json!({ "type": "answer", "sdp": "v=0\r\no=bob..." }),
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&sdp_answer).unwrap().into()))
+        .await
+        .unwrap();
+
+    // Alice receives the SDP answer
+    let a_sdp_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let a_sdp: ServerMessage = serde_json::from_str(&a_sdp_raw).unwrap();
+    match a_sdp {
+        ServerMessage::SdpAnswer { sender_peer_id, sdp, .. } => {
+            assert_eq!(sender_peer_id, "bob");
+            assert_eq!(sdp["type"], "answer");
+        }
+        other => panic!("Expected SdpAnswer on Alice, got {other:?}"),
+    }
+}
+

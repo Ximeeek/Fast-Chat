@@ -251,6 +251,8 @@ async fn handle_client_message(
             peer_id,
             has_password,
             password,
+            hopping_enabled,
+            auto_rotate_interval_seconds,
         } => {
             info!(
                 event = "CREATE_ROOM",
@@ -317,9 +319,22 @@ async fn handle_client_message(
                 PasswordStatus::none()
             };
 
+            let hopping = hopping_enabled.unwrap_or(false);
+            let interval = if hopping {
+                auto_rotate_interval_seconds.filter(|&secs| secs > 0)
+            } else {
+                None
+            };
+
             let (room_id, code) = match state
                 .room_manager
-                .create_room(Some(assigned_peer_id.clone()), Some(*rate_key), password_status)
+                .create_room_with_options(
+                    Some(assigned_peer_id.clone()),
+                    Some(*rate_key),
+                    password_status,
+                    hopping,
+                    interval,
+                )
             {
                 Ok(res) => res,
                 Err(e) => {
@@ -545,6 +560,32 @@ async fn handle_client_message(
                         ServerMessage::peer_joined(assigned_peer_id.clone()),
                         Some(&assigned_peer_id),
                     );
+
+                    // Trigger 1: If hopping room codes are enabled, rotate code immediately after successful peer join
+                    if room_snapshot.hopping_enabled {
+                        match state.room_manager.rotate_room_code(&room_id) {
+                            Ok(new_code) => {
+                                if let Some(owner_id) = room_snapshot.get_owner_id() {
+                                    info!(
+                                        connection_id = %connection_id,
+                                        room_id = %room_id,
+                                        owner = %owner_id,
+                                        new_code = %new_code,
+                                        event = "ROOM_CODE_ROTATED",
+                                        "Dispatching rotated room code exclusively to owner"
+                                    );
+                                    state.sessions.send_to_peer(
+                                        &room_id,
+                                        &owner_id,
+                                        ServerMessage::room_code_rotated(new_code.to_string()),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(room_id = %room_id, error = ?e, "Failed to rotate room code after peer join");
+                            }
+                        }
+                    }
                 }
                 Err(RoomError::RoomLocked) => {
                     let _ = tx.send(ServerMessage::error(
