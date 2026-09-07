@@ -184,7 +184,12 @@ export class SignalingClient {
 	/**
 	 * Creates a room on the signaling server and awaits acknowledgment.
 	 */
-	public async createRoom(options?: { password?: string; peerId?: string }): Promise<RoomCreatedServerMessage> {
+	public async createRoom(options?: {
+		password?: string;
+		peerId?: string;
+		hoppingEnabled?: boolean;
+		autoRotateIntervalSeconds?: number | null;
+	}): Promise<RoomCreatedServerMessage> {
 		await this.ensureConnected();
 
 		return new Promise<RoomCreatedServerMessage>((resolve, reject) => {
@@ -213,7 +218,9 @@ export class SignalingClient {
 				type: 'CREATE_ROOM',
 				peer_id: options?.peerId,
 				password: options?.password,
-				has_password: Boolean(options?.password)
+				has_password: Boolean(options?.password),
+				hopping_enabled: options?.hoppingEnabled,
+				auto_rotate_interval_seconds: options?.autoRotateIntervalSeconds ?? null
 			};
 
 			this.send(msg);
@@ -603,6 +610,14 @@ export class SignalingClient {
 				}
 				break;
 			}
+			case 'ROOM_CODE_ROTATED': {
+				const newCode = (msg as any).new_code || (msg as any).newCode;
+				if (newCode) {
+					roomStore.setRoomCode(newCode);
+					roomStore.setHoppingEnabled(true);
+				}
+				break;
+			}
 			case 'ROOM_OWNER_CHANGED':
 			case 'OWNERSHIP_TRANSFERRED': {
 				const ownerId =
@@ -612,6 +627,10 @@ export class SignalingClient {
 					(msg as any).newOwnerPeerId;
 				if (ownerId) {
 					roomStore.setOwner(ownerId);
+				}
+				if ((msg as any).room_code !== undefined || (msg as any).roomCode !== undefined) {
+					const code = (msg as any).room_code ?? (msg as any).roomCode;
+					roomStore.setRoomCode(code || null);
 				}
 				break;
 			}

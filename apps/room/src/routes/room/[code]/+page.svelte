@@ -37,7 +37,7 @@
 	import { FileSender, FileReceiver, FileTransferSyncManager, isFileChunkPacket, parseFileChunkPacket } from '$lib/transfer';
 	import FileTransfer from '$lib/transfer/FileTransfer.svelte';
 	import BrowserTransferNotice from '$lib/transfer/BrowserTransferNotice.svelte';
-	import { validateRoomCode, resolveRoomIdentifier } from '$lib/utils/roomCode';
+	import { validateRoomCode, resolveRoomIdentifier, encodeRoomToken } from '$lib/utils/roomCode';
 	import RoomCodeHero from '$lib/room/RoomCodeHero.svelte';
 	import RoomTimer from '$lib/room/RoomTimer.svelte';
 	import RoomClosingBanner from '$lib/room/RoomClosingBanner.svelte';
@@ -56,6 +56,13 @@
 	const roomCode = resolved ? resolved.code : '';
 	const roomToken = resolved ? resolved.token : '';
 	const isValidCode = Boolean(resolved && validateRoomCode(roomCode));
+
+	const activeRoomCode = $derived(
+		!$roomStore.isOwner && ($roomStore.hoppingEnabled || $roomStore.code === '')
+			? ''
+			: ($roomStore.code || roomCode)
+	);
+	const activeRoomToken = $derived(activeRoomCode ? encodeRoomToken(activeRoomCode) : '');
 
 	let password = $state('');
 	let isJoining = $state(false);
@@ -767,6 +774,19 @@
 					fileTransferSync?.handlePeerLeft(peer);
 					break;
 				}
+				case 'ROOM_CODE_ROTATED': {
+					const newCode = msg.new_code || msg.newCode || '';
+					details = `Room code rotated: ${newCode}`;
+					if (newCode) {
+						roomStore.setRoomCode(newCode);
+						roomStore.setHoppingEnabled(true);
+						const newToken = encodeRoomToken(newCode);
+						if (typeof window !== 'undefined' && window.history) {
+							window.history.replaceState(window.history.state, '', `/room/${newToken}${window.location.hash}`);
+						}
+					}
+					break;
+				}
 				case 'ROOM_OWNER_CHANGED': {
 					const newOwner = msg.owner_peer_id || msg.ownerPeerId || '';
 					details = `Room ownership transferred to ${newOwner}`;
@@ -779,6 +799,14 @@
 					);
 					if (isLocal) {
 						ownerPromotionBanner = true;
+						const code = (msg as any).room_code ?? (msg as any).roomCode;
+						if (code) {
+							roomStore.setRoomCode(code);
+							const newToken = encodeRoomToken(code);
+							if (typeof window !== 'undefined' && window.history) {
+								window.history.replaceState(window.history.state, '', `/room/${newToken}${window.location.hash}`);
+							}
+						}
 					}
 					break;
 				}
@@ -1371,7 +1399,12 @@
 			<!-- Room Content Section -->
 			<div class="p-4 sm:p-6 space-y-6">
 				<!-- Hero Room Code Element -->
-				<RoomCodeHero {roomCode} {roomToken} />
+				<RoomCodeHero
+					roomCode={activeRoomCode}
+					roomToken={activeRoomToken}
+					isOwner={$roomStore.isOwner}
+					hoppingEnabled={$roomStore.hoppingEnabled}
+				/>
 
 				<!-- Room Access Controls (Password Protection & Entry Lock) -->
 				{#if $roomStore.isOwner || canLockRoom}

@@ -57,6 +57,7 @@ export interface RoomState {
 	isLocked: boolean;
 	chatBlockedPeers: string[];
 	fileBlockedPeers: string[];
+	hoppingEnabled: boolean;
 }
 
 const initialRoomState: RoomState = {
@@ -79,7 +80,8 @@ const initialRoomState: RoomState = {
 	mutedPeers: {},
 	isLocked: false,
 	chatBlockedPeers: [],
-	fileBlockedPeers: []
+	fileBlockedPeers: [],
+	hoppingEnabled: false
 };
 
 function createRoomStore() {
@@ -100,6 +102,7 @@ function createRoomStore() {
 					salt: payload.salt || payload.crypto_salt || null,
 					expiresAt: payload.expires_at || payload.expiresAt || null,
 					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
+					hoppingEnabled: Boolean(payload.hopping_enabled ?? payload.hoppingEnabled),
 					isLocked: false,
 					chatBlockedPeers: [],
 					fileBlockedPeers: [],
@@ -134,6 +137,11 @@ function createRoomStore() {
 					expiresAt: payload.expires_at || payload.expiresAt || null,
 					peers: [...payload.peers],
 					hasPassword: Boolean(payload.has_password ?? payload.hasPassword),
+					hoppingEnabled: Boolean(
+						payload.hopping_enabled ??
+						payload.hoppingEnabled ??
+						(!payload.code && !payload.is_owner)
+					),
 					mutedPeers: mutedMap,
 					isLocked: Boolean(payload.locked ?? payload.is_locked ?? payload.isLocked),
 					chatBlockedPeers: [...rawChatBlocked],
@@ -143,6 +151,12 @@ function createRoomStore() {
 					actionError: null
 				};
 			});
+		},
+		setRoomCode: (code: string | null) => {
+			update((state) => ({ ...state, code }));
+		},
+		setHoppingEnabled: (hoppingEnabled: boolean) => {
+			update((state) => ({ ...state, hoppingEnabled }));
 		},
 		setLocked: (isLocked: boolean) => {
 			update((state) => ({ ...state, isLocked }));

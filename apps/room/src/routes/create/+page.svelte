@@ -11,12 +11,15 @@
 	import { fade, fly, slide } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { signalingClient } from '$lib/signaling/client';
+	import { roomStore } from '$lib/stores/room';
 	import { formatRoomCodeInput, validateRoomCode, encodeRoomToken } from '$lib/utils/roomCode';
 	import SecurityInfoPanel from '$lib/room/SecurityInfoPanel.svelte';
 	import ActionErrorToast from '$lib/room/ActionErrorToast.svelte';
 
 	let enablePassword = $state(false);
 	let password = $state('');
+	let enableHopping = $state(false);
+	let autoRotateMinutes = $state<number | null>(null);
 	let isSubmitting = $state(false);
 	let errorMessage = $state<string | null>(null);
 
@@ -134,8 +137,14 @@
 
 		try {
 			const res = await signalingClient.createRoom({
-				password: enablePassword && password.trim() ? password.trim() : undefined
+				password: enablePassword && password.trim() ? password.trim() : undefined,
+				hoppingEnabled: enableHopping,
+				autoRotateIntervalSeconds:
+					enableHopping && autoRotateMinutes && autoRotateMinutes > 0
+						? Math.min(60, Math.max(1, autoRotateMinutes)) * 60
+						: undefined
 			});
+			roomStore.setHoppingEnabled(enableHopping);
 			const token = encodeRoomToken(res.code);
 			goto(`/room/${token}`);
 		} catch (err) {
@@ -219,6 +228,72 @@
 								required={enablePassword}
 								class="w-full px-3.5 py-2.5 rounded-lg bg-[#0a0d16] border border-[#1e2538] text-zinc-100 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all font-sans"
 							/>
+						</div>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Hopping Room Codes Card -->
+			<div class="rounded-xl bg-[#06080e] border border-white/5 p-3.5 sm:p-4 transition-all">
+				<label class="flex items-start gap-3 cursor-pointer group select-none">
+					<div class="relative flex items-center justify-center mt-0.5">
+						<input
+							type="checkbox"
+							bind:checked={enableHopping}
+							class="sr-only peer"
+						/>
+						<div class="w-5 h-5 rounded-md bg-[#0a0d16] border border-[#222b3d] peer-checked:bg-cyan-600 peer-checked:border-cyan-400 peer-focus-visible:ring-2 peer-focus-visible:ring-cyan-400/50 flex items-center justify-center transition-all duration-200 group-hover:border-zinc-500 shadow-sm">
+							<svg
+								class="w-3.5 h-3.5 text-white stroke-[2.5] transition-all duration-150 {enableHopping ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<polyline points="20 6 9 17 4 12"/>
+							</svg>
+						</div>
+					</div>
+					<div class="flex flex-col">
+						<div class="flex items-center gap-2">
+							<span class="text-xs uppercase tracking-wider text-zinc-200 font-medium group-hover:text-white transition-colors">
+								Hopping Room Codes
+							</span>
+							<span class="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 font-mono font-semibold uppercase">
+								ONE-TIME INVITE
+							</span>
+						</div>
+						<span class="text-[10px] text-zinc-400 font-mono mt-0.5 leading-relaxed">
+							Room code rotates automatically after each new participant joins. Only the room owner sees the active code. Previous invitation codes expire immediately.
+						</span>
+					</div>
+				</label>
+
+				<!-- Smooth Accordion Expansion for Optional Timed Auto-Rotation -->
+				{#if enableHopping}
+					<div transition:slide={{ duration: 250 }} class="overflow-hidden">
+						<div class="mt-3 pt-3 border-t border-white/5 space-y-1.5">
+							<label for="auto-rotate-interval" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 font-mono">
+								Automatic Rotation Interval (Optional)
+							</label>
+							<div class="flex items-center gap-2">
+								<input
+									id="auto-rotate-interval"
+									type="number"
+									bind:value={autoRotateMinutes}
+									min="1"
+									max="60"
+									placeholder="Join-only (leave empty or 0)"
+									class="w-full px-3.5 py-2.5 rounded-lg bg-[#0a0d16] border border-[#1e2538] text-zinc-100 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all font-mono"
+								/>
+								<span class="text-xs text-zinc-400 font-mono shrink-0 px-1">
+									min
+								</span>
+							</div>
+							<p class="text-[10px] text-zinc-500 font-mono">
+								Rotate code every X minutes (1–60 min). Leave empty for rotation upon participant join only.
+							</p>
 						</div>
 					</div>
 				{/if}

@@ -497,6 +497,64 @@ describe('In-Memory Room Store Lifecycle', () => {
 		assert.deepEqual(state.fileBlockedPeers, []);
 	});
 
+	test('hoppingEnabled initializes to false and updates on setCreated and setJoined', () => {
+		let state!: RoomState;
+		const unsub1 = roomStore.subscribe((s) => (state = s));
+		unsub1();
+		assert.equal(state.hoppingEnabled, false);
+
+		// Creator with hopping enabled
+		roomStore.setCreated({
+			type: 'ROOM_CREATED',
+			code: '1111-2222-3333',
+			peer_id: 'peer-owner',
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			hopping_enabled: true
+		});
+
+		const unsub2 = roomStore.subscribe((s) => (state = s));
+		unsub2();
+		assert.equal(state.hoppingEnabled, true);
+		assert.equal(state.code, '1111-2222-3333');
+
+		// Participant joining a hopping room with redacted empty code
+		roomStore.setJoined({
+			type: 'JOIN_OK',
+			status: 'OK',
+			code: '',
+			peer_id: 'peer-participant',
+			is_owner: false,
+			owner_peer_id: 'peer-owner',
+			salt: 'aabbcc112233',
+			expires_at: 1800000000,
+			peers: ['peer-owner']
+		});
+
+		const unsub3 = roomStore.subscribe((s) => (state = s));
+		unsub3();
+		assert.equal(state.hoppingEnabled, true);
+		assert.equal(state.code, '');
+		assert.equal(state.isOwner, false);
+	});
+
+	test('setRoomCode and setHoppingEnabled explicitly update room store state', () => {
+		roomStore.setRoomCode('5555-6666-7777');
+		roomStore.setHoppingEnabled(true);
+
+		let state!: RoomState;
+		const unsub = roomStore.subscribe((s) => (state = s));
+		unsub();
+
+		assert.equal(state.code, '5555-6666-7777');
+		assert.equal(state.hoppingEnabled, true);
+
+		roomStore.setRoomCode(null);
+		const unsub2 = roomStore.subscribe((s) => (state = s));
+		unsub2();
+		assert.equal(state.code, null);
+	});
+
 	test('roomStore.setError with fatal code transitions lifecycle to error and disables isRoomActive', () => {
 		roomStore.setJoined({
 			type: 'JOIN_OK',

@@ -30,6 +30,10 @@ export type ClientSignalingMessage =
 			has_password?: boolean;
 			hasPassword?: boolean;
 			password?: string;
+			hopping_enabled?: boolean;
+			hoppingEnabled?: boolean;
+			auto_rotate_interval_seconds?: number | null;
+			autoRotateIntervalSeconds?: number | null;
 	  }
 	| {
 			type: 'JOIN_ROOM';
@@ -141,6 +145,8 @@ export interface RoomCreatedServerMessage {
 	expiresAt?: number;
 	has_password?: boolean;
 	hasPassword?: boolean;
+	hopping_enabled?: boolean;
+	hoppingEnabled?: boolean;
 }
 
 export interface MutedPeerInfo {
@@ -174,6 +180,8 @@ export interface JoinOkServerMessage {
 	chatBlockedPeers?: string[];
 	file_blocked_peers?: string[];
 	fileBlockedPeers?: string[];
+	hopping_enabled?: boolean;
+	hoppingEnabled?: boolean;
 }
 
 export interface PeerMutedServerMessage {
@@ -317,9 +325,16 @@ export interface FileVisibilityBlockedServerMessage {
 	blocked: boolean;
 }
 
+export interface RoomCodeRotatedServerMessage {
+	type: 'ROOM_CODE_ROTATED';
+	new_code?: string;
+	newCode?: string;
+}
+
 export type ServerSignalingMessage =
 	| RoomCreatedServerMessage
 	| JoinOkServerMessage
+	| RoomCodeRotatedServerMessage
 	| PeerJoinedServerMessage
 	| PeerLeftServerMessage
 	| RoomOwnerChangedServerMessage
