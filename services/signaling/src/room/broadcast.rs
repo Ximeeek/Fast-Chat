@@ -20,6 +20,9 @@ pub trait RoomBroadcaster: Send + Sync + Debug {
 
     /// Broadcast that a peer's mute has expired or been lifted.
     fn broadcast_peer_unmuted(&self, _id: &RoomId, _peer_id: &str) {}
+
+    /// Dispatches ROOM_CODE_ROTATED exclusively to the room owner.
+    fn broadcast_room_code_rotated(&self, _id: &RoomId, _owner_peer_id: &str, _new_code: &RoomCode) {}
 }
 
 /// WebSocket-aware broadcaster dispatching structured events to active sessions.
@@ -87,6 +90,18 @@ impl RoomBroadcaster for WebSocketBroadcaster {
         let msg = ServerMessage::peer_unmuted(peer_id);
         self.sessions.broadcast(id, msg, None);
     }
+
+    fn broadcast_room_code_rotated(&self, id: &RoomId, owner_peer_id: &str, new_code: &RoomCode) {
+        info!(
+            room_id = %id,
+            owner = %owner_peer_id,
+            new_code = %new_code,
+            event = "ROOM_CODE_ROTATED",
+            "Broadcasting ROOM_CODE_ROTATED event to room owner over WebSocket"
+        );
+        let msg = ServerMessage::room_code_rotated(new_code.as_str());
+        self.sessions.send_to_peer(id, owner_peer_id, msg);
+    }
 }
 
 /// Default logger-backed broadcaster for standard runtime operation.
@@ -120,6 +135,16 @@ impl RoomBroadcaster for LoggingBroadcaster {
             new_state = ?new_state,
             event = "ROOM_STATE_CHANGED",
             "Broadcasting room lifecycle state change"
+        );
+    }
+
+    fn broadcast_room_code_rotated(&self, id: &RoomId, owner_peer_id: &str, new_code: &RoomCode) {
+        info!(
+            room_id = %id,
+            owner = %owner_peer_id,
+            new_code = %new_code,
+            event = "ROOM_CODE_ROTATED",
+            "Logging ROOM_CODE_ROTATED event for room owner"
         );
     }
 

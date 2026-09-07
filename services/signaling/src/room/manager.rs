@@ -112,14 +112,14 @@ impl RoomManager {
         Ok((room_id, code))
     }
 
-    /// Rotates the room code for an active room with hopping enabled.
-    ///
-    /// Generates a new unique 12-digit code checking collision against the secondary `code_to_id` map,
-    /// atomically updates `code_to_id` by inserting the new code mapping before removing the old one,
-    /// and updates `room.current_code` and `room.last_rotation_at`.
-    ///
-    /// Rotations for the same room are strictly serialized via per-room mutex to prevent race conditions.
+    /// Rotates the public `RoomCode` for the specified room using current instant.
     pub fn rotate_room_code(&self, id: &RoomId) -> Result<RoomCode, RoomError> {
+        self.rotate_room_code_at(id, std::time::Instant::now())
+    }
+
+    /// Rotates the public `RoomCode` for the specified room with an explicit timestamp.
+    /// Serialized per-room through `rotation_locks` to prevent race conditions.
+    pub fn rotate_room_code_at(&self, id: &RoomId, now: std::time::Instant) -> Result<RoomCode, RoomError> {
         let lock = self
             .rotation_locks
             .entry(*id)
@@ -148,7 +148,7 @@ impl RoomManager {
         // 4. Update room state
         let mut room = self.rooms.get_mut(id).ok_or_else(|| RoomError::PeerNotFound(String::new()))?;
         room.current_code = new_code.clone();
-        room.last_rotation_at = std::time::Instant::now();
+        room.last_rotation_at = now;
 
         info!(
             room_id = %id,
@@ -685,13 +685,39 @@ impl RoomManager {
         actions.into_iter().map(|(id, _, action)| (id, action)).collect()
     }
 
+    /// Evaluates all active rooms for periodic automatic room code rotation.
+    /// Performs serialized rotation for any eligible rooms and notifies their owners.
+    /// Returns a list of `(RoomId, RoomCode, String)` describing rotated rooms (id, new_code, owner_peer_id).
+    pub fn tick_auto_rotations(&self, now: std::time::Instant) -> Vec<(RoomId, RoomCode, String)> {
+        let mut candidates = Vec::new();
+
+        for entry in self.rooms.iter() {
+            let room = entry.value();
+            if room.check_auto_rotation(now) {
+                if let Some(owner) = room.owner_peer_id() {
+                    candidates.push((*entry.key(), owner.to_string()));
+                }
+            }
+        }
+
+        let mut results = Vec::new();
+        for (room_id, owner_peer_id) in candidates {
+            if let Ok(new_code) = self.rotate_room_code_at(&room_id, now) {
+                self.broadcaster.broadcast_room_code_rotated(&room_id, &owner_peer_id, &new_code);
+                results.push((room_id, new_code, owner_peer_id));
+            }
+        }
+
+        results
+    }
+
     /// Returns current number of active rooms stored in memory.
     pub fn room_count(&self) -> usize {
         self.rooms.len()
     }
 }
 
-/// Starts the periodic background sweeper task enforcing room lifecycles.
+/// Starts the periodic background sweeper task enforcing room lifecycles and periodic code rotations.
 pub fn start_sweeper_task(manager: Arc<RoomManager>) -> JoinHandle<()> {
     let interval_secs = manager.config.sweeper_interval_secs;
     tokio::spawn(async move {
@@ -704,6 +730,11 @@ pub fn start_sweeper_task(manager: Arc<RoomManager>) -> JoinHandle<()> {
             let actions = manager.tick_lifecycle(now_ts);
             if !actions.is_empty() {
                 debug!("Lifecycle sweeper evaluated {} room action(s)", actions.len());
+            }
+
+            let rotations = manager.tick_auto_rotations(std::time::Instant::now());
+            if !rotations.is_empty() {
+                debug!("Lifecycle sweeper rotated {} room code(s)", rotations.len());
             }
         }
     })
@@ -720,6 +751,7 @@ mod tests {
         detonated_count: AtomicUsize,
         state_changes: AtomicUsize,
         unmuted_count: AtomicUsize,
+        rotated_count: AtomicUsize,
     }
 
     impl RoomBroadcaster for MockBroadcaster {
@@ -737,6 +769,10 @@ mod tests {
 
         fn broadcast_peer_unmuted(&self, _id: &RoomId, _peer_id: &str) {
             self.unmuted_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn broadcast_room_code_rotated(&self, _id: &RoomId, _owner_peer_id: &str, _new_code: &RoomCode) {
+            self.rotated_count.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -1076,6 +1112,56 @@ mod tests {
 
         assert_eq!(manager.code_to_id.len(), 1);
         assert_eq!(manager.get_room_state(&room_id).unwrap().current_code, current);
+    }
+
+    #[test]
+    fn test_periodic_auto_rotation_with_simulated_time() {
+        let config = Config::default();
+        let broadcaster = Arc::new(MockBroadcaster::default());
+        let manager = RoomManager::with_broadcaster(config, broadcaster.clone());
+
+        let (room_id, initial_code) = manager
+            .create_room_with_options(
+                Some("alice".to_string()),
+                None,
+                PasswordStatus::none(),
+                true,
+                Some(60),
+            )
+            .unwrap();
+
+        let t0 = manager.get_room_state(&room_id).unwrap().last_rotation_at;
+
+        // 1. At t0 + 30s: interval not reached -> no rotation
+        let res_30 = manager.tick_auto_rotations(t0 + Duration::from_secs(30));
+        assert!(res_30.is_empty());
+        assert_eq!(broadcaster.rotated_count.load(Ordering::SeqCst), 0);
+        assert_eq!(manager.get_room_id_by_code(&initial_code), Some(room_id));
+
+        // 2. At t0 + 61s: interval elapsed -> rotated once
+        let res_61 = manager.tick_auto_rotations(t0 + Duration::from_secs(61));
+        assert_eq!(res_61.len(), 1);
+        let (rot_id, code_1, owner) = &res_61[0];
+        assert_eq!(*rot_id, room_id);
+        assert_eq!(owner, "alice");
+        assert_ne!(*code_1, initial_code);
+        assert_eq!(broadcaster.rotated_count.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.get_room_id_by_code(&initial_code), None);
+        assert_eq!(manager.get_room_id_by_code(code_1), Some(room_id));
+
+        // 3. At t0 + 90s: only 29s since last rotation (at t0+61s) -> no rotation
+        let res_90 = manager.tick_auto_rotations(t0 + Duration::from_secs(90));
+        assert!(res_90.is_empty());
+        assert_eq!(broadcaster.rotated_count.load(Ordering::SeqCst), 1);
+
+        // 4. At t0 + 125s: 64s since last rotation -> rotated again
+        let res_125 = manager.tick_auto_rotations(t0 + Duration::from_secs(125));
+        assert_eq!(res_125.len(), 1);
+        let (_, code_2, _) = &res_125[0];
+        assert_ne!(*code_2, *code_1);
+        assert_eq!(broadcaster.rotated_count.load(Ordering::SeqCst), 2);
+        assert_eq!(manager.get_room_id_by_code(code_1), None);
+        assert_eq!(manager.get_room_id_by_code(code_2), Some(room_id));
     }
 }
 

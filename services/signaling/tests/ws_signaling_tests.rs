@@ -2504,3 +2504,85 @@ async fn test_hopping_code_existing_peers_remain_connected() {
     }
 }
 
+#[tokio::test]
+async fn test_sweeper_auto_rotation_controlled_time() {
+    let config = Config::default();
+    let (addr, state) = spawn_test_server(config).await;
+    let ws_url = format!("ws://{addr}/ws");
+
+    // 1. Alice creates room with hopping enabled and 60-second auto-rotate interval
+    let (mut ws_a, _) = connect_async(&ws_url).await.expect("Failed to connect Alice");
+    let create_msg = ClientMessage::create_room_with_hopping(
+        Some("alice".to_string()),
+        None,
+        None,
+        Some(true),
+        Some(60),
+    );
+    ws_a.send(Message::Text(serde_json::to_string(&create_msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let resp_a_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let resp_a: ServerMessage = serde_json::from_str(&resp_a_raw).unwrap();
+    let initial_code = match resp_a {
+        ServerMessage::RoomCreated { code, .. } => code,
+        _ => panic!("Expected RoomCreated for Alice, got {resp_a:?}"),
+    };
+
+    let parsed_code = fastchat_signaling::room::RoomCode::new(&initial_code).unwrap();
+    let room_id = state.room_manager.get_room_id_by_code(&parsed_code).unwrap();
+    let t0 = state.room_manager.get_room_state(&room_id).unwrap().last_rotation_at;
+
+    // 2. Trigger auto-rotation tick at t0 + 30s -> no rotation
+    let no_rot = state.room_manager.tick_auto_rotations(t0 + std::time::Duration::from_secs(30));
+    assert!(no_rot.is_empty());
+
+    // 3. Trigger auto-rotation tick at t0 + 65s -> triggers rotation!
+    let rot = state.room_manager.tick_auto_rotations(t0 + std::time::Duration::from_secs(65));
+    assert_eq!(rot.len(), 1);
+    let (rot_id, new_code, owner) = &rot[0];
+    assert_eq!(*rot_id, room_id);
+    assert_eq!(owner, "alice");
+    assert_ne!(new_code.as_str(), initial_code);
+
+    // 4. Alice receives ROOM_CODE_ROTATED over WebSocket
+    let rot_msg_raw = ws_a.next().await.unwrap().unwrap().into_text().unwrap();
+    let rot_msg: ServerMessage = serde_json::from_str(&rot_msg_raw).unwrap();
+    match rot_msg {
+        ServerMessage::RoomCodeRotated { new_code: ref c, .. } => {
+            assert_eq!(c, new_code.as_str());
+        }
+        other => panic!("Expected RoomCodeRotated on Alice, got {other:?}"),
+    }
+
+    // 5. Old code cannot be joined, new code can be joined
+    let (mut ws_b, _) = connect_async(&ws_url).await.unwrap();
+    let join_old = ClientMessage::JoinRoom {
+        code: initial_code,
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_old).unwrap().into()))
+        .await
+        .unwrap();
+
+    let err_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let err: ServerMessage = serde_json::from_str(&err_raw).unwrap();
+    assert!(matches!(err, ServerMessage::Error { ref code, .. } if code == "ROOM_NOT_FOUND"));
+
+    let join_new = ClientMessage::JoinRoom {
+        code: new_code.to_string(),
+        peer_id: Some("bob".to_string()),
+        password: None,
+    };
+    ws_b.send(Message::Text(serde_json::to_string(&join_new).unwrap().into()))
+        .await
+        .unwrap();
+
+    let ok_raw = ws_b.next().await.unwrap().unwrap().into_text().unwrap();
+    let ok: ServerMessage = serde_json::from_str(&ok_raw).unwrap();
+    assert!(matches!(ok, ServerMessage::JoinOk { ref peer_id, .. } if peer_id == "bob"));
+}
+
+
