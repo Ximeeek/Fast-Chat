@@ -1,3 +1,11 @@
+<script module lang="ts">
+	let hasShownFirstSendHint = false;
+
+	export function resetFirstSendHintSession() {
+		hasShownFirstSendHint = false;
+	}
+</script>
+
 <script lang="ts">
 	import {
 		transferStore,
@@ -31,6 +39,38 @@
 	let isSending = $state(false);
 	let sendError = $state<string | null>(null);
 
+	let hasSeenFirstSendHint = $state(hasShownFirstSendHint);
+	let hadUploads = $state(false);
+
+	const hasWaitingRecipient = $derived(
+		$activeUploads.some((transfer) =>
+			Array.from(transfer.recipients.values()).some(
+				(r) => r.percentage === 0 && (r.status === 'offered' || r.status === 'sending')
+			)
+		)
+	);
+
+	function dismissFirstSendHint() {
+		hasSeenFirstSendHint = true;
+		hasShownFirstSendHint = true;
+	}
+
+	$effect(() => {
+		if ($activeUploads.length > 0) {
+			hadUploads = true;
+			const hasProgressed = $activeUploads.some((transfer) =>
+				Array.from(transfer.recipients.values()).some(
+					(r) => r.percentage > 0 || r.status === 'completed'
+				)
+			);
+			if (hasProgressed) {
+				dismissFirstSendHint();
+			}
+		} else if (hadUploads) {
+			dismissFirstSendHint();
+		}
+	});
+
 	const isUploadActive = $derived(isSending || $hasActiveUpload);
 	const fsSupported = isFileSystemAccessSupported();
 	const openChannels = $derived($openDataChannelsCount);
@@ -57,7 +97,10 @@
 					});
 					transferStore.addOutgoingTransfer(transfer);
 				} catch (err) {
-					sendError = err instanceof Error ? err.message : 'Failed to initiate transfer';
+					const msg = err instanceof Error ? err.message : 'Failed to initiate transfer';
+					sendError = msg.toLowerCase().includes('webrtc')
+						? 'Unable to send file: waiting for at least one peer to connect.'
+						: msg;
 				}
 			}
 
@@ -147,6 +190,22 @@
 		{/if}
 	</div>
 
+	<!-- Persistent Warning when no peers are connected -->
+	{#if openChannels === 0}
+		<div
+			role="status"
+			class="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start sm:items-center gap-3"
+		>
+			<svg class="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+			</svg>
+			<div class="leading-relaxed">
+				<span class="font-semibold text-amber-300">File transfer waiting for peers:</span>
+				Direct peer-to-peer file transfer requires at least one other participant in the room. You can select files, but they will only be sent once another user connects.
+			</div>
+		</div>
+	{/if}
+
 	<!-- Send Files Input Zone -->
 	<div class="space-y-3">
 		{#if isMuted}
@@ -173,16 +232,10 @@
 					onclick={handleSendFiles}
 					disabled={!canSendFiles}
 					class="min-h-[38px] px-5 py-1.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-bold uppercase tracking-wider text-xs transition-all shadow-[0_0_15px_rgba(0,102,255,0.3)] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-					title={openChannels === 0 ? 'No open WebRTC peer connections available for file transfer' : ''}
+					title={openChannels === 0 ? 'Direct file transfer requires at least one connected peer' : ''}
 				>
 					Send {selectedFiles.length} {selectedFiles.length === 1 ? 'file' : 'files'}
 				</button>
-			{/if}
-
-			{#if selectedFiles.length > 0 && openChannels === 0}
-				<span class="text-xs text-amber-400 bg-amber-950/40 px-3.5 py-1.5 rounded-full border border-amber-500/30 font-medium font-mono">
-					No open WebRTC peer connections available
-				</span>
 			{/if}
 
 			{#if isUploadActive}
@@ -223,6 +276,35 @@
 			<h3 class="text-[11px] font-bold uppercase tracking-wider text-zinc-400 font-mono">
 				OUTGOING TRANSFERS
 			</h3>
+
+			{#if hasWaitingRecipient && !hasSeenFirstSendHint}
+				<div
+					role="status"
+					class="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-200 text-xs flex items-start justify-between gap-3 shadow-sm"
+				>
+					<div class="flex items-start gap-2.5">
+						<svg class="w-4 h-4 text-blue-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+						</svg>
+						<div class="leading-relaxed">
+							<span class="font-semibold text-blue-300">Waiting for recipient to accept:</span>
+							Progress remains at 0% until the recipient accepts the incoming file. This is normal and not an internet or server issue—streaming begins automatically once they accept.
+						</div>
+					</div>
+					<button
+						type="button"
+						onclick={dismissFirstSendHint}
+						class="text-blue-400 hover:text-blue-200 p-1 rounded-md transition-colors cursor-pointer shrink-0"
+						title="Dismiss hint"
+						aria-label="Dismiss hint"
+					>
+						<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<line x1="18" y1="6" x2="6" y2="18" />
+							<line x1="6" y1="6" x2="18" y2="18" />
+						</svg>
+					</button>
+				</div>
+			{/if}
 
 			{#each $activeUploads as transfer (transfer.transferId)}
 				<div class="p-3.5 rounded-xl bg-[#06080e] border border-white/5 space-y-2.5 text-xs">
