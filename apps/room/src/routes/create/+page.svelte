@@ -8,7 +8,7 @@
 
 <script lang="ts">
 	import { onDestroy } from 'svelte';
-	import { fade, fly } from 'svelte/transition';
+	import { fade, fly, slide } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { signalingClient } from '$lib/signaling/client';
 	import { formatRoomCodeInput, validateRoomCode, encodeRoomToken } from '$lib/utils/roomCode';
@@ -125,13 +125,13 @@
 	<meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<main class="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 bg-[#050608] text-zinc-100 font-['Inter',sans-serif] bg-cyber-grid relative overflow-hidden">
+<main class="min-h-screen flex flex-col items-center justify-center py-4 px-4 sm:py-6 sm:px-6 bg-[#050608] text-zinc-100 font-['Inter',sans-serif] bg-cyber-grid relative overflow-x-hidden">
 	<!-- Ambient backdrop glow -->
 	<div class="absolute w-[500px] h-[350px] bg-blue-600/15 blur-[120px] pointer-events-none rounded-full"></div>
 
-	<div class="w-full max-w-md bg-[#0a0d16]/95 backdrop-blur-xl p-7 sm:p-9 rounded-2xl border border-[#1a2233] shadow-[0_0_60px_rgba(0,0,0,0.85)] relative z-10">
-		<header class="mb-7 text-center">
-			<div class="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-[11px] font-semibold uppercase tracking-wider mb-3.5 shadow-[0_0_15px_rgba(0,102,255,0.15)]">
+	<div class="w-full max-w-md bg-[#0a0d16]/95 backdrop-blur-xl p-5 sm:p-7 rounded-2xl border border-[#1a2233] shadow-[0_0_60px_rgba(0,0,0,0.85)] relative z-10 my-auto">
+		<header class="mb-5 sm:mb-6 text-center">
+			<div class="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-[11px] font-semibold uppercase tracking-wider mb-2.5 shadow-[0_0_15px_rgba(0,102,255,0.15)]">
 				<span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
 				<span>DIRECT PEER-TO-PEER ENCRYPTED</span>
 			</div>
@@ -144,13 +144,13 @@
 		</header>
 
 		{#if errorMessage}
-			<div role="alert" class="mb-5 p-3.5 rounded-xl bg-red-950/40 border border-red-500/40 text-red-300 text-xs">
+			<div role="alert" class="mb-4 p-3.5 rounded-xl bg-red-950/40 border border-red-500/40 text-red-300 text-xs">
 				{errorMessage}
 			</div>
 		{/if}
 
-		<form onsubmit={handleCreateRoom} class="space-y-4">
-			<div class="rounded-xl bg-[#06080e] border border-white/5 p-4 transition-all">
+		<form onsubmit={handleCreateRoom} class="space-y-3.5">
+			<div class="rounded-xl bg-[#06080e] border border-white/5 p-3.5 sm:p-4 transition-all">
 				<!-- Custom Styled Checkbox -->
 				<label class="flex items-start gap-3 cursor-pointer group select-none">
 					<div class="relative flex items-center justify-center mt-0.5">
@@ -183,31 +183,29 @@
 				</label>
 
 				<!-- Smooth Accordion Expansion for Password Field -->
-				<div
-					class="grid transition-[grid-template-rows,opacity] duration-300 ease-out {enablePassword
-						? 'grid-rows-[1fr] opacity-100 mt-3 pt-3 border-t border-white/5'
-						: 'grid-rows-[0fr] opacity-0'}"
-				>
-					<div class="overflow-hidden">
-						<label for="room-password" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
-							Room Password
-						</label>
-						<input
-							id="room-password"
-							type="password"
-							bind:value={password}
-							placeholder="Enter room password"
-							required={enablePassword}
-							class="w-full px-3.5 py-2.5 rounded-lg bg-[#0a0d16] border border-[#1e2538] text-zinc-100 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all font-sans"
-						/>
+				{#if enablePassword}
+					<div transition:slide={{ duration: 250 }} class="overflow-hidden">
+						<div class="mt-3 pt-3 border-t border-white/5">
+							<label for="room-password" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
+								Room Password
+							</label>
+							<input
+								id="room-password"
+								type="password"
+								bind:value={password}
+								placeholder="Enter room password"
+								required={enablePassword}
+								class="w-full px-3.5 py-2.5 rounded-lg bg-[#0a0d16] border border-[#1e2538] text-zinc-100 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all font-sans"
+							/>
+						</div>
 					</div>
-				</div>
+				{/if}
 			</div>
 
 			<button
 				type="submit"
 				disabled={isSubmitting}
-				class="w-full min-h-[48px] py-3 px-5 rounded-full bg-white hover:bg-zinc-200 active:scale-[0.99] text-black font-bold uppercase tracking-wider text-xs sm:text-sm transition-all shadow-[0_0_25px_rgba(255,255,255,0.2)] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2.5 group"
+				class="w-full min-h-[44px] py-2.5 px-5 rounded-full bg-white hover:bg-zinc-200 active:scale-[0.99] text-black font-bold uppercase tracking-wider text-xs sm:text-sm transition-all shadow-[0_0_25px_rgba(255,255,255,0.2)] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2.5 group"
 			>
 				{#if isSubmitting}
 					<span class="inline-block w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin"></span>
@@ -229,7 +227,7 @@
 			</button>
 		</form>
 
-		<div class="relative my-7">
+		<div class="relative my-4 sm:my-5">
 			<div class="absolute inset-0 flex items-center">
 				<div class="w-full border-t border-[#1a2233]"></div>
 			</div>
@@ -238,7 +236,7 @@
 			</div>
 		</div>
 
-		<form onsubmit={handleJoinExisting} class="space-y-4">
+		<form onsubmit={handleJoinExisting} class="space-y-3 sm:space-y-3.5">
 			{#if joinError}
 				<div role="alert" class="p-3 rounded-xl bg-red-950/40 border border-red-500/40 text-red-300 text-xs">
 					{joinError}
@@ -306,14 +304,14 @@
 			</div>
 			<button
 				type="submit"
-				class="w-full min-h-[46px] py-2.5 px-4 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-200 hover:text-white border border-white/10 hover:border-blue-500/50 font-semibold uppercase tracking-wider text-xs transition-all cursor-pointer"
+				class="w-full min-h-[42px] py-2 px-4 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-200 hover:text-white border border-white/10 hover:border-blue-500/50 font-semibold uppercase tracking-wider text-xs transition-all cursor-pointer"
 			>
 				Join Room
 			</button>
 		</form>
 
 		<!-- Zero-Persistence Architecture Overview (Audited Specs) -->
-		<div class="mt-8 pt-6 border-t border-[#1a2233] space-y-3">
+		<div class="mt-5 pt-4 sm:mt-6 sm:pt-5 border-t border-[#1a2233] space-y-2.5 sm:space-y-3">
 			<div class="flex items-center justify-between">
 				<div class="flex items-center space-x-2">
 					<span class="text-[11px] font-bold uppercase tracking-wider text-zinc-300 font-mono">
@@ -337,19 +335,19 @@
 			</div>
 
 			<div class="grid grid-cols-2 gap-2 text-[10px] font-mono">
-				<div class="p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
+				<div class="p-2 sm:p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
 					<div class="text-zinc-200 font-bold uppercase">ZERO LOGS</div>
 					<div class="text-zinc-500">RAM-only relay</div>
 				</div>
-				<div class="p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
+				<div class="p-2 sm:p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
 					<div class="text-zinc-200 font-bold uppercase">E2E ENCRYPTED</div>
 					<div class="text-zinc-500">AES-256-GCM</div>
 				</div>
-				<div class="p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
+				<div class="p-2 sm:p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
 					<div class="text-zinc-200 font-bold uppercase">AUTO-DELETION</div>
 					<div class="text-zinc-500">Purged on expiry</div>
 				</div>
-				<div class="p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
+				<div class="p-2 sm:p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
 					<div class="text-zinc-200 font-bold uppercase">NO ACCOUNTS</div>
 					<div class="text-zinc-500">Zero stored tokens</div>
 				</div>
