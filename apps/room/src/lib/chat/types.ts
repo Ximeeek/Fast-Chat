@@ -18,6 +18,7 @@ export type SystemEventType =
 	| 'owner'
 	| 'security'
 	| 'closing'
+	| 'rotated'
 	| 'info';
 
 /**

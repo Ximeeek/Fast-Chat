@@ -85,6 +85,11 @@ export function getSystemEventType(
 		return 'security';
 	}
 
+	// Hopping room code rotation
+	if (lower.includes('code rotated') || lower.includes('room code rotated')) {
+		return 'rotated';
+	}
+
 	// Grace period countdowns
 	if (lower.includes('countdown') || lower.includes('closing')) {
 		return 'closing';
@@ -160,6 +165,13 @@ export function getSystemEventStyle(type: SystemEventType): SystemEventStyle {
 					'bg-orange-950/25 border-orange-500/20 text-orange-200/90 shadow-[0_0_12px_rgba(249,115,22,0.05)]',
 				iconClass: 'text-orange-300',
 				ariaLabel: 'Room closing'
+			};
+		case 'rotated':
+			return {
+				containerClass:
+					'bg-cyan-950/35 border-cyan-400/30 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.12)]',
+				iconClass: 'text-cyan-300',
+				ariaLabel: 'Room code rotated'
 			};
 		case 'info':
 		default:

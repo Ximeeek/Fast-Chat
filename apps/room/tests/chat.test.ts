@@ -1771,4 +1771,43 @@ describe('Concurrent Live Messages & History Sync Interleaving', () => {
 	});
 });
 
+describe('Hopping Code Rotation System Chat Announcements', () => {
+	test('getSystemEventType identifies room code rotation events', () => {
+		const detected1 = getSystemEventType('Room code rotated: [1234-5678-9012]');
+		assert.equal(detected1, 'rotated');
+
+		const detected2 = getSystemEventType('Ephemeral code rotated to new token');
+		assert.equal(detected2, 'rotated');
+
+		const explicit = getSystemEventType('Custom notification', 'rotated');
+		assert.equal(explicit, 'rotated');
+	});
+
+	test('getSystemEventStyle returns dedicated rotated visual styling', () => {
+		const style = getSystemEventStyle('rotated');
+		assert.ok(style.containerClass.includes('border-cyan-400'));
+		assert.ok(style.iconClass.includes('text-cyan-300'));
+		assert.equal(style.ariaLabel, 'Room code rotated');
+	});
+
+	test('chatStore records rotated system message with code correctly', () => {
+		const store = createChatStore();
+		store.addSystemMessage('Room code rotated: [9876-5432-1098]', 'rotated');
+
+		let state!: ChatState;
+		store.subscribe((s) => (state = s))();
+
+		assert.equal(state.messages.length, 1);
+		const msg = state.messages[0];
+		assert.equal(msg.isSystem, true);
+		assert.equal(msg.systemType, 'rotated');
+		const text = msg.segments.map((s) => (s.type === 'text' ? s.text : '')).join('');
+		assert.equal(text, 'Room code rotated: [9876-5432-1098]');
+
+		const codeMatch = text.match(/\b\d{4}-\d{4}-\d{4}\b/);
+		assert.ok(codeMatch);
+		assert.equal(codeMatch[0], '9876-5432-1098');
+	});
+});
+
 

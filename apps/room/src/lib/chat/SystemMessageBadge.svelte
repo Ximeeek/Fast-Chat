@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import type { ChatMessage } from './types.ts';
 	import { getSystemEventType, getSystemEventStyle } from './systemEvents.ts';
 
@@ -16,11 +17,37 @@
 
 	const eventType = $derived(getSystemEventType(text, message.systemType));
 	const style = $derived(getSystemEventStyle(eventType));
+
+	const extractedCode = $derived.by(() => {
+		const match = text.match(/\b\d{4}-\d{4}-\d{4}\b/);
+		return match ? match[0] : null;
+	});
+
+	let copied = $state(false);
+	let copyTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	async function copyCode(codeToCopy: string) {
+		try {
+			await navigator.clipboard.writeText(codeToCopy);
+			copied = true;
+			if (copyTimeout) clearTimeout(copyTimeout);
+			copyTimeout = setTimeout(() => {
+				copied = false;
+				copyTimeout = null;
+			}, 2000);
+		} catch (err) {
+			console.error('Failed to copy rotated room code:', err);
+		}
+	}
+
+	onDestroy(() => {
+		if (copyTimeout) clearTimeout(copyTimeout);
+	});
 </script>
 
 <div class="flex items-center justify-center my-2" data-testid="system-message" data-event-type={eventType}>
 	<div
-		class="px-3.5 py-1.5 rounded-full {style.containerClass} text-[11px] font-mono flex items-center gap-2 max-w-[90%] text-center border transition-micro"
+		class="px-3.5 py-1.5 rounded-full {style.containerClass} text-[11px] font-mono flex items-center gap-2 max-w-[90%] text-center border transition-micro flex-wrap justify-center"
 		role="status"
 		aria-label="{style.ariaLabel}: {text}"
 	>
@@ -164,6 +191,20 @@
 				<circle cx="12" cy="12" r="10" />
 				<polyline points="12 6 12 12 16 14" />
 			</svg>
+		{:else if eventType === 'rotated'}
+			<!-- Rotation arrows -->
+			<svg
+				class="w-3.5 h-3.5 {style.iconClass} shrink-0"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+			</svg>
 		{:else}
 			<!-- Information bubble -->
 			<svg
@@ -183,5 +224,30 @@
 		{/if}
 
 		<span>{text}</span>
+
+		{#if extractedCode}
+			<button
+				type="button"
+				onclick={() => copyCode(extractedCode)}
+				class="ml-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase transition-all flex items-center gap-1 cursor-pointer select-none {copied
+					? 'bg-cyan-400 text-black shadow-[0_0_8px_#00e5ff]'
+					: 'bg-white/10 hover:bg-white/20 text-cyan-300 border border-cyan-400/30'}"
+				aria-label="Copy room code {extractedCode}"
+				title="Copy room code"
+			>
+				{#if copied}
+					<svg class="w-3 h-3 stroke-[2.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+						<polyline points="20 6 9 17 4 12"/>
+					</svg>
+					<span>COPIED</span>
+				{:else}
+					<svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+						<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+					</svg>
+					<span>COPY</span>
+				{/if}
+			</button>
+		{/if}
 	</div>
 </div>

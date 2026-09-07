@@ -578,6 +578,9 @@
 		chatStore.initUsername();
 		if ($roomStore.isOwner && $roomStore.lifecycle === 'joined') {
 			chatStore.addSystemMessage('Room created.', 'join');
+			if ($roomStore.hoppingEnabled) {
+				chatStore.addSystemMessage('Hopping room numbers enabled. Room code rotates on every join.', 'info');
+			}
 		}
 		webRtcManager.init();
 		rekeyManager = new RekeyManager({ timeoutMs: 15000 });
@@ -755,6 +758,9 @@
 				case 'ROOM_CREATED':
 					details = `Room created: ${msg.code}`;
 					chatStore.addSystemMessage('Room created.', 'join');
+					if ($roomStore.hoppingEnabled || (msg as any).hopping_enabled || (msg as any).hoppingEnabled) {
+						chatStore.addSystemMessage('Hopping room numbers enabled. Room code rotates on every join.', 'info');
+					}
 					break;
 				case 'JOIN_OK':
 					details = `Joined room: ${msg.code}`;
@@ -780,6 +786,7 @@
 					if (newCode) {
 						roomStore.setRoomCode(newCode);
 						roomStore.setHoppingEnabled(true);
+						chatStore.addSystemMessage(`Room code rotated: [${newCode}]`, 'rotated');
 						const newToken = encodeRoomToken(newCode);
 						if (typeof window !== 'undefined' && window.history) {
 							window.history.replaceState(window.history.state, '', `/room/${newToken}${window.location.hash}`);
