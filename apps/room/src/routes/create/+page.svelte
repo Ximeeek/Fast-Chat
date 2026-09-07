@@ -13,6 +13,7 @@
 	import { signalingClient } from '$lib/signaling/client';
 	import { formatRoomCodeInput, validateRoomCode, encodeRoomToken } from '$lib/utils/roomCode';
 	import SecurityInfoPanel from '$lib/room/SecurityInfoPanel.svelte';
+	import ActionErrorToast from '$lib/room/ActionErrorToast.svelte';
 
 	let enablePassword = $state(false);
 	let password = $state('');
@@ -23,10 +24,34 @@
 	let manualCode = $state('');
 	let joinError = $state<string | null>(null);
 	let isSecurityInfoOpen = $state(false);
+
+	const activeError = $derived(errorMessage || joinError);
+
+	function dismissActionError() {
+		errorMessage = null;
+		joinError = null;
+	}
 	let showCodeHint = $state(false);
 	let isInputShaking = $state(false);
+	let isButtonErrorFlashing = $state(false);
 	let hintTimeout: ReturnType<typeof setTimeout> | null = null;
 	let shakeTimeout: ReturnType<typeof setTimeout> | null = null;
+	let errorFlashTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	function triggerButtonErrorFlash() {
+		isButtonErrorFlashing = false;
+		if (errorFlashTimeout) clearTimeout(errorFlashTimeout);
+		const raf = typeof requestAnimationFrame !== 'undefined' ? requestAnimationFrame : (cb: FrameRequestCallback) => setTimeout(cb, 16);
+		raf(() => {
+			raf(() => {
+				isButtonErrorFlashing = true;
+				errorFlashTimeout = setTimeout(() => {
+					isButtonErrorFlashing = false;
+					errorFlashTimeout = null;
+				}, 450);
+			});
+		});
+	}
 
 	const codePlaceholder = '0000-0000-0000';
 	const hasNonDigits = $derived(/[^\d-]/.test(manualCode));
@@ -64,6 +89,7 @@
 	onDestroy(() => {
 		if (hintTimeout) clearTimeout(hintTimeout);
 		if (shakeTimeout) clearTimeout(shakeTimeout);
+		if (errorFlashTimeout) clearTimeout(errorFlashTimeout);
 	});
 
 	function handleCodeKeyDown(e: KeyboardEvent) {
@@ -103,8 +129,8 @@
 
 	async function handleCreateRoom(e: SubmitEvent) {
 		e.preventDefault();
+		if (isSubmitting || isButtonErrorFlashing) return;
 		isSubmitting = true;
-		errorMessage = null;
 
 		try {
 			const res = await signalingClient.createRoom({
@@ -114,6 +140,7 @@
 			goto(`/room/${token}`);
 		} catch (err) {
 			errorMessage = err instanceof Error ? err.message : 'Failed to create room';
+			triggerButtonErrorFlash();
 		} finally {
 			isSubmitting = false;
 		}
@@ -143,11 +170,6 @@
 			</p>
 		</header>
 
-		{#if errorMessage}
-			<div role="alert" class="mb-4 p-3.5 rounded-xl bg-red-950/40 border border-red-500/40 text-red-300 text-xs">
-				{errorMessage}
-			</div>
-		{/if}
 
 		<form onsubmit={handleCreateRoom} class="space-y-3.5">
 			<div class="rounded-xl bg-[#06080e] border border-white/5 p-3.5 sm:p-4 transition-all">
@@ -204,14 +226,15 @@
 
 			<button
 				type="submit"
-				disabled={isSubmitting}
-				class="w-full min-h-[44px] py-2.5 px-5 rounded-full bg-white hover:bg-zinc-200 active:scale-[0.99] text-black font-bold uppercase tracking-wider text-xs sm:text-sm transition-all shadow-[0_0_25px_rgba(255,255,255,0.2)] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2.5 group"
+				disabled={isSubmitting || isButtonErrorFlashing}
+				class="w-full min-h-[44px] py-2.5 px-5 rounded-full active:scale-[0.99] font-bold uppercase tracking-wider text-xs sm:text-sm transition-all shadow-[0_0_25px_rgba(255,255,255,0.2)] bg-white hover:bg-zinc-200 text-black disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2.5 group {isButtonErrorFlashing ? 'btn-error-shake-flash' : ''}"
+				class:btn-error-shake-flash={isButtonErrorFlashing}
 			>
 				{#if isSubmitting}
-					<span class="inline-block w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin"></span>
+					<span class="inline-block w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
 					<span>Creating Session...</span>
 				{:else}
-					<svg class="w-3.5 h-3.5 fill-black group-hover:scale-110 transition-transform" viewBox="0 0 16 16">
+					<svg class="w-3.5 h-3.5 fill-current group-hover:scale-110 transition-transform" viewBox="0 0 16 16">
 						<circle cx="2" cy="2" r="1.5"/>
 						<circle cx="8" cy="2" r="1.5"/>
 						<circle cx="14" cy="2" r="1.5"/>
@@ -237,11 +260,6 @@
 		</div>
 
 		<form onsubmit={handleJoinExisting} class="space-y-3 sm:space-y-3.5">
-			{#if joinError}
-				<div role="alert" class="p-3 rounded-xl bg-red-950/40 border border-red-500/40 text-red-300 text-xs">
-					{joinError}
-				</div>
-			{/if}
 			<div>
 				<label for="manual-code" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
 					Room Identifier
@@ -360,4 +378,56 @@
 		isOpen={isSecurityInfoOpen}
 		onClose={() => (isSecurityInfoOpen = false)}
 	/>
+
+	<!-- Action Error Notification Toast (Non-disruptive, Zero Layout Shift) -->
+	<ActionErrorToast
+		message={activeError}
+		onDismiss={dismissActionError}
+	/>
 </main>
+
+<style>
+	@keyframes buttonErrorShakeFlash {
+		0% {
+			transform: translateX(0);
+			background-color: #ffffff;
+			color: #000000;
+			box-shadow: 0 0 25px rgba(255, 255, 255, 0.2);
+		}
+		20% {
+			transform: translateX(-7px);
+			background-color: #f87171;
+			color: #ffffff;
+			box-shadow: 0 0 35px rgba(248, 113, 113, 0.7);
+		}
+		45% {
+			transform: translateX(7px);
+			background-color: #f87171;
+			color: #ffffff;
+			box-shadow: 0 0 35px rgba(248, 113, 113, 0.7);
+		}
+		70% {
+			transform: translateX(-4px);
+			background-color: #fca5a5;
+			color: #ffffff;
+			box-shadow: 0 0 25px rgba(248, 113, 113, 0.5);
+		}
+		85% {
+			transform: translateX(2px);
+			background-color: #ffffff;
+			color: #000000;
+			box-shadow: 0 0 25px rgba(255, 255, 255, 0.25);
+		}
+		100% {
+			transform: translateX(0);
+			background-color: #ffffff;
+			color: #000000;
+			box-shadow: 0 0 25px rgba(255, 255, 255, 0.2);
+		}
+	}
+
+	:global(.btn-error-shake-flash) {
+		animation: buttonErrorShakeFlash 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both !important;
+		transition: none !important;
+	}
+</style>

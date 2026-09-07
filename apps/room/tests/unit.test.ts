@@ -757,6 +757,33 @@ describe('Search Engine Privacy & Zero Storage Policy Audit', () => {
 		);
 	});
 
+	test('/create page mounts ActionErrorToast to eliminate form jumping and layout shifting on errors', () => {
+		const createPage = readFileSync(join(process.cwd(), 'src/routes/create/+page.svelte'), 'utf8');
+		const toastComponent = readFileSync(join(process.cwd(), 'src/lib/room/ActionErrorToast.svelte'), 'utf8');
+
+		assert.ok(
+			createPage.includes("import ActionErrorToast from '$lib/room/ActionErrorToast.svelte'"),
+			'Expected ActionErrorToast import in create page'
+		);
+		assert.ok(
+			createPage.includes('<ActionErrorToast'),
+			'Expected <ActionErrorToast rendered in create page'
+		);
+		assert.equal(
+			createPage.includes('<div role="alert" class="mb-4 p-3.5 rounded-xl bg-red-950/40'),
+			false,
+			'Inline layout-shifting error banner inside card must be eliminated'
+		);
+		assert.ok(
+			toastComponent.includes('startTimer(4500)'),
+			'Expected 4.5s auto-dismiss timer'
+		);
+		assert.ok(
+			toastComponent.includes('startTimer(1500)'),
+			'Expected 1.5s post-hover auto-dismiss timer'
+		);
+	});
+
 	test('formatChatLog correctly formats system announcements and peer messages', () => {
 		const log = formatChatLog('1234-5678-9012', [
 			{
