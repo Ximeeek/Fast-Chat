@@ -16,5 +16,18 @@
     "test:room": "npm --prefix apps/room test",
     "test:deploy": "node --test tests/deployment.test.mjs",
     "test": "npm run test:room && npm run test:deploy"
+  },
+  "optionalDependencies": {
+    "@esbuild/linux-x64": "^0.27.7",
+    "@img/sharp-libvips-linux-x64": "^1.2.4",
+    "@img/sharp-linux-x64": "^0.34.5",
+    "@rolldown/binding-linux-x64-gnu": "^1.2.7",
+    "@rolldown/binding-linux-x64-musl": "^1.2.7",
+    "@rollup/rollup-linux-x64-gnu": "^4.63.1",
+    "@rollup/rollup-linux-x64-musl": "^4.63.1",
+    "@tailwindcss/oxide-linux-x64-gnu": "^4.3.3",
+    "@tailwindcss/oxide-linux-x64-musl": "^4.3.3",
+    "lightningcss-linux-x64-gnu": "^1.33.0",
+    "lightningcss-linux-x64-musl": "^1.33.0"
   }
 }

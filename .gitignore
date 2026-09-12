@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 target/
+apps/*/package-lock.json
 
 # Environment and secret files
 .env
