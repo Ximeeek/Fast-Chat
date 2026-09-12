@@ -9,7 +9,15 @@ const distDir = resolve(rootDir, 'dist');
 const landingDir = resolve(rootDir, 'apps/landing');
 const roomDir = resolve(rootDir, 'apps/room');
 
-console.log('=== FastChat Monorepo: Unified Cloudflare Pages Build Pipeline ===\n');
+console.log('=== FastChat Monorepo: Unified Pages Build Pipeline ===\n');
+
+// Ensure workspace dependencies are available before building
+const hasLandingDeps = existsSync(join(landingDir, 'node_modules')) || existsSync(join(rootDir, 'node_modules/astro'));
+const hasRoomDeps = existsSync(join(roomDir, 'node_modules')) || existsSync(join(rootDir, 'node_modules/@sveltejs/kit'));
+if (!hasLandingDeps || !hasRoomDeps) {
+  console.log('Workspace dependencies missing. Running npm install across monorepo...');
+  execSync('npm install', { cwd: rootDir, stdio: 'inherit' });
+}
 
 // 1. Build Astro static landing application
 console.log('1. Building apps/landing (Astro SSG)...');
@@ -107,6 +115,13 @@ if (existsSync(headersSource)) {
   writeFileSync(join(distDir, '_headers'), headersContent, 'utf8');
 }
 
+// Copy vercel.json deployment descriptor if present
+const vercelConfig = join(rootDir, 'vercel.json');
+if (existsSync(vercelConfig)) {
+  console.log('Copying vercel.json deployment descriptor...');
+  cpSync(vercelConfig, join(distDir, 'vercel.json'));
+}
+
 // 8. Verification of build distribution
 console.log('\n8. Validating unified distribution integrity...');
 const requiredArtifacts = [
@@ -117,7 +132,8 @@ const requiredArtifacts = [
   'create.html',
   'create/index.html',
   '_redirects',
-  '_headers'
+  '_headers',
+  'vercel.json'
 ];
 
 for (const artifact of requiredArtifacts) {

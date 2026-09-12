@@ -14,6 +14,7 @@ test('Cloudflare Pages deployment artifact integrity', () => {
   assert.ok(existsSync(join(distDir, '_app')), 'dist/_app must exist');
   assert.ok(existsSync(join(distDir, '_redirects')), 'dist/_redirects must exist');
   assert.ok(existsSync(join(distDir, '_headers')), 'dist/_headers must exist');
+  assert.ok(existsSync(join(distDir, 'vercel.json')), 'dist/vercel.json must exist');
   assert.ok(existsSync(join(distDir, 'sitemap.xml')), 'dist/sitemap.xml must exist');
   assert.ok(existsSync(join(distDir, 'robots.txt')), 'dist/robots.txt must exist');
 });
@@ -114,3 +115,39 @@ test('robots.txt allows landing and strictly disallows room paths', () => {
     'robots.txt must declare sitemap location'
   );
 });
+
+test('Vercel vercel.json routing and edge security policies', () => {
+  const vercel = JSON.parse(readFileSync(join(distDir, 'vercel.json'), 'utf8'));
+
+  assert.equal(vercel.outputDirectory, 'dist');
+  assert.equal(vercel.cleanUrls, true);
+
+  // Rewrites
+  assert.ok(
+    vercel.rewrites.some((r) => r.source === '/room' && r.destination === '/create'),
+    'vercel.json must rewrite /room to /create'
+  );
+  assert.ok(
+    vercel.rewrites.some((r) => r.source === '/room/:path*' && r.destination === '/room.html'),
+    'vercel.json must rewrite /room/:path* to /room.html'
+  );
+
+  // Headers
+  assert.ok(
+    vercel.headers.some(
+      (h) =>
+        h.source === '/create' &&
+        h.headers.some((v) => v.key === 'X-Robots-Tag' && v.value === 'noindex, nofollow')
+    ),
+    'vercel.json must configure noindex for /create'
+  );
+  assert.ok(
+    vercel.headers.some(
+      (h) =>
+        h.source === '/room/:path*' &&
+        h.headers.some((v) => v.key === 'X-Robots-Tag' && v.value === 'noindex, nofollow')
+    ),
+    'vercel.json must configure noindex for /room/:path*'
+  );
+});
+

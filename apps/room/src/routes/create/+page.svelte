@@ -177,6 +177,10 @@
 			<p class="text-xs text-zinc-400 mt-1.5 font-mono leading-relaxed">
 				Ephemeral rooms • Zero accounts • Instant auto-wipe
 			</p>
+			<div class="mt-2.5 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-400 text-[10px] font-mono">
+				<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+				<span>Beta version: Under active development • May contain bugs</span>
+			</div>
 		</header>
 
 
