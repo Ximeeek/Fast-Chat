@@ -568,7 +568,7 @@
 		composerBlocks = [];
 		isManualCodeMode = false;
 		manualLanguage = null;
-		goto('/create');
+		goto('/');
 	}
 
 	onMount(() => {
@@ -1021,7 +1021,7 @@
 				is invalid, corrupted, or expired.
 			</p>
 			<a
-				href="/create"
+				href="/"
 				class="inline-block py-2.5 px-6 rounded-full bg-white hover:bg-zinc-200 text-black font-bold uppercase text-xs transition-all shadow-[0_0_20px_rgba(255,255,255,0.2)]"
 			>
 				Return to Room Creation
@@ -1146,7 +1146,7 @@
 						Rejoin Room
 					</button>
 					<a
-						href="/create"
+						href="/"
 						class="min-h-[40px] py-2 px-6 rounded-full bg-white hover:bg-zinc-200 text-black text-xs font-bold uppercase transition-all shadow-sm flex items-center"
 					>
 						Return Home
@@ -1169,7 +1169,7 @@
 						Try Again
 					</button>
 					<a
-						href="/create"
+						href="/"
 						class="min-h-[40px] py-2 px-5 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs uppercase flex items-center transition-all"
 					>
 						Return Home
@@ -1193,7 +1193,7 @@
 						Retry Connection
 					</button>
 					<a
-						href="/create"
+						href="/"
 						class="min-h-[40px] py-2 px-5 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs uppercase flex items-center transition-all"
 					>
 						Return Home
@@ -1217,7 +1217,7 @@
 						Retry Connection
 					</button>
 					<a
-						href="/create"
+						href="/"
 						class="min-h-[40px] py-2 px-5 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs uppercase flex items-center transition-all"
 					>
 						Return Home
@@ -1241,7 +1241,7 @@
 								Retry Connection
 							</button>
 							<a
-								href="/create"
+								href="/"
 								class="min-h-[38px] py-2 px-5 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-300 border border-white/10 text-xs uppercase flex items-center transition-all"
 							>
 								Return Home

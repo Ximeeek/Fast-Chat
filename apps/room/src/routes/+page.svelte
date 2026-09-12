@@ -1,24 +1,512 @@
-<script lang="ts">
-	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+<script module lang="ts">
+	let hasShownRoomCodeHint = false;
 
-	onMount(() => {
-		goto('/create', { replaceState: true });
+	export function resetRoomCodeHintSession() {
+		hasShownRoomCodeHint = false;
+	}
+</script>
+
+<script lang="ts">
+	import { onDestroy } from 'svelte';
+	import { fade, fly, slide } from 'svelte/transition';
+	import { goto } from '$app/navigation';
+	import { signalingClient } from '$lib/signaling/client';
+	import { roomStore } from '$lib/stores/room';
+	import { formatRoomCodeInput, validateRoomCode, encodeRoomToken } from '$lib/utils/roomCode';
+	import SecurityInfoPanel from '$lib/room/SecurityInfoPanel.svelte';
+	import ActionErrorToast from '$lib/room/ActionErrorToast.svelte';
+
+	let enablePassword = $state(false);
+	let password = $state('');
+	let enableHopping = $state(false);
+	let autoRotateMinutes = $state<number | null>(null);
+	let isSubmitting = $state(false);
+	let errorMessage = $state<string | null>(null);
+
+	// Join existing room form state
+	let manualCode = $state('');
+	let joinError = $state<string | null>(null);
+	let isSecurityInfoOpen = $state(false);
+
+	const activeError = $derived(errorMessage || joinError);
+
+	function dismissActionError() {
+		errorMessage = null;
+		joinError = null;
+	}
+	let showCodeHint = $state(false);
+	let isInputShaking = $state(false);
+	let isButtonErrorFlashing = $state(false);
+	let hintTimeout: ReturnType<typeof setTimeout> | null = null;
+	let shakeTimeout: ReturnType<typeof setTimeout> | null = null;
+	let errorFlashTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	function triggerButtonErrorFlash() {
+		isButtonErrorFlashing = false;
+		if (errorFlashTimeout) clearTimeout(errorFlashTimeout);
+		const raf = typeof requestAnimationFrame !== 'undefined' ? requestAnimationFrame : (cb: FrameRequestCallback) => setTimeout(cb, 16);
+		raf(() => {
+			raf(() => {
+				isButtonErrorFlashing = true;
+				errorFlashTimeout = setTimeout(() => {
+					isButtonErrorFlashing = false;
+					errorFlashTimeout = null;
+				}, 450);
+			});
+		});
+	}
+
+	const codePlaceholder = '0000-0000-0000';
+	const hasNonDigits = $derived(/[^\d-]/.test(manualCode));
+	const maskSuffix = $derived(!hasNonDigits ? codePlaceholder.slice(manualCode.length) : '');
+
+	function triggerCodeHint() {
+		// Subtle border highlight feedback on invalid keystroke
+		isInputShaking = true;
+		if (shakeTimeout) clearTimeout(shakeTimeout);
+		shakeTimeout = setTimeout(() => {
+			isInputShaking = false;
+			shakeTimeout = null;
+		}, 300);
+
+		// Show informative floating hint only once per session
+		if (hasShownRoomCodeHint) return;
+		hasShownRoomCodeHint = true;
+		showCodeHint = true;
+
+		if (hintTimeout) clearTimeout(hintTimeout);
+		hintTimeout = setTimeout(() => {
+			showCodeHint = false;
+			hintTimeout = null;
+		}, 3500);
+	}
+
+	function dismissCodeHint() {
+		showCodeHint = false;
+		if (hintTimeout) {
+			clearTimeout(hintTimeout);
+			hintTimeout = null;
+		}
+	}
+
+	onDestroy(() => {
+		if (hintTimeout) clearTimeout(hintTimeout);
+		if (shakeTimeout) clearTimeout(shakeTimeout);
+		if (errorFlashTimeout) clearTimeout(errorFlashTimeout);
 	});
+
+	function handleCodeKeyDown(e: KeyboardEvent) {
+		if (
+			['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter', 'Home', 'End'].includes(e.key) ||
+			e.ctrlKey ||
+			e.metaKey
+		) {
+			return;
+		}
+		if (!/^\d$/.test(e.key)) {
+			e.preventDefault();
+			triggerCodeHint();
+		}
+	}
+
+	function handleCodeInput(e: Event) {
+		const target = e.target as HTMLInputElement;
+		const raw = target.value.trim();
+		if (/[^\d-]/.test(raw)) {
+			triggerCodeHint();
+		}
+		manualCode = formatRoomCodeInput(raw);
+		target.value = manualCode;
+		joinError = null;
+	}
+
+	function handleJoinExisting(e: SubmitEvent) {
+		e.preventDefault();
+		if (!validateRoomCode(manualCode)) {
+			joinError = 'Invalid room code format. Expected: 0000-0000-0000';
+			return;
+		}
+		const token = encodeRoomToken(manualCode);
+		goto(`/room/${token}`);
+	}
+
+	async function handleCreateRoom(e: SubmitEvent) {
+		e.preventDefault();
+		if (isSubmitting || isButtonErrorFlashing) return;
+		isSubmitting = true;
+
+		try {
+			const res = await signalingClient.createRoom({
+				password: enablePassword && password.trim() ? password.trim() : undefined,
+				hoppingEnabled: enableHopping,
+				autoRotateIntervalSeconds:
+					enableHopping && autoRotateMinutes && autoRotateMinutes > 0
+						? Math.min(60, Math.max(1, autoRotateMinutes)) * 60
+						: undefined
+			});
+			roomStore.setHoppingEnabled(enableHopping);
+			const token = encodeRoomToken(res.code);
+			goto(`/room/${token}`);
+		} catch (err) {
+			errorMessage = err instanceof Error ? err.message : 'Failed to create room';
+			triggerButtonErrorFlash();
+		} finally {
+			isSubmitting = false;
+		}
+	}
 </script>
 
 <svelte:head>
+	<title>Start Private Chat - FastChat Room</title>
 	<meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<div class="min-h-screen flex items-center justify-center p-4 bg-[#050608] text-zinc-100 font-sans bg-cyber-grid relative overflow-hidden">
-	<div class="absolute w-72 h-72 bg-blue-600/15 blur-[90px] pointer-events-none rounded-full"></div>
-	<div class="text-center rounded-2xl border border-[#1a2233] bg-[#0a0d16]/90 backdrop-blur-md p-8 max-w-sm w-full shadow-[0_0_50px_rgba(0,0,0,0.8)] relative z-10">
-		<div class="inline-block w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin mb-4 shadow-[0_0_15px_rgba(0,229,255,0.3)]"></div>
-		<h1 class="text-lg font-bold tracking-widest uppercase mb-1.5 font-['Orbitron',sans-serif] text-white">
-			FASTCHAT ROOM
-		</h1>
-		<p class="text-zinc-400 mb-4 text-xs tracking-wider font-mono">INITIALIZING ROOM...</p>
-		<a href="/create" class="text-cyan-400 hover:underline text-xs tracking-wider uppercase font-semibold">Click if not redirected</a>
+<main class="min-h-screen flex flex-col items-center justify-center py-4 px-4 sm:py-6 sm:px-6 bg-[#050608] text-zinc-100 font-['Inter',sans-serif] bg-cyber-grid relative overflow-x-hidden">
+	<!-- Ambient backdrop glow -->
+	<div class="absolute w-[500px] h-[350px] bg-blue-600/15 blur-[120px] pointer-events-none rounded-full"></div>
+
+	<div class="w-full max-w-md bg-[#0a0d16]/95 backdrop-blur-xl p-5 sm:p-7 rounded-2xl border border-[#1a2233] shadow-[0_0_60px_rgba(0,0,0,0.85)] relative z-10 my-auto">
+		<header class="mb-5 sm:mb-6 text-center">
+			<div class="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-[11px] font-semibold uppercase tracking-wider mb-2.5 shadow-[0_0_15px_rgba(0,102,255,0.15)]">
+				<span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+				<span>DIRECT PEER-TO-PEER ENCRYPTED</span>
+			</div>
+			<h1 class="text-2xl sm:text-3xl font-black tracking-tight uppercase text-white font-['Orbitron',sans-serif]">
+				START PRIVATE CHAT
+			</h1>
+			<p class="text-xs text-zinc-400 mt-1.5 font-mono leading-relaxed">
+				Ephemeral rooms • Zero accounts • Instant auto-wipe
+			</p>
+			<div class="mt-2.5 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-400 text-[10px] font-mono">
+				<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+				<span>Beta version: Under active development • May contain bugs</span>
+			</div>
+		</header>
+
+
+		<form onsubmit={handleCreateRoom} class="space-y-3.5">
+			<div class="rounded-xl bg-[#06080e] border border-white/5 p-3.5 sm:p-4 transition-all">
+				<!-- Custom Styled Checkbox -->
+				<label class="flex items-start gap-3 cursor-pointer group select-none">
+					<div class="relative flex items-center justify-center mt-0.5">
+						<input
+							type="checkbox"
+							bind:checked={enablePassword}
+							class="sr-only peer"
+						/>
+						<div class="w-5 h-5 rounded-md bg-[#0a0d16] border border-[#222b3d] peer-checked:bg-blue-600 peer-checked:border-cyan-400 peer-focus-visible:ring-2 peer-focus-visible:ring-cyan-400/50 flex items-center justify-center transition-all duration-200 group-hover:border-zinc-500 shadow-sm">
+							<svg
+								class="w-3.5 h-3.5 text-white stroke-[2.5] transition-all duration-150 {enablePassword ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<polyline points="20 6 9 17 4 12"/>
+							</svg>
+						</div>
+					</div>
+					<div class="flex flex-col">
+						<span class="text-xs uppercase tracking-wider text-zinc-200 font-medium group-hover:text-white transition-colors">
+							Protect with password
+						</span>
+						<span class="text-[10px] text-zinc-500 font-mono mt-0.5">
+							Derive secondary encryption key from passphrase
+						</span>
+					</div>
+				</label>
+
+				<!-- Smooth Accordion Expansion for Password Field -->
+				{#if enablePassword}
+					<div transition:slide={{ duration: 250 }} class="overflow-hidden">
+						<div class="mt-3 pt-3 border-t border-white/5">
+							<label for="room-password" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
+								Room Password
+							</label>
+							<input
+								id="room-password"
+								type="password"
+								bind:value={password}
+								placeholder="Enter room password"
+								required={enablePassword}
+								class="w-full px-3.5 py-2.5 rounded-lg bg-[#0a0d16] border border-[#1e2538] text-zinc-100 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all font-sans"
+							/>
+						</div>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Hopping Room Codes Card -->
+			<div class="rounded-xl bg-[#06080e] border border-white/5 p-3.5 sm:p-4 transition-all">
+				<label class="flex items-start gap-3 cursor-pointer group select-none">
+					<div class="relative flex items-center justify-center mt-0.5">
+						<input
+							type="checkbox"
+							bind:checked={enableHopping}
+							class="sr-only peer"
+						/>
+						<div class="w-5 h-5 rounded-md bg-[#0a0d16] border border-[#222b3d] peer-checked:bg-cyan-600 peer-checked:border-cyan-400 peer-focus-visible:ring-2 peer-focus-visible:ring-cyan-400/50 flex items-center justify-center transition-all duration-200 group-hover:border-zinc-500 shadow-sm">
+							<svg
+								class="w-3.5 h-3.5 text-white stroke-[2.5] transition-all duration-150 {enableHopping ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							>
+								<polyline points="20 6 9 17 4 12"/>
+							</svg>
+						</div>
+					</div>
+					<div class="flex flex-col">
+						<div class="flex items-center gap-2">
+							<span class="text-xs uppercase tracking-wider text-zinc-200 font-medium group-hover:text-white transition-colors">
+								Hopping Room Codes
+							</span>
+							<span class="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 font-mono font-semibold uppercase">
+								ONE-TIME INVITE
+							</span>
+						</div>
+						<span class="text-[10px] text-zinc-400 font-mono mt-0.5 leading-relaxed">
+							Room code rotates automatically after each new participant joins. Only the room owner sees the active code. Previous invitation codes expire immediately.
+						</span>
+					</div>
+				</label>
+
+				<!-- Smooth Accordion Expansion for Optional Timed Auto-Rotation -->
+				{#if enableHopping}
+					<div transition:slide={{ duration: 250 }} class="overflow-hidden">
+						<div class="mt-3 pt-3 border-t border-white/5 space-y-1.5">
+							<label for="auto-rotate-interval" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 font-mono">
+								Automatic Rotation Interval (Optional)
+							</label>
+							<div class="flex items-center gap-2">
+								<input
+									id="auto-rotate-interval"
+									type="number"
+									bind:value={autoRotateMinutes}
+									min="1"
+									max="60"
+									placeholder="Join-only (leave empty or 0)"
+									class="w-full px-3.5 py-2.5 rounded-lg bg-[#0a0d16] border border-[#1e2538] text-zinc-100 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all font-mono"
+								/>
+								<span class="text-xs text-zinc-400 font-mono shrink-0 px-1">
+									min
+								</span>
+							</div>
+							<p class="text-[10px] text-zinc-500 font-mono">
+								Rotate code every X minutes (1–60 min). Leave empty for rotation upon participant join only.
+							</p>
+						</div>
+					</div>
+				{/if}
+			</div>
+
+			<button
+				type="submit"
+				disabled={isSubmitting || isButtonErrorFlashing}
+				class="w-full min-h-[44px] py-2.5 px-5 rounded-full active:scale-[0.99] font-bold uppercase tracking-wider text-xs sm:text-sm transition-all shadow-[0_0_25px_rgba(255,255,255,0.2)] bg-white hover:bg-zinc-200 text-black disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2.5 group {isButtonErrorFlashing ? 'btn-error-shake-flash' : ''}"
+				class:btn-error-shake-flash={isButtonErrorFlashing}
+			>
+				{#if isSubmitting}
+					<span class="inline-block w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+					<span>Creating Session...</span>
+				{:else}
+					<svg class="w-3.5 h-3.5 fill-current group-hover:scale-110 transition-transform" viewBox="0 0 16 16">
+						<circle cx="2" cy="2" r="1.5"/>
+						<circle cx="8" cy="2" r="1.5"/>
+						<circle cx="14" cy="2" r="1.5"/>
+						<circle cx="2" cy="8" r="1.5"/>
+						<circle cx="8" cy="8" r="1.5"/>
+						<circle cx="14" cy="8" r="1.5"/>
+						<circle cx="2" cy="14" r="1.5"/>
+						<circle cx="8" cy="14" r="1.5"/>
+						<circle cx="14" cy="14" r="1.5"/>
+					</svg>
+					<span>Create New Room</span>
+				{/if}
+			</button>
+		</form>
+
+		<div class="relative my-4 sm:my-5">
+			<div class="absolute inset-0 flex items-center">
+				<div class="w-full border-t border-[#1a2233]"></div>
+			</div>
+			<div class="relative flex justify-center text-[10px] uppercase tracking-widest font-mono">
+				<span class="bg-[#0a0d16] px-3.5 text-zinc-500 font-medium">OR JOIN EXISTING</span>
+			</div>
+		</div>
+
+		<form onsubmit={handleJoinExisting} class="space-y-3 sm:space-y-3.5">
+			<div>
+				<label for="manual-code" class="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
+					Room Identifier
+				</label>
+				<!-- Relative container anchoring the floating hint without shifting layout -->
+				<div class="relative">
+					<!-- Custom floating session hint (zero layout shift, auto-dismissing) -->
+					{#if showCodeHint}
+						<button
+							type="button"
+							in:fly={{ y: 6, duration: 240 }}
+							out:fade={{ duration: 180 }}
+							aria-label="Room code format hint: Numbers only, format 0000-0000-0000. Click to dismiss."
+							class="absolute -top-11 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center pointer-events-auto cursor-pointer select-none bg-transparent border-0 p-0 focus:outline-none"
+							onclick={dismissCodeHint}
+						>
+							<div
+								role="status"
+								aria-live="polite"
+								class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0b101c]/95 border border-cyan-400/50 text-cyan-300 text-xs font-mono shadow-[0_4px_24px_rgba(0,0,0,0.85),0_0_15px_rgba(6,182,212,0.3)] backdrop-blur-md whitespace-nowrap"
+							>
+								<span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+								<span>Numbers only • Format: 0000-0000-0000</span>
+							</div>
+							<div class="w-2 h-2 bg-[#0b101c] border-r border-b border-cyan-400/50 rotate-45 -mt-1"></div>
+						</button>
+					{/if}
+
+					<!-- Fixed-position overlay input preventing text jumping and aligning over mask -->
+					<div
+						class="relative flex items-center rounded-xl bg-[#06080e] border {isInputShaking
+							? 'border-cyan-400/80 ring-1 ring-cyan-400/40'
+							: 'border-[#1e2538]'} focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400 transition-all overflow-hidden"
+					>
+						<!-- Visual placeholder mask layer for numeric codes -->
+						{#if !hasNonDigits}
+							<div
+								class="absolute inset-0 px-4 py-3 flex items-center font-['JetBrains_Mono',monospace] text-sm tracking-[0.22em] pointer-events-none select-none text-left"
+								aria-hidden="true"
+							>
+								<span class="opacity-0">{manualCode}</span><span class="text-zinc-600">{maskSuffix}</span>
+							</div>
+						{/if}
+						<!-- Real input on top with exact matching typography -->
+						<input
+							id="manual-code"
+							type="text"
+							inputmode="numeric"
+							placeholder={hasNonDigits ? '' : '0000-0000-0000'}
+							value={manualCode}
+							onkeydown={handleCodeKeyDown}
+							oninput={handleCodeInput}
+							maxlength={60}
+							autocomplete="off"
+							spellcheck="false"
+							class="w-full px-4 py-3 bg-transparent text-cyan-300 text-sm font-['JetBrains_Mono',monospace] {!hasNonDigits ? 'tracking-[0.22em]' : 'tracking-normal'} text-left focus:outline-none relative z-10"
+						/>
+					</div>
+				</div>
+			</div>
+			<button
+				type="submit"
+				class="w-full min-h-[42px] py-2 px-4 rounded-full bg-[#111624] hover:bg-[#182033] text-zinc-200 hover:text-white border border-white/10 hover:border-blue-500/50 font-semibold uppercase tracking-wider text-xs transition-all cursor-pointer"
+			>
+				Join Room
+			</button>
+		</form>
+
+		<!-- Zero-Persistence Architecture Overview (Audited Specs) -->
+		<div class="mt-5 pt-4 sm:mt-6 sm:pt-5 border-t border-[#1a2233] space-y-2.5 sm:space-y-3">
+			<div class="flex items-center justify-between">
+				<div class="flex items-center space-x-2">
+					<span class="text-[11px] font-bold uppercase tracking-wider text-zinc-300 font-mono">
+						ZERO PERSISTENCE ARCHITECTURE
+					</span>
+					<span class="text-[9px] px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 uppercase font-mono">
+						AUDITED
+					</span>
+				</div>
+				<button
+					type="button"
+					onclick={() => (isSecurityInfoOpen = true)}
+					class="text-[10px] text-cyan-400 hover:text-cyan-300 uppercase font-bold tracking-wider cursor-pointer font-mono flex items-center gap-1 transition-colors"
+				>
+					<span>View Specs</span>
+					<svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M5 12h14"/>
+						<path d="m12 5 7 7-7 7"/>
+					</svg>
+				</button>
+			</div>
+
+			<div class="grid grid-cols-2 gap-2 text-[10px] font-mono">
+				<div class="p-2 sm:p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
+					<div class="text-zinc-200 font-bold uppercase">ZERO LOGS</div>
+					<div class="text-zinc-500">RAM-only relay</div>
+				</div>
+				<div class="p-2 sm:p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
+					<div class="text-zinc-200 font-bold uppercase">E2E ENCRYPTED</div>
+					<div class="text-zinc-500">AES-256-GCM</div>
+				</div>
+				<div class="p-2 sm:p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
+					<div class="text-zinc-200 font-bold uppercase">AUTO-DELETION</div>
+					<div class="text-zinc-500">Purged on expiry</div>
+				</div>
+				<div class="p-2 sm:p-2.5 rounded-xl bg-[#06080e] border border-white/5 space-y-0.5">
+					<div class="text-zinc-200 font-bold uppercase">NO ACCOUNTS</div>
+					<div class="text-zinc-500">Zero stored tokens</div>
+				</div>
+			</div>
+		</div>
 	</div>
-</div>
+
+	<!-- Security Specifications Modal -->
+	<SecurityInfoPanel
+		isOpen={isSecurityInfoOpen}
+		onClose={() => (isSecurityInfoOpen = false)}
+	/>
+
+	<!-- Action Error Notification Toast (Non-disruptive, Zero Layout Shift) -->
+	<ActionErrorToast
+		message={activeError}
+		onDismiss={dismissActionError}
+	/>
+</main>
+
+<style>
+	@keyframes buttonErrorShakeFlash {
+		0% {
+			transform: translateX(0);
+			background-color: #ffffff;
+			color: #000000;
+			box-shadow: 0 0 25px rgba(255, 255, 255, 0.2);
+		}
+		20% {
+			transform: translateX(-7px);
+			background-color: #f87171;
+			color: #ffffff;
+			box-shadow: 0 0 35px rgba(248, 113, 113, 0.7);
+		}
+		45% {
+			transform: translateX(7px);
+			background-color: #f87171;
+			color: #ffffff;
+			box-shadow: 0 0 35px rgba(248, 113, 113, 0.7);
+		}
+		70% {
+			transform: translateX(-4px);
+			background-color: #fca5a5;
+			color: #ffffff;
+			box-shadow: 0 0 25px rgba(248, 113, 113, 0.5);
+		}
+		85% {
+			transform: translateX(2px);
+			background-color: #ffffff;
+			color: #000000;
+			box-shadow: 0 0 25px rgba(255, 255, 255, 0.25);
+		}
+		100% {
+			transform: translateX(0);
+			background-color: #ffffff;
+			color: #000000;
+			box-shadow: 0 0 25px rgba(255, 255, 255, 0.2);
+		}
+	}
+
+	:global(.btn-error-shake-flash) {
+		animation: buttonErrorShakeFlash 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both !important;
+		transition: none !important;
+	}
+</style>

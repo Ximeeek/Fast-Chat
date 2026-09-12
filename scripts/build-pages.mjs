@@ -1,47 +1,48 @@
 #!/usr/bin/env node
 
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, cpSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
 const rootDir = process.cwd();
 const distDir = resolve(rootDir, 'dist');
-const landingDir = resolve(rootDir, 'apps/landing');
 const roomDir = resolve(rootDir, 'apps/room');
 
-console.log('=== FastChat Monorepo: Unified Pages Build Pipeline ===\n');
+console.log('=== FastChat: Direct Room Application Build Pipeline ===\n');
 
 // Ensure workspace dependencies are available before building
-const hasLandingDeps = existsSync(join(landingDir, 'node_modules')) || existsSync(join(rootDir, 'node_modules/astro'));
 const hasRoomDeps = existsSync(join(roomDir, 'node_modules')) || existsSync(join(rootDir, 'node_modules/@sveltejs/kit'));
-if (!hasLandingDeps || !hasRoomDeps) {
+if (!hasRoomDeps) {
   console.log('Workspace dependencies missing. Running npm install across monorepo...');
   execSync('npm install', { cwd: rootDir, stdio: 'inherit' });
 }
 
-// 1. Build Astro static landing application
-console.log('1. Building apps/landing (Astro SSG)...');
-execSync('npm run build', { cwd: landingDir, stdio: 'inherit' });
-
-// 2. Build SvelteKit room client application
-console.log('\n2. Building apps/room (SvelteKit SPA)...');
+// 1. Build SvelteKit room client application
+console.log('1. Building apps/room (SvelteKit SPA)...');
 execSync('npm run build', { cwd: roomDir, stdio: 'inherit' });
 
-// 3. Clean and prepare unified distribution directory
-console.log('\n3. Preparing unified distribution directory: dist/...');
+// 2. Clean and prepare unified distribution directory
+console.log('\n2. Preparing unified distribution directory: dist/...');
 if (existsSync(distDir)) {
   rmSync(distDir, { recursive: true, force: true });
 }
 mkdirSync(distDir, { recursive: true });
 
-// 4. Copy landing distribution files to dist/
-console.log('4. Merging landing static output (Astro: / -> index.html, _astro/)...');
-const landingDist = join(landingDir, 'dist');
-cpSync(landingDist, distDir, { recursive: true });
-
-// 5. Copy room distribution files to dist/
-console.log('5. Merging room client static output (SvelteKit: /create, /room/*, _app/)...');
+// 3. Copy room distribution files to dist/
+console.log('3. Merging room client static output (SvelteKit: / -> index.html, /create, /room/*, _app/)...');
 const roomBuild = join(roomDir, 'build');
+
+// Copy pre-rendered root page (index.html)
+const roomIndexHtml = join(roomBuild, 'index.html');
+if (existsSync(roomIndexHtml)) {
+  cpSync(roomIndexHtml, join(distDir, 'index.html'));
+} else {
+  // Fallback to create.html if index.html is missing
+  const fallbackCreate = join(roomBuild, 'create.html');
+  if (existsSync(fallbackCreate)) {
+    cpSync(fallbackCreate, join(distDir, 'index.html'));
+  }
+}
 
 // Copy SvelteKit assets (_app/)
 const roomAppDir = join(roomBuild, '_app');
@@ -64,14 +65,22 @@ if (existsSync(createHtml)) {
   cpSync(createHtml, join(createSubdir, 'index.html'));
 }
 
-// 6. Generate Cloudflare Pages _redirects file
-console.log('6. Emitting Cloudflare Pages _redirects configuration...');
-const redirectsContent = `# FastChat Room: Cloudflare Pages Routing Engine
-# Static landing page served at root / from dist/index.html
-# Session dispatch page served at /create from dist/create/index.html
+// Copy static assets (robots.txt, favicon.svg, og-image.svg)
+for (const staticAsset of ['robots.txt', 'favicon.svg', 'og-image.svg']) {
+  const assetPath = join(roomBuild, staticAsset);
+  if (existsSync(assetPath)) {
+    cpSync(assetPath, join(distDir, staticAsset));
+  }
+}
 
-# Route bare /room to room creator
-/room                   /create                 302
+// 4. Generate Cloudflare Pages _redirects file
+console.log('4. Emitting Cloudflare Pages _redirects configuration...');
+const redirectsContent = `# FastChat Room: Cloudflare Pages Routing Engine
+# Room creation page served at root / from dist/index.html
+# Session dispatch page also served at /create from dist/create/index.html
+
+# Route bare /room to root
+/room                   /                       302
 
 # Dynamic ephemeral room sessions (/room/0000-0000-0000#key)
 # SPA rewrite rule returns room.html shell with HTTP 200 without altering browser URL
@@ -79,15 +88,15 @@ const redirectsContent = `# FastChat Room: Cloudflare Pages Routing Engine
 `;
 writeFileSync(join(distDir, '_redirects'), redirectsContent, 'utf8');
 
-// 7. Ensure _headers is emitted to dist/_headers
-console.log('7. Emitting Cloudflare Pages _headers edge security policies...');
-const headersSource = join(landingDir, 'public/_headers');
-if (existsSync(headersSource)) {
-  cpSync(headersSource, join(distDir, '_headers'));
-} else {
-  const headersContent = `# Cloudflare Pages Edge Security Headers
+// 5. Ensure _headers is emitted to dist/_headers
+console.log('5. Emitting Cloudflare Pages _headers edge security policies...');
+const headersContent = `# Cloudflare Pages Edge Security Headers
 
-# Strictly block search engine indexing and referrer leakage on ephemeral room endpoints
+# Strictly block search engine indexing and referrer leakage on root and ephemeral room endpoints
+/
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
+
 /create
   X-Robots-Tag: noindex, nofollow
   Referrer-Policy: no-referrer
@@ -101,9 +110,6 @@ if (existsSync(headersSource)) {
   Referrer-Policy: no-referrer
 
 # Long-term immutable caching for content-hashed assets
-/_astro/*
-  Cache-Control: public, max-age=31536000, immutable
-
 /_app/*
   Cache-Control: public, max-age=31536000, immutable
 
@@ -112,8 +118,7 @@ if (existsSync(headersSource)) {
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
 `;
-  writeFileSync(join(distDir, '_headers'), headersContent, 'utf8');
-}
+writeFileSync(join(distDir, '_headers'), headersContent, 'utf8');
 
 // Copy vercel.json deployment descriptor if present
 const vercelConfig = join(rootDir, 'vercel.json');
@@ -122,18 +127,18 @@ if (existsSync(vercelConfig)) {
   cpSync(vercelConfig, join(distDir, 'vercel.json'));
 }
 
-// 8. Verification of build distribution
-console.log('\n8. Validating unified distribution integrity...');
+// 6. Verification of build distribution
+console.log('\n6. Validating distribution integrity...');
 const requiredArtifacts = [
   'index.html',
-  '_astro',
   '_app',
   'room.html',
   'create.html',
   'create/index.html',
   '_redirects',
   '_headers',
-  'vercel.json'
+  'vercel.json',
+  'robots.txt'
 ];
 
 for (const artifact of requiredArtifacts) {
@@ -143,4 +148,4 @@ for (const artifact of requiredArtifacts) {
   }
 }
 
-console.log('✓ Unified distribution build verified successfully!\n');
+console.log('✓ Distribution build verified successfully!\n');
